@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Cluedo - Settings</title>
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      font-size: 14px;
+      color: #333;
+      background: #f5f5f5;
+      padding: 24px;
+    }
+
+    .container {
+      max-width: 500px;
+      margin: 0 auto;
+      background: #fff;
+      border-radius: 8px;
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+      padding: 24px;
+    }
+
+    h1 {
+      font-size: 24px;
+      color: #1a73e8;
+      margin-bottom: 8px;
+    }
+
+    .subtitle {
+      color: #5f6368;
+      margin-bottom: 24px;
+    }
+
+    .form-group {
+      margin-bottom: 20px;
+    }
+
+    label {
+      display: block;
+      font-weight: 500;
+      margin-bottom: 6px;
+    }
+
+    .help-text {
+      font-size: 12px;
+      color: #5f6368;
+      margin-top: 4px;
+    }
+
+    input[type="text"] {
+      width: 100%;
+      padding: 10px 12px;
+      border: 1px solid #dadce0;
+      border-radius: 4px;
+      font-size: 14px;
+    }
+
+    input[type="text"]:focus {
+      outline: none;
+      border-color: #1a73e8;
+      box-shadow: 0 0 0 2px rgba(26, 115, 232, 0.2);
+    }
+
+    .btn {
+      padding: 10px 20px;
+      border: none;
+      border-radius: 4px;
+      font-size: 14px;
+      font-weight: 500;
+      cursor: pointer;
+      margin-right: 8px;
+    }
+
+    .btn-primary {
+      background: #1a73e8;
+      color: #fff;
+    }
+
+    .btn-primary:hover {
+      background: #1557b0;
+    }
+
+    .btn-secondary {
+      background: #f1f3f4;
+      color: #5f6368;
+    }
+
+    .btn-secondary:hover {
+      background: #e8eaed;
+    }
+
+    .status {
+      margin-top: 16px;
+      padding: 12px;
+      border-radius: 4px;
+      display: none;
+    }
+
+    .status.success {
+      display: block;
+      background: #e6f4ea;
+      color: #137333;
+    }
+
+    .status.error {
+      display: block;
+      background: #fce8e6;
+      color: #c5221f;
+    }
+
+    .test-connection {
+      margin-top: 24px;
+      padding-top: 24px;
+      border-top: 1px solid #e0e0e0;
+    }
+
+    .connection-status {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      margin-left: 16px;
+    }
+
+    .connection-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+    }
+
+    .connection-dot.connected {
+      background: #34a853;
+    }
+
+    .connection-dot.disconnected {
+      background: #ea4335;
+    }
+
+    .connection-dot.testing {
+      background: #fbbc04;
+      animation: pulse 1s infinite;
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.5; }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>Cluedo Settings</h1>
+    <p class="subtitle">Configure your Cluedo extension</p>
+
+    <form id="settings-form">
+      <div class="form-group">
+        <label for="server-url">Server URL</label>
+        <input type="text" id="server-url" placeholder="http://127.0.0.1:9876">
+        <p class="help-text">
+          The URL of your Cluedo API server. Start it with <code>cluedo server</code>
+        </p>
+      </div>
+
+      <div>
+        <button type="submit" class="btn btn-primary">Save Settings</button>
+        <button type="button" id="reset-btn" class="btn btn-secondary">Reset to Default</button>
+      </div>
+
+      <div id="status" class="status"></div>
+    </form>
+
+    <div class="test-connection">
+      <button type="button" id="test-btn" class="btn btn-secondary">Test Connection</button>
+      <span class="connection-status">
+        <span id="connection-dot" class="connection-dot disconnected"></span>
+        <span id="connection-text">Not tested</span>
+      </span>
+    </div>
+  </div>
+
+  <script src="options.js"></script>
+</body>
+</html>

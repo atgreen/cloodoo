@@ -1,0 +1,1095 @@
+;;; update.lisp
+;;;
+;;; SPDX-License-Identifier: MIT
+;;;
+;;; Copyright (C) 2026 Anthony Green <green@moxielogic.com>
+
+(in-package #:cloodoo)
+
+;;── Application State (Model) ──────────────────────────────────────────────────
+
+(defclass app-model ()
+  ((todos
+    :initarg :todos
+    :initform nil
+    :accessor model-todos
+    :documentation "List of TODO items.")
+   (cursor
+    :initarg :cursor
+    :initform 0
+    :accessor model-cursor
+    :documentation "Currently selected item index.")
+   (view-state
+    :initarg :view-state
+   :initform :list
+   :accessor model-view-state
+    :documentation "Current view: :list, :detail, :add, :edit, :help, :search, :delete-confirm, :delete-done-confirm, :import.")
+   (filter-status
+    :initarg :filter-status
+    :initform nil
+    :accessor model-filter-status
+    :documentation "Filter by status, or nil for all.")
+   (filter-priority
+    :initarg :filter-priority
+    :initform nil
+    :accessor model-filter-priority
+    :documentation "Filter by priority, or nil for all.")
+   (search-query
+    :initarg :search-query
+    :initform ""
+    :accessor model-search-query
+    :documentation "Current search query.")
+   (sort-by
+    :initarg :sort-by
+    :initform :priority
+    :accessor model-sort-by
+    :documentation "Sort field: :priority, :due-date, :created-at, :title.")
+   (sort-descending
+    :initarg :sort-descending
+    :initform t
+    :accessor model-sort-descending
+    :documentation "Sort direction.")
+   (term-width
+    :initarg :term-width
+    :initform 80
+    :accessor model-term-width
+    :documentation "Terminal width.")
+   (term-height
+    :initarg :term-height
+    :initform 24
+    :accessor model-term-height
+    :documentation "Terminal height.")
+   (scroll-offset
+    :initarg :scroll-offset
+    :initform 0
+    :accessor model-scroll-offset
+    :documentation "Scroll offset for the list view.")
+   ;; Text input for add/edit/search
+   (title-input
+    :initform nil
+    :accessor model-title-input
+    :documentation "Text input for title.")
+   (description-input
+    :initform nil
+    :accessor model-description-input
+    :documentation "Text input for description.")
+   (search-input
+    :initform nil
+    :accessor model-search-input
+    :documentation "Text input for search.")
+   (import-input
+    :initform nil
+    :accessor model-import-input
+    :documentation "Text input for org-mode import filename.")
+   (active-field
+    :initform :title
+    :accessor model-active-field
+    :documentation "Currently active input field in add/edit view.")
+   (edit-priority
+    :initform :medium
+    :accessor model-edit-priority
+    :documentation "Priority being edited.")
+   (edit-todo-id
+    :initform nil
+    :accessor model-edit-todo-id
+    :documentation "ID of TODO being edited, nil for new TODO.")
+   (status-message
+    :initform nil
+    :accessor model-status-message
+    :documentation "Temporary status message to display.")
+   (enrichment-spinner
+    :initform nil
+    :accessor model-enrichment-spinner
+    :documentation "Spinner for enriching items.")
+   (collapsed-ids
+    :initform (make-hash-table :test #'equal)
+    :accessor model-collapsed-ids
+    :documentation "Hash table of todo IDs that are collapsed.")
+   (pending-parent-id
+    :initform nil
+    :accessor model-pending-parent-id
+    :documentation "Parent ID for new todo being added as child."))
+  (:documentation "The application model following TEA pattern."))
+
+(defun make-initial-model ()
+  "Create the initial application model."
+  (make-instance 'app-model
+                 :todos (load-todos)))
+
+;;── Collapse State Management ─────────────────────────────────────────────────
+
+(defun todo-collapsed-p (model todo)
+  "Check if a todo item is collapsed."
+  (gethash (todo-id todo) (model-collapsed-ids model)))
+
+(defun toggle-collapse (model todo)
+  "Toggle the collapse state of a todo."
+  (let* ((id (todo-id todo))
+         (collapsed-ids (model-collapsed-ids model)))
+    (if (gethash id collapsed-ids)
+        (remhash id collapsed-ids)
+        (setf (gethash id collapsed-ids) t))))
+
+(defun any-ancestor-collapsed-p (model todos todo)
+  "Check if any ancestor of this todo is collapsed."
+  (let ((parent-id (todo-parent-id todo)))
+    (loop while parent-id
+          do (when (gethash parent-id (model-collapsed-ids model))
+               (return-from any-ancestor-collapsed-p t))
+             (let ((parent (find parent-id todos :key #'todo-id :test #'equal)))
+               (if parent
+                   (setf parent-id (todo-parent-id parent))
+                   (setf parent-id nil))))
+    nil))
+
+;;── Filtering and Sorting ─────────────────────────────────────────────────────
+
+(defun filter-todos (todos &key status priority search-query)
+  "Filter todos by status, priority, and search query."
+  (let ((result todos))
+    (when status
+      (setf result (remove-if-not (lambda (todo)
+                                    (eq (todo-status todo) status))
+                                  result)))
+    (when priority
+      (setf result (remove-if-not (lambda (todo)
+                                    (eq (todo-priority todo) priority))
+                                  result)))
+    (when (and search-query (> (length search-query) 0))
+      (let ((query (string-downcase search-query)))
+        (setf result (remove-if-not
+                      (lambda (todo)
+                        (or (search query (string-downcase (todo-title todo)))
+                            (and (todo-description todo)
+                                 (search query (string-downcase (todo-description todo))))))
+                      result))))
+    result))
+
+(defun priority-order (priority)
+  "Return numeric order for priority (higher = more important)."
+  (case priority
+    (:high 3)
+    (:medium 2)
+    (:low 1)
+    (otherwise 0)))
+
+(defun sort-todos (todos sort-by descending)
+  "Sort todos by the given field."
+  (let ((sorted (copy-list todos)))
+    (setf sorted
+          (sort sorted
+                (lambda (a b)
+                  (case sort-by
+                    (:priority
+                     (> (priority-order (todo-priority a))
+                        (priority-order (todo-priority b))))
+                    (:due-date
+                     (let ((da (todo-due-date a))
+                           (db (todo-due-date b)))
+                       (cond
+                         ((and da db) (lt:timestamp< da db))
+                         (da t)
+                         (db nil)
+                         (t nil))))
+                    (:created-at
+                     (lt:timestamp< (todo-created-at a) (todo-created-at b)))
+                    (:title
+                     (string< (todo-title a) (todo-title b)))
+                    (otherwise nil)))))
+    (if descending
+        sorted
+        (reverse sorted))))
+
+(defun order-todos-hierarchically (todos)
+  "Order todos so that children appear immediately after their parents.
+   Returns a flat list with proper parent-child ordering."
+  (let ((result nil)
+        (processed (make-hash-table :test #'equal)))
+    (labels ((add-with-children (todo)
+               (unless (gethash (todo-id todo) processed)
+                 (setf (gethash (todo-id todo) processed) t)
+                 (push todo result)
+                 ;; Add all children immediately after
+                 (dolist (child (get-children todos (todo-id todo)))
+                   (add-with-children child)))))
+      ;; Start with top-level items (no parent)
+      (dolist (todo todos)
+        (when (null (todo-parent-id todo))
+          (add-with-children todo)))
+      ;; Also add any orphans (parent not in list)
+      (dolist (todo todos)
+        (unless (gethash (todo-id todo) processed)
+          (add-with-children todo))))
+    (nreverse result)))
+
+(defun get-visible-todos (model)
+  "Get the list of visible todos after filtering, sorting, and collapsing.
+   Returns todos in display order: grouped by date category, hierarchically ordered,
+   with collapsed children hidden."
+  (let* ((all-todos (model-todos model))
+         (filtered (filter-todos all-todos
+                                 :status (model-filter-status model)
+                                 :priority (model-filter-priority model)
+                                 :search-query (model-search-query model)))
+         (groups (group-todos-by-date filtered))
+         (result nil))
+    ;; Flatten groups back into a list in display order
+    (dolist (group groups)
+      (let* ((group-todos (cdr group))
+             ;; Order hierarchically within each group
+             (ordered (order-todos-hierarchically group-todos)))
+        (dolist (todo ordered)
+          ;; Skip if any ancestor is collapsed
+          (unless (any-ancestor-collapsed-p model all-todos todo)
+            (push todo result)))))
+    (nreverse result)))
+
+(defun reorder-todos (todos sort-by descending)
+  "Reorder todos by date category, then sort within each group, preserving hierarchy."
+  (let* ((groups (group-todos-by-date todos))
+         (result nil))
+    (dolist (group groups)
+      (let* ((group-todos (cdr group))
+             ;; Sort only top-level items in the group
+             (top-level (remove-if #'todo-parent-id group-todos))
+             (sorted-top (sort-todos top-level sort-by descending))
+             ;; Order hierarchically to keep children with parents
+             (ordered (order-todos-hierarchically
+                       (append sorted-top
+                               (remove-if-not #'todo-parent-id group-todos)))))
+        (dolist (todo ordered)
+          (push todo result))))
+    (nreverse result)))
+
+;;── Scroll Management ─────────────────────────────────────────────────────────
+
+(defun adjust-scroll (model viewport-height)
+  "Adjust scroll offset to keep selected item visible."
+  (let* ((cursor (model-cursor model))
+         (offset (model-scroll-offset model))
+         (todos (get-visible-todos model))
+         (num-items (length todos))
+         (max-offset (max 0 (- num-items viewport-height))))
+    (cond
+      ((< cursor offset)
+       (setf (model-scroll-offset model) cursor))
+      ((>= cursor (+ offset viewport-height))
+       (setf (model-scroll-offset model) (min max-offset (- cursor viewport-height -1))))
+      ((> offset max-offset)
+       (setf (model-scroll-offset model) max-offset)))))
+
+;;── TEA Methods ───────────────────────────────────────────────────────────────
+
+(defmethod tui:init ((model app-model))
+  "Initialize the application model."
+  (let ((size (tui:get-terminal-size)))
+    (when size
+      (setf (model-term-width model) (car size))
+      (setf (model-term-height model) (cdr size))))
+  ;; Initialize text inputs
+  (setf (model-title-input model)
+        (tui.textinput:make-textinput
+         :prompt "Title: "
+         :placeholder "Enter TODO title"
+         :width 50
+         :char-limit 200))
+  (setf (model-description-input model)
+        (tui.textinput:make-textinput
+         :prompt "Notes: "
+         :placeholder "Optional description"
+         :width 50
+         :char-limit 500))
+  (setf (model-search-input model)
+        (tui.textinput:make-textinput
+         :prompt "Search: "
+         :placeholder "Type to filter..."
+         :width 40
+         :char-limit 100))
+  (setf (model-import-input model)
+        (tui.textinput:make-textinput
+         :prompt "File: "
+         :placeholder "Path to org-mode file..."
+         :width 60
+         :char-limit 500))
+  ;; Initialize enrichment spinner
+  (setf (model-enrichment-spinner model)
+        (tui.spinner:make-spinner :frames tui.spinner:*spinner-minidot*
+                                  :fps 0.1))
+  ;; Start spinner ticking
+  (tui.spinner:spinner-init (model-enrichment-spinner model)))
+
+;;── List View Key Handling ─────────────────────────────────────────────────────
+
+(defun handle-list-keys (model msg)
+  "Handle keyboard input in list view."
+  (let ((key (tui:key-msg-key msg))
+        (ctrl (tui:key-msg-ctrl msg))
+        (todos (get-visible-todos model)))
+    (llog:debug "List view key received"
+                :key (format nil "~S" key)
+                :ctrl ctrl
+                :char-p (characterp key))
+    (cond
+      ;; Quit
+      ((or (and (characterp key) (char= key #\q))
+           (and ctrl (characterp key) (char= key #\c)))
+       (values model (tui:quit-cmd)))
+
+      ;; Move up (p/k/up - org uses p for previous)
+      ((or (eq key :up)
+           (and (characterp key) (or (char= key #\k) (char= key #\p))))
+       (when (> (model-cursor model) 0)
+         (decf (model-cursor model)))
+       (values model nil))
+
+      ;; Move down (n/j/down - org uses n for next)
+      ((or (eq key :down)
+           (and (characterp key) (or (char= key #\j) (char= key #\n))))
+       (when (< (model-cursor model) (1- (length todos)))
+         (incf (model-cursor model)))
+       (values model nil))
+
+      ;; Increase priority (Shift+Up)
+      ((eq key :shift-up)
+       (when (< (model-cursor model) (length todos))
+         (let ((todo (nth (model-cursor model) todos)))
+           (setf (todo-priority todo)
+                 (case (todo-priority todo)
+                   (:low :medium)
+                   (:medium :high)
+                   (:high :high)))  ; Already at max
+           (save-todos (model-todos model))))
+       (values model nil))
+
+      ;; Decrease priority (Shift+Down)
+      ((eq key :shift-down)
+       (when (< (model-cursor model) (length todos))
+         (let ((todo (nth (model-cursor model) todos)))
+           (setf (todo-priority todo)
+                 (case (todo-priority todo)
+                   (:high :medium)
+                   (:medium :low)
+                   (:low :low)))  ; Already at min
+           (save-todos (model-todos model))))
+       (values model nil))
+
+      ;; Go to top
+      ((or (eq key :home) (and (characterp key) (char= key #\g)))
+       (setf (model-cursor model) 0)
+       (values model nil))
+
+      ;; Go to bottom
+      ((or (eq key :end) (and (characterp key) (char-equal key #\G)))
+       (setf (model-cursor model) (max 0 (1- (length todos))))
+       (values model nil))
+
+      ;; Toggle status (Space): TODO -> DONE -> WAITING -> TODO
+      ((and (characterp key) (char= key #\Space))
+       (when (< (model-cursor model) (length todos))
+         (let ((todo (nth (model-cursor model) todos)))
+           (case (todo-status todo)
+             (:pending
+              (setf (todo-status todo) +status-completed+)
+              (setf (todo-completed-at todo) (lt:now)))
+             (:completed
+              (setf (todo-status todo) +status-waiting+)
+              (setf (todo-completed-at todo) nil))
+             (:waiting
+              (setf (todo-status todo) +status-pending+)
+              (setf (todo-completed-at todo) nil))
+             (:in-progress
+              (setf (todo-status todo) +status-completed+)
+              (setf (todo-completed-at todo) (lt:now)))
+             (otherwise
+              (setf (todo-status todo) +status-pending+)
+              (setf (todo-completed-at todo) nil)))
+           (save-todos (model-todos model))))
+       (values model nil))
+
+      ;; View details (Enter)
+      ((eq key :enter)
+       (when (< (model-cursor model) (length todos))
+         (setf (model-view-state model) :detail))
+       (values model nil))
+
+      ;; Add new TODO (sibling at current level)
+      ((and (characterp key) (char= key #\a))
+       (llog:info "Add TODO triggered" :key key)
+       (setf (model-view-state model) :add)
+       (setf (model-edit-todo-id model) nil)
+       (setf (model-edit-priority model) :medium)
+       (setf (model-active-field model) :title)
+       ;; Clear pending parent - this is a sibling add
+       (setf (model-pending-parent-id model) nil)
+       ;; Reset inputs - clear value and set focus
+       (tui.textinput:textinput-set-value (model-title-input model) "")
+       (tui.textinput:textinput-set-value (model-description-input model) "")
+       (tui.textinput:textinput-focus (model-title-input model))
+       (tui.textinput:textinput-blur (model-description-input model))
+       (llog:info "View state changed to :add" :view-state (model-view-state model))
+       (values model nil))
+
+      ;; Edit selected TODO
+      ((and (characterp key) (char= key #\e))
+       (when (< (model-cursor model) (length todos))
+         (let ((todo (nth (model-cursor model) todos)))
+           (setf (model-view-state model) :edit)
+           (setf (model-edit-todo-id model) (todo-id todo))
+           (setf (model-edit-priority model) (todo-priority todo))
+           (setf (model-active-field model) :title)
+           ;; Pre-fill inputs
+           (tui.textinput:textinput-set-value (model-title-input model) (todo-title todo))
+           (tui.textinput:textinput-set-value (model-description-input model) (or (todo-description todo) ""))
+           (tui.textinput:textinput-focus (model-title-input model))
+           (tui.textinput:textinput-blur (model-description-input model))))
+       (values model nil))
+
+      ;; Delete selected TODO
+      ((and (characterp key) (char= key #\d))
+       (when (< (model-cursor model) (length todos))
+         (setf (model-view-state model) :delete-confirm))
+       (values model nil))
+
+      ;; Delete all DONE items (Shift+D)
+      ((and (characterp key) (char= key #\D))
+       (when (find-if (lambda (todo) (eq (todo-status todo) +status-completed+))
+                      (model-todos model))
+         (setf (model-view-state model) :delete-done-confirm))
+       (values model nil))
+
+      ;; Toggle collapse (z)
+      ((and (characterp key) (char= key #\z))
+       (when (< (model-cursor model) (length todos))
+         (let* ((todo (nth (model-cursor model) todos))
+                (all-todos (model-todos model)))
+           ;; Only toggle if has children
+           (when (has-children-p all-todos todo)
+             (toggle-collapse model todo))))
+       (values model nil))
+
+      ;; Indent: make child of previous sibling (Tab or >)
+      ((or (eq key :tab) (and (characterp key) (char= key #\>)))
+       (when (and (> (model-cursor model) 0)
+                  (< (model-cursor model) (length todos)))
+         (let* ((todo (nth (model-cursor model) todos))
+                (prev-todo (nth (1- (model-cursor model)) todos))
+                (all-todos (model-todos model)))
+           ;; Can only indent if prev todo has same parent (sibling) or is potential parent
+           (when (equal (todo-parent-id todo) (todo-parent-id prev-todo))
+             ;; Make todo a child of prev-todo
+             (setf (todo-parent-id todo) (todo-id prev-todo))
+             (save-todos all-todos))))
+       (values model nil))
+
+      ;; Outdent: move to parent's level (Shift+Tab or <)
+      ((or (eq key :backtab) (and (characterp key) (char= key #\<)))
+       (when (< (model-cursor model) (length todos))
+         (let* ((todo (nth (model-cursor model) todos))
+                (all-todos (model-todos model))
+                (parent-id (todo-parent-id todo)))
+           (when parent-id
+             ;; Find parent and get grandparent's id
+             (let ((parent (find parent-id all-todos :key #'todo-id :test #'equal)))
+               (when parent
+                 (setf (todo-parent-id todo) (todo-parent-id parent))
+                 (save-todos all-todos))))))
+       (values model nil))
+
+      ;; Add child to selected item (Shift+A)
+      ((and (characterp key) (char= key #\A))
+       (when (< (model-cursor model) (length todos))
+         (let ((parent-todo (nth (model-cursor model) todos)))
+           (llog:info "Add child TODO triggered" :parent-id (todo-id parent-todo))
+           (setf (model-view-state model) :add)
+           (setf (model-edit-todo-id model) nil)
+           (setf (model-edit-priority model) :medium)
+           (setf (model-active-field model) :title)
+           ;; Store parent-id for the new todo
+           (setf (model-pending-parent-id model) (todo-id parent-todo))
+           ;; Reset inputs
+           (tui.textinput:textinput-set-value (model-title-input model) "")
+           (tui.textinput:textinput-set-value (model-description-input model) "")
+           (tui.textinput:textinput-focus (model-title-input model))
+           (tui.textinput:textinput-blur (model-description-input model))))
+       (values model nil))
+
+      ;; Search
+      ((and (characterp key) (char= key #\/))
+       (setf (model-view-state model) :search)
+       (tui.textinput:textinput-set-value (model-search-input model) (model-search-query model))
+       (tui.textinput:textinput-focus (model-search-input model))
+       (values model nil))
+
+      ;; Set priority B=Medium, C=Low (org-mode style)
+      ;; Note: A is now used for add-child
+      ((and (characterp key) (char-equal key #\B))
+       (when (< (model-cursor model) (length todos))
+         (let ((todo (nth (model-cursor model) todos)))
+           (setf (todo-priority todo) :medium)
+           (save-todos (model-todos model))))
+       (values model nil))
+
+      ((and (characterp key) (char-equal key #\C))
+       (when (< (model-cursor model) (length todos))
+         (let ((todo (nth (model-cursor model) todos)))
+           (setf (todo-priority todo) :low)
+           (save-todos (model-todos model))))
+       (values model nil))
+
+      ;; Filter by status (f cycles through)
+      ((and (characterp key) (char= key #\f))
+       (setf (model-filter-status model)
+             (case (model-filter-status model)
+               ((nil) :pending)
+               (:pending :in-progress)
+               (:in-progress :waiting)
+               (:waiting :completed)
+               (:completed nil)))
+       (setf (model-cursor model) 0)
+       (values model nil))
+
+      ;; Sort (s cycles through)
+      ((and (characterp key) (char= key #\s))
+       (setf (model-sort-by model)
+             (case (model-sort-by model)
+               (:priority :due-date)
+               (:due-date :created-at)
+               (:created-at :title)
+               (:title :priority)))
+       (values model nil))
+
+      ;; Refresh ordering (r)
+      ((and (characterp key) (char= key #\r))
+       (let* ((selected-id (when (< (model-cursor model) (length todos))
+                             (todo-id (nth (model-cursor model) todos)))))
+         (setf (model-todos model)
+               (reorder-todos (model-todos model)
+                              (model-sort-by model)
+                              (model-sort-descending model)))
+         (save-todos (model-todos model))
+         (when selected-id
+           (let* ((visible (get-visible-todos model))
+                  (new-index (position selected-id visible :key #'todo-id :test #'string=)))
+             (when new-index
+               (setf (model-cursor model) new-index)))))
+       (values model nil))
+
+      ;; Clear filters (c)
+      ((and (characterp key) (char= key #\c))
+       (setf (model-filter-status model) nil)
+       (setf (model-filter-priority model) nil)
+       (setf (model-search-query model) "")
+       (setf (model-cursor model) 0)
+       (values model nil))
+
+      ;; Help view
+      ((and (characterp key) (char= key #\?))
+       (setf (model-view-state model) :help)
+       (values model nil))
+
+      ;; Edit user context (u)
+      ((and (characterp key) (char= key #\u))
+       (llog:info "Opening user context editor")
+       (let ((file (ensure-user-context-file))
+             (editor (get-editor)))
+         ;; Suspend terminal, run editor, resume
+         (let ((restore-fn (tui::suspend-terminal :alt-screen t)))
+           (unwind-protect
+               (uiop:run-program (list editor (namestring file))
+                                 :input :interactive
+                                 :output :interactive
+                                 :error-output :interactive)
+             (when restore-fn
+               (tui::resume-terminal restore-fn)))))
+       (values model nil))
+
+      ;; Re-enrich selected TODO (&)
+      ((and (characterp key) (char= key #\&))
+       (when (< (model-cursor model) (length todos))
+         (let ((todo (nth (model-cursor model) todos)))
+           (unless (todo-enriching-p todo)
+             (llog:info "Re-triggering enrichment"
+                        :todo-id (todo-id todo)
+                        :title (todo-title todo))
+             (setf (todo-enriching-p todo) t)
+             (save-todos (model-todos model))
+             (return-from handle-list-keys
+               (values model (list (make-enrichment-cmd (todo-id todo)
+                                                        (todo-title todo)
+                                                        (todo-description todo))
+                                   (make-spinner-start-cmd
+                                    (model-enrichment-spinner model))))))))
+       (values model nil))
+
+      ;; Import org-mode file (i)
+      ((and (characterp key) (char= key #\i))
+       (llog:info "Import org-mode triggered")
+       (setf (model-view-state model) :import)
+       (tui.textinput:textinput-set-value (model-import-input model) "")
+       (tui.textinput:textinput-focus (model-import-input model))
+       (values model nil))
+
+      (t (values model nil)))))
+
+;;── Add/Edit View Key Handling ─────────────────────────────────────────────────
+
+(defun handle-add-edit-keys (model msg)
+  "Handle keyboard input in add/edit view."
+  (let ((key (tui:key-msg-key msg))
+        (ctrl (tui:key-msg-ctrl msg)))
+    (cond
+      ;; Cancel with Escape
+      ((eq key :escape)
+       (setf (model-view-state model) :list)
+       (values model nil))
+
+      ;; Cancel with Ctrl+C
+      ((and ctrl (characterp key) (char= key #\c))
+       (setf (model-view-state model) :list)
+       (values model nil))
+
+      ;; Tab to next field
+      ((eq key :tab)
+       (case (model-active-field model)
+         (:title
+          (setf (model-active-field model) :description)
+          (tui.textinput:textinput-blur (model-title-input model))
+          (tui.textinput:textinput-focus (model-description-input model)))
+         (:description
+          (setf (model-active-field model) :priority)
+          (tui.textinput:textinput-blur (model-description-input model)))
+         (:priority
+          (setf (model-active-field model) :title)
+          (tui.textinput:textinput-focus (model-title-input model))))
+       (values model nil))
+
+      ;; Shift+Tab to previous field
+      ((eq key :backtab)
+       (case (model-active-field model)
+         (:title
+          (setf (model-active-field model) :priority)
+          (tui.textinput:textinput-blur (model-title-input model)))
+         (:description
+          (setf (model-active-field model) :title)
+          (tui.textinput:textinput-blur (model-description-input model))
+          (tui.textinput:textinput-focus (model-title-input model)))
+         (:priority
+          (setf (model-active-field model) :description)
+          (tui.textinput:textinput-focus (model-description-input model))))
+       (values model nil))
+
+      ;; Priority selection when in priority field (A/B/C org-style)
+      ((and (eq (model-active-field model) :priority)
+            (characterp key)
+            (member key '(#\a #\A #\b #\B #\c #\C) :test #'char=))
+       (setf (model-edit-priority model)
+             (case (char-upcase key)
+               (#\A :high)
+               (#\B :medium)
+               (#\C :low)))
+       (values model nil))
+
+      ;; Save on Enter (when not in text field or when in priority field)
+      ((eq key :enter)
+       (let ((title (tui.textinput:textinput-value (model-title-input model))))
+         (when (> (length title) 0)
+           (if (model-edit-todo-id model)
+               ;; Update existing TODO (no enrichment for edits)
+               (let ((todo (find (model-edit-todo-id model) (model-todos model)
+                                :key #'todo-id :test #'string=)))
+                 (when todo
+                   (setf (todo-title todo) title)
+                   (setf (todo-description todo)
+                         (let ((desc (tui.textinput:textinput-value (model-description-input model))))
+                           (if (> (length desc) 0) desc nil)))
+                   (setf (todo-priority todo) (model-edit-priority model))
+                   (save-todos (model-todos model)))
+                 (setf (model-view-state model) :list)
+                 (return-from handle-add-edit-keys (values model nil)))
+               ;; Create new TODO with async LLM enrichment
+               (let* ((desc-input (tui.textinput:textinput-value (model-description-input model)))
+                      (desc-value (when (> (length desc-input) 0) desc-input))
+                      (parent-id (model-pending-parent-id model))
+                      ;; Create todo immediately with raw data, mark as enriching
+                      (new-todo (make-todo title
+                                          :description desc-value
+                                          :priority (model-edit-priority model)
+                                          :parent-id parent-id)))
+                 ;; Mark as being enriched
+                 (setf (todo-enriching-p new-todo) t)
+                 (push new-todo (model-todos model))
+                 (save-todos (model-todos model))
+                 ;; Clear pending parent-id
+                 (setf (model-pending-parent-id model) nil)
+                 (setf (model-view-state model) :list)
+                 (llog:info "Created todo, starting async enrichment"
+                            :todo-id (todo-id new-todo)
+                            :title title
+                            :parent-id parent-id)
+                 ;; Return command for async enrichment
+                 (return-from handle-add-edit-keys
+                   (values model (list (make-enrichment-cmd (todo-id new-todo)
+                                                            title
+                                                            desc-input)
+                                       (make-spinner-start-cmd
+                                        (model-enrichment-spinner model)))))))))
+       (values model nil))
+
+      ;; Pass key to active text input
+      (t
+       (case (model-active-field model)
+         (:title
+          (multiple-value-bind (new-input cmd)
+              (tui.textinput:textinput-update (model-title-input model) msg)
+            (declare (ignore cmd))
+            (setf (model-title-input model) new-input)))
+         (:description
+          (multiple-value-bind (new-input cmd)
+              (tui.textinput:textinput-update (model-description-input model) msg)
+            (declare (ignore cmd))
+            (setf (model-description-input model) new-input))))
+       (values model nil)))))
+
+;;── Search View Key Handling ───────────────────────────────────────────────────
+
+(defun handle-search-keys (model msg)
+  "Handle keyboard input in search view."
+  (let ((key (tui:key-msg-key msg)))
+    (cond
+      ;; Cancel with Escape
+      ((eq key :escape)
+       (setf (model-view-state model) :list)
+       (values model nil))
+
+      ;; Apply search with Enter
+      ((eq key :enter)
+       (setf (model-search-query model)
+             (tui.textinput:textinput-value (model-search-input model)))
+       (setf (model-cursor model) 0)
+       (setf (model-view-state model) :list)
+       (values model nil))
+
+      ;; Pass key to search input
+      (t
+       (multiple-value-bind (new-input cmd)
+           (tui.textinput:textinput-update (model-search-input model) msg)
+         (declare (ignore cmd))
+         (setf (model-search-input model) new-input)
+         ;; Live search as you type
+         (setf (model-search-query model)
+               (tui.textinput:textinput-value (model-search-input model)))
+         (setf (model-cursor model) 0))
+       (values model nil)))))
+
+;;── Import View Key Handling ───────────────────────────────────────────────────
+
+(defun handle-import-keys (model msg)
+  "Handle keyboard input in import view."
+  (let ((key (tui:key-msg-key msg)))
+    (cond
+      ;; Cancel with Escape
+      ((eq key :escape)
+       (setf (model-view-state model) :list)
+       (values model nil))
+
+      ;; Start import with Enter
+      ((eq key :enter)
+       (let ((filename (tui.textinput:textinput-value (model-import-input model))))
+         (if (and (> (length filename) 0)
+                  (probe-file filename))
+             (progn
+               (llog:info "Starting org-mode import" :filename filename)
+               (setf (model-view-state model) :list)
+               ;; Return command to perform async import
+               (values model (list (make-import-cmd model filename)
+                                   (make-spinner-start-cmd
+                                    (model-enrichment-spinner model)))))
+             (progn
+               (llog:warn "Import file not found" :filename filename)
+               ;; Stay in import view - file doesn't exist
+               (values model nil)))))
+
+      ;; Pass key to import input
+      (t
+       (multiple-value-bind (new-input cmd)
+           (tui.textinput:textinput-update (model-import-input model) msg)
+         (declare (ignore cmd))
+         (setf (model-import-input model) new-input))
+       (values model nil)))))
+
+;;── Delete Confirm Key Handling ────────────────────────────────────────────────
+
+(defun handle-delete-confirm-keys (model msg)
+  "Handle keyboard input in delete confirmation."
+  (let ((key (tui:key-msg-key msg))
+        (todos (get-visible-todos model)))
+    (cond
+      ;; Confirm delete with y
+      ((and (characterp key) (char-equal key #\y))
+       (when (< (model-cursor model) (length todos))
+         (let* ((todo-to-delete (nth (model-cursor model) todos))
+                (all-todos (model-todos model))
+                ;; Get all descendants to delete as well
+                (descendants (get-descendants all-todos (todo-id todo-to-delete)))
+                (ids-to-delete (cons (todo-id todo-to-delete)
+                                     (mapcar #'todo-id descendants))))
+           (setf (model-todos model)
+                 (remove-if (lambda (item)
+                              (member (todo-id item) ids-to-delete :test #'string=))
+                           all-todos))
+           (save-todos (model-todos model))
+           (setf (model-cursor model)
+                 (min (model-cursor model) (max 0 (1- (length (get-visible-todos model))))))))
+       (setf (model-view-state model) :list)
+       (values model nil))
+
+      ;; Cancel with anything else
+      (t
+       (setf (model-view-state model) :list)
+       (values model nil)))))
+
+;;── Delete DONE Confirm Key Handling ──────────────────────────────────────────
+
+(defun handle-delete-done-confirm-keys (model msg)
+  "Handle keyboard input in delete-done confirmation."
+  (let ((key (tui:key-msg-key msg)))
+    (cond
+      ;; Confirm delete with y
+      ((and (characterp key) (char-equal key #\y))
+       (setf (model-todos model)
+             (remove-if (lambda (item) (eq (todo-status item) +status-completed+))
+                        (model-todos model)))
+       (save-todos (model-todos model))
+       (setf (model-cursor model)
+             (min (model-cursor model) (max 0 (1- (length (get-visible-todos model))))))
+       (setf (model-view-state model) :list)
+       (values model nil))
+
+      ;; Cancel with anything else
+      (t
+       (setf (model-view-state model) :list)
+       (values model nil)))))
+
+;;── Detail View Key Handling ───────────────────────────────────────────────────
+
+(defun handle-detail-keys (model msg)
+  "Handle keyboard input in detail view."
+  (let ((key (tui:key-msg-key msg)))
+    (cond
+      ;; Back to list with Escape, q, or Enter
+      ((or (eq key :escape)
+           (and (characterp key) (char= key #\q))
+           (eq key :enter))
+       (setf (model-view-state model) :list)
+       (values model nil))
+
+      ;; Edit from detail view
+      ((and (characterp key) (char= key #\e))
+       (let ((todos (get-visible-todos model)))
+         (when (< (model-cursor model) (length todos))
+           (let ((todo (nth (model-cursor model) todos)))
+             (setf (model-view-state model) :edit)
+             (setf (model-edit-todo-id model) (todo-id todo))
+             (setf (model-edit-priority model) (todo-priority todo))
+             (setf (model-active-field model) :title)
+             (tui.textinput:textinput-set-value (model-title-input model) (todo-title todo))
+             (tui.textinput:textinput-set-value (model-description-input model) (or (todo-description todo) ""))
+             (tui.textinput:textinput-focus (model-title-input model))
+             (tui.textinput:textinput-blur (model-description-input model)))))
+       (values model nil))
+
+      (t (values model nil)))))
+
+;;── Help View Key Handling ─────────────────────────────────────────────────────
+
+(defun handle-help-keys (model msg)
+  "Handle keyboard input in help view."
+  (declare (ignore msg))
+  ;; Any key returns to list view
+  (setf (model-view-state model) :list)
+  (values model nil))
+
+;;── Context Info View Key Handling ────────────────────────────────────────────
+
+(defun handle-context-info-keys (model msg)
+  "Handle keyboard input in context info view."
+  (declare (ignore msg))
+  ;; Any key returns to list view
+  (setf (model-view-state model) :list)
+  (values model nil))
+
+;;── Main Update Dispatch ───────────────────────────────────────────────────────
+
+(defmethod tui:update-message ((model app-model) (msg tui:key-msg))
+  "Handle key messages based on current view state."
+  (case (model-view-state model)
+    (:list (handle-list-keys model msg))
+    ((:add :edit) (handle-add-edit-keys model msg))
+    (:search (handle-search-keys model msg))
+    (:import (handle-import-keys model msg))
+    (:delete-confirm (handle-delete-confirm-keys model msg))
+    (:delete-done-confirm (handle-delete-done-confirm-keys model msg))
+    (:detail (handle-detail-keys model msg))
+    (:help (handle-help-keys model msg))
+    (:context-info (handle-context-info-keys model msg))
+    (t (values model nil))))
+
+(defmethod tui:update-message ((model app-model) (msg tui:window-size-msg))
+  "Handle window resize."
+  (setf (model-term-width model) (tui:window-size-msg-width msg))
+  (setf (model-term-height model) (tui:window-size-msg-height msg))
+  (values model nil))
+
+(defmethod tui:update-message ((model app-model) (msg tui.spinner:spinner-tick-msg))
+  "Handle spinner tick messages to animate the spinner."
+  (let ((spinner (model-enrichment-spinner model)))
+    (when spinner
+      (multiple-value-bind (updated-spinner cmd)
+          (tui.spinner:spinner-update spinner msg)
+        (setf (model-enrichment-spinner model) updated-spinner)
+        ;; Only continue ticking if there are enriching items
+        (if (some #'todo-enriching-p (model-todos model))
+            (values model cmd)
+            (values model nil))))))
+
+;;── Enrichment Message ────────────────────────────────────────────────────────
+
+(defclass enrichment-complete-msg ()
+  ((todo-id
+    :initarg :todo-id
+    :accessor enrichment-msg-todo-id
+    :documentation "ID of the TODO that was enriched.")
+   (enriched-data
+    :initarg :enriched-data
+    :accessor enrichment-msg-data
+    :documentation "Plist with enriched fields, or NIL if enrichment failed."))
+  (:documentation "Message sent when async enrichment completes."))
+
+(defmethod tui:update-message ((model app-model) (msg enrichment-complete-msg))
+  "Handle enrichment completion by updating the TODO with enriched data."
+  (let* ((todo-id (enrichment-msg-todo-id msg))
+         (data (enrichment-msg-data msg))
+         (todo (find todo-id (model-todos model) :key #'todo-id :test #'string=)))
+    (llog:info "Enrichment complete message received"
+               :todo-id todo-id
+               :has-data (if data "yes" "no")
+               :found-todo (if todo "yes" "no"))
+    (when todo
+      ;; Clear enriching flag
+      (setf (todo-enriching-p todo) nil)
+      ;; Apply enriched data if available
+      (when data
+        (when (getf data :title)
+          (setf (todo-title todo) (getf data :title)))
+        (when (getf data :description)
+          (setf (todo-description todo) (getf data :description)))
+        (when (getf data :priority)
+          (setf (todo-priority todo) (getf data :priority)))
+        (when (getf data :category)
+          (let ((tag (category-to-tag (getf data :category))))
+            (when tag
+              (setf (todo-tags todo) (list tag)))))
+        (when (getf data :estimated-minutes)
+          (setf (todo-estimated-minutes todo) (getf data :estimated-minutes)))
+        (when (getf data :scheduled-date)
+          (setf (todo-scheduled-date todo) (getf data :scheduled-date)))
+        (when (getf data :due-date)
+          (setf (todo-due-date todo) (getf data :due-date)))
+        (when (getf data :location-info)
+          (setf (todo-location-info todo) (getf data :location-info))))
+      ;; Save updated todos
+      (save-todos (model-todos model)))
+    (values model nil)))
+
+(defun make-enrichment-cmd (todo-id raw-title raw-notes)
+  "Create a command that performs async enrichment and returns completion message.
+   Tuition runs this in a separate thread."
+  (lambda ()
+    (llog:info "Starting async enrichment"
+               :todo-id todo-id
+               :raw-title raw-title)
+    (let ((result (handler-case
+                      (enrich-todo-input raw-title raw-notes)
+                    (error (e)
+                      (llog:error "Enrichment failed"
+                                  :todo-id todo-id
+                                  :error (format nil "~A" e))
+                      nil))))
+      (llog:info "Enrichment complete"
+                 :todo-id todo-id
+                 :has-result (if result "yes" "no"))
+      ;; Return the completion message - tuition will send it
+      (make-instance 'enrichment-complete-msg
+                     :todo-id todo-id
+                     :enriched-data result))))
+
+(defun make-spinner-start-cmd (spinner)
+  "Create a command to kick off spinner animation."
+  (lambda ()
+    (sleep (tui.spinner::spinner-fps spinner))
+    (tui.spinner:make-spinner-tick-msg
+     :id (tui.spinner::spinner-id spinner))))
+
+;;── Import Message ─────────────────────────────────────────────────────────────
+
+(defclass import-complete-msg ()
+  ((imported-todos
+    :initarg :imported-todos
+    :accessor import-msg-todos
+    :documentation "List of plists with TODO data, or NIL if import failed.")
+   (filename
+    :initarg :filename
+    :accessor import-msg-filename
+    :documentation "The file that was imported."))
+  (:documentation "Message sent when async org-mode import completes."))
+
+(defmethod tui:update-message ((model app-model) (msg import-complete-msg))
+  "Handle import completion by creating TODOs from imported data."
+  (let ((todos-data (import-msg-todos msg))
+        (filename (import-msg-filename msg)))
+    (llog:info "Import complete message received"
+               :filename filename
+               :num-todos (if todos-data (length todos-data) 0))
+    (when todos-data
+      (dolist (data todos-data)
+        (let ((new-todo (make-todo (or (getf data :title) "Imported item")
+                                   :description (getf data :description)
+                                   :priority (or (getf data :priority) :medium))))
+          ;; Apply enriched fields
+          (when (getf data :category)
+            (let ((tag (category-to-tag (getf data :category))))
+              (when tag
+                (setf (todo-tags new-todo) (list tag)))))
+          (when (getf data :estimated-minutes)
+            (setf (todo-estimated-minutes new-todo) (getf data :estimated-minutes)))
+          (when (getf data :scheduled-date)
+            (setf (todo-scheduled-date new-todo) (getf data :scheduled-date)))
+          (when (getf data :due-date)
+            (setf (todo-due-date new-todo) (getf data :due-date)))
+          (when (getf data :location-info)
+            (setf (todo-location-info new-todo) (getf data :location-info)))
+          ;; Add to model
+          (push new-todo (model-todos model))))
+      ;; Save all todos
+      (save-todos (model-todos model))
+      (llog:info "Imported todos saved" :count (length todos-data)))
+    (values model nil)))
+
+(defun make-import-cmd (model filename)
+  "Create a command that performs async org-mode import and returns completion message."
+  (declare (ignore model))
+  (lambda ()
+    (llog:info "Starting async org-mode import" :filename filename)
+    (let ((result (handler-case
+                      (import-org-file filename)
+                    (error (e)
+                      (llog:error "Import failed"
+                                  :filename filename
+                                  :error (format nil "~A" e))
+                      nil))))
+      (llog:info "Import complete"
+                 :filename filename
+                 :num-todos (if result (length result) 0))
+      (make-instance 'import-complete-msg
+                     :filename filename
+                     :imported-todos result))))
