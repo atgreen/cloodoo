@@ -23,7 +23,7 @@
     :initarg :view-state
    :initform :list
    :accessor model-view-state
-    :documentation "Current view: :list, :detail, :add, :edit, :help, :search, :delete-confirm, :delete-done-confirm, :import.")
+    :documentation "Current view: :list, :detail, :add, :edit, :help, :search, :delete-confirm, :delete-done-confirm, :import, :edit-scheduled, :edit-deadline.")
    (filter-status
     :initarg :filter-status
     :initform nil
@@ -108,13 +108,59 @@
    (pending-parent-id
     :initform nil
     :accessor model-pending-parent-id
-    :documentation "Parent ID for new todo being added as child."))
+    :documentation "Parent ID for new todo being added as child.")
+   ;; Sidebar state
+   (selected-tags
+    :initform (make-hash-table :test #'equal)
+    :accessor model-selected-tags
+    :documentation "Hash table of selected tag names for filtering.")
+   (all-tags-cache
+    :initform nil
+    :accessor model-all-tags-cache
+    :documentation "Cached sorted list of all unique tags.")
+   (sidebar-visible
+    :initform t
+    :accessor model-sidebar-visible
+    :documentation "Whether sidebar is shown.")
+   (sidebar-focused
+    :initform nil
+    :accessor model-sidebar-focused
+    :documentation "T if keyboard focus is on sidebar, nil for main list.")
+   (sidebar-cursor
+    :initform 0
+    :accessor model-sidebar-cursor
+    :documentation "Selected row in sidebar (0=All, 1+=tags).")
+   (tag-presets
+    :initform (make-array 10 :initial-element nil)
+    :accessor model-tag-presets
+    :documentation "Array of 10 preset tag selections (lists of tag names).")
+   ;; Date picker for scheduled/deadline editing
+   (date-picker
+    :initform nil
+    :accessor model-date-picker
+    :documentation "Datepicker component for editing dates.")
+   (editing-date-type
+    :initform nil
+    :accessor model-editing-date-type
+    :documentation "Which date we're editing: :scheduled or :deadline.")
+   ;; Visible todos cache for stable ordering
+   (visible-todos-cache
+    :initform nil
+    :accessor model-visible-todos-cache
+    :documentation "Cached list of visible todos to maintain stable order.")
+   (visible-todos-dirty
+    :initform t
+    :accessor model-visible-todos-dirty
+    :documentation "When T, regenerate visible-todos-cache on next access."))
   (:documentation "The application model following TEA pattern."))
 
 (defun make-initial-model ()
   "Create the initial application model."
-  (make-instance 'app-model
-                 :todos (load-todos)))
+  (let ((model (make-instance 'app-model
+                              :todos (load-todos))))
+    ;; Load persisted presets
+    (setf (model-tag-presets model) (load-presets))
+    model))
 
 ;;── Collapse State Management ─────────────────────────────────────────────────
 
@@ -141,6 +187,34 @@
                    (setf parent-id (todo-parent-id parent))
                    (setf parent-id nil))))
     nil))
+
+;;── Tag Collection ────────────────────────────────────────────────────────────
+
+(defun collect-all-tags (todos)
+  "Return sorted list of unique tags from all TODOs."
+  (let ((tags (make-hash-table :test #'equal)))
+    (dolist (todo todos)
+      (dolist (tag (todo-tags todo))
+        (setf (gethash tag tags) t)))
+    (sort (loop for k being the hash-keys of tags collect k) #'string<)))
+
+(defun refresh-tags-cache (model)
+  "Update the all-tags-cache from current todos."
+  (setf (model-all-tags-cache model)
+        (collect-all-tags (model-todos model))))
+
+;;── Tag Filtering ─────────────────────────────────────────────────────────────
+
+(defun filter-todos-by-tags (todos selected-tags)
+  "Filter todos to those matching ANY selected tag.
+   Empty selection = show all."
+  (if (zerop (hash-table-count selected-tags))
+      todos
+      (remove-if-not
+       (lambda (todo)
+         (some (lambda (tag) (gethash tag selected-tags))
+               (todo-tags todo)))
+       todos)))
 
 ;;── Filtering and Sorting ─────────────────────────────────────────────────────
 
@@ -222,27 +296,61 @@
           (add-with-children todo))))
     (nreverse result)))
 
-(defun get-visible-todos (model)
-  "Get the list of visible todos after filtering, sorting, and collapsing.
-   Returns todos in display order: grouped by date category, hierarchically ordered,
-   with collapsed children hidden."
+(defun invalidate-visible-todos-cache (model)
+  "Mark the visible todos cache as dirty so it will be regenerated."
+  (setf (model-visible-todos-dirty model) t))
+
+(defun compute-visible-todos-grouped (model)
+  "Compute the grouped list of visible todos after filtering, sorting, and collapsing.
+   Returns an alist of (category . todo-ids) preserving display order."
   (let* ((all-todos (model-todos model))
-         (filtered (filter-todos all-todos
+         ;; Apply tag filter first
+         (tag-filtered (filter-todos-by-tags all-todos (model-selected-tags model)))
+         (filtered (filter-todos tag-filtered
                                  :status (model-filter-status model)
                                  :priority (model-filter-priority model)
                                  :search-query (model-search-query model)))
          (groups (group-todos-by-date filtered))
          (result nil))
-    ;; Flatten groups back into a list in display order
+    ;; Build result with todo IDs (not objects) to allow status changes
     (dolist (group groups)
-      (let* ((group-todos (cdr group))
+      (let* ((category (car group))
+             (group-todos (cdr group))
              ;; Order hierarchically within each group
-             (ordered (order-todos-hierarchically group-todos)))
+             (ordered (order-todos-hierarchically group-todos))
+             (visible-ids nil))
         (dolist (todo ordered)
           ;; Skip if any ancestor is collapsed
           (unless (any-ancestor-collapsed-p model all-todos todo)
-            (push todo result)))))
+            (push (todo-id todo) visible-ids)))
+        (when visible-ids
+          (push (cons category (nreverse visible-ids)) result))))
     (nreverse result)))
+
+(defun get-visible-todos-grouped (model)
+  "Get the grouped list of visible todos, using cache for stable ordering.
+   Returns an alist of (category . todos) where todos are current objects.
+   The cache preserves grouping when status is toggled (Space).
+   Call invalidate-visible-todos-cache to force re-grouping (on 'r', add, delete)."
+  (when (model-visible-todos-dirty model)
+    ;; Regenerate the cache (stores IDs, not objects)
+    (setf (model-visible-todos-cache model) (compute-visible-todos-grouped model))
+    (setf (model-visible-todos-dirty model) nil))
+  ;; Return cached groups, but resolve IDs to current todo objects
+  (let ((all-todos (model-todos model)))
+    (loop for (category . ids) in (model-visible-todos-cache model)
+          for todos = (remove nil
+                              (mapcar (lambda (id)
+                                        (find id all-todos :key #'todo-id :test #'equal))
+                                      ids))
+          when todos
+          collect (cons category todos))))
+
+(defun get-visible-todos (model)
+  "Get flat list of visible todos (for cursor navigation etc.)."
+  (let ((groups (get-visible-todos-grouped model)))
+    (loop for (category . todos) in groups
+          append todos)))
 
 (defun reorder-todos (todos sort-by descending)
   "Reorder todos by date category, then sort within each group, preserving hierarchy."
@@ -263,18 +371,35 @@
 
 ;;── Scroll Management ─────────────────────────────────────────────────────────
 
+(defun list-line-index-for-cursor (groups cursor)
+  "Return 0-based line index for the given cursor in grouped list output."
+  (let ((current 0)
+        (line-idx 0))
+    (dolist (group groups)
+      ;; Header line
+      (incf line-idx)
+      (dolist (todo (cdr group))
+        (when (= current cursor)
+          (return-from list-line-index-for-cursor line-idx))
+        (incf current)
+        (incf line-idx)))
+    (max 0 (1- line-idx))))
+
 (defun adjust-scroll (model viewport-height)
   "Adjust scroll offset to keep selected item visible."
   (let* ((cursor (model-cursor model))
          (offset (model-scroll-offset model))
          (todos (get-visible-todos model))
-         (num-items (length todos))
-         (max-offset (max 0 (- num-items viewport-height))))
+         (groups (group-todos-by-date todos))
+         (num-lines (max 1 (+ (length todos) (length groups))))
+         (cursor-line (list-line-index-for-cursor groups cursor))
+         (max-offset (max 0 (- num-lines viewport-height))))
     (cond
-      ((< cursor offset)
-       (setf (model-scroll-offset model) cursor))
-      ((>= cursor (+ offset viewport-height))
-       (setf (model-scroll-offset model) (min max-offset (- cursor viewport-height -1))))
+      ((< cursor-line offset)
+       (setf (model-scroll-offset model) cursor-line))
+      ((>= cursor-line (+ offset viewport-height))
+       (setf (model-scroll-offset model)
+             (min max-offset (- cursor-line viewport-height -1))))
       ((> offset max-offset)
        (setf (model-scroll-offset model) max-offset)))))
 
@@ -316,12 +441,104 @@
         (tui.spinner:make-spinner :frames tui.spinner:*spinner-minidot*
                                   :fps 0.1))
   ;; Start spinner ticking
-  (tui.spinner:spinner-init (model-enrichment-spinner model)))
+  (tui.spinner:spinner-init (model-enrichment-spinner model))
+  ;; Initialize tags cache
+  (refresh-tags-cache model)
+  ;; Initialize datepicker with custom styles for better visibility
+  (let ((custom-styles
+          (tui.datepicker:make-datepicker-styles
+           :cursor (tui:make-style :reverse t :foreground tui:*fg-cyan* :background tui:*bg-black*)
+           :selected (tui:make-style :reverse t :foreground tui:*fg-green*)
+           :selected-cursor (tui:make-style :reverse t :bold t :foreground tui:*fg-green* :background tui:*bg-black*)
+           :today (tui:make-style :bold t :foreground tui:*fg-yellow*))))
+    (setf (model-date-picker model)
+          (tui.datepicker:make-datepicker :styles custom-styles))))
+
+;;── Sidebar Key Handling ───────────────────────────────────────────────────────
+
+(defun handle-sidebar-keys (model msg)
+  "Handle keyboard input when sidebar is focused."
+  (let* ((key (tui:key-msg-key msg))
+         (tags (model-all-tags-cache model))
+         (max-cursor (length tags)))  ; 0=All, 1..n=tags
+    (cond
+      ;; Tab - return focus to main list
+      ((eq key :tab)
+       (setf (model-sidebar-focused model) nil)
+       (values model nil))
+
+      ;; Move up
+      ((or (eq key :up)
+           (and (characterp key) (or (char= key #\k) (char= key #\p))))
+       (when (> (model-sidebar-cursor model) 0)
+         (decf (model-sidebar-cursor model)))
+       (values model nil))
+
+      ;; Move down
+      ((or (eq key :down)
+           (and (characterp key) (or (char= key #\j) (char= key #\n))))
+       (when (< (model-sidebar-cursor model) max-cursor)
+         (incf (model-sidebar-cursor model)))
+       (values model nil))
+
+      ;; Space - toggle tag selection
+      ((and (characterp key) (char= key #\Space))
+       (let ((cursor (model-sidebar-cursor model))
+             (selected (model-selected-tags model)))
+         (if (= cursor 0)
+             ;; "All" selected - clear all filters
+             (clrhash selected)
+             ;; Toggle specific tag
+             (let ((tag (nth (1- cursor) tags)))
+               (when tag
+                 (if (gethash tag selected)
+                     (remhash tag selected)
+                     (setf (gethash tag selected) t))))))
+       (invalidate-visible-todos-cache model)
+       (setf (model-cursor model) 0)  ; Reset main list cursor
+       (values model nil))
+
+      ;; 'a' - select all (clear filter)
+      ((and (characterp key) (char= key #\a))
+       (clrhash (model-selected-tags model))
+       (invalidate-visible-todos-cache model)
+       (setf (model-cursor model) 0)
+       (values model nil))
+
+      ;; 'n' - select none (clear all selections)
+      ((and (characterp key) (char= key #\n))
+       (clrhash (model-selected-tags model))
+       (invalidate-visible-todos-cache model)
+       (setf (model-cursor model) 0)
+       (values model nil))
+
+      ;; Shift+1 through Shift+9 and Shift+0 - save preset
+      ;; Shift+1=! Shift+2=@ Shift+3=# Shift+4=$ Shift+5=% Shift+6=^ Shift+7=& Shift+8=* Shift+9=( Shift+0=)
+      ((and (characterp key) (position key "!@#$%^&*()"))
+       (let* ((pos (position key "!@#$%^&*()"))
+              (preset-idx pos)  ; !=0, @=1, #=2, $=3, %=4, ^=5, &=6, *=7, (=8, )=9
+              (selected (model-selected-tags model))
+              (tag-list (loop for tag being the hash-keys of selected collect tag)))
+         (setf (aref (model-tag-presets model) preset-idx)
+               (if tag-list tag-list nil))
+         (save-presets (model-tag-presets model)))
+       (values model nil))
+
+      ;; Escape or q - return to list without changes
+      ((or (eq key :escape) (and (characterp key) (char= key #\q)))
+       (setf (model-sidebar-focused model) nil)
+       (values model nil))
+
+      (t (values model nil)))))
 
 ;;── List View Key Handling ─────────────────────────────────────────────────────
 
 (defun handle-list-keys (model msg)
   "Handle keyboard input in list view."
+  ;; If sidebar is focused, dispatch to sidebar handler
+  (when (model-sidebar-focused model)
+    (return-from handle-list-keys (handle-sidebar-keys model msg)))
+
   (let ((key (tui:key-msg-key msg))
         (ctrl (tui:key-msg-ctrl msg))
         (todos (get-visible-todos model)))
@@ -335,6 +552,41 @@
            (and ctrl (characterp key) (char= key #\c)))
        (values model (tui:quit-cmd)))
 
+      ;; Toggle sidebar visibility (l)
+      ((and (characterp key) (char= key #\l))
+       (setf (model-sidebar-visible model) (not (model-sidebar-visible model)))
+       (values model nil))
+
+      ;; Focus sidebar (Tab when sidebar is visible and not at a todo for indenting)
+      ;; Note: Tab for indent is handled separately below with the > key
+      ((and (eq key :tab) (model-sidebar-visible model) (not (model-sidebar-focused model)))
+       (setf (model-sidebar-focused model) t)
+       (values model nil))
+
+      ;; Apply preset 1-9 (digit keys apply presets)
+      ((and (characterp key) (digit-char-p key) (not (char= key #\0)))
+       (let* ((digit (digit-char-p key))
+              (preset-idx (1- digit))  ; 1->0, 2->1, etc
+              (preset (aref (model-tag-presets model) preset-idx)))
+         (when preset
+           (clrhash (model-selected-tags model))
+           (dolist (tag preset)
+             (setf (gethash tag (model-selected-tags model)) t))
+           (invalidate-visible-todos-cache model)
+           (setf (model-cursor model) 0)))
+       (values model nil))
+
+      ;; Apply preset 0 (stored in slot 9)
+      ((and (characterp key) (char= key #\0))
+       (let ((preset (aref (model-tag-presets model) 9)))
+         (when preset
+           (clrhash (model-selected-tags model))
+           (dolist (tag preset)
+             (setf (gethash tag (model-selected-tags model)) t))
+           (invalidate-visible-todos-cache model)
+           (setf (model-cursor model) 0)))
+       (values model nil))
+
       ;; Move up (p/k/up - org uses p for previous)
       ((or (eq key :up)
            (and (characterp key) (or (char= key #\k) (char= key #\p))))
@@ -347,6 +599,23 @@
            (and (characterp key) (or (char= key #\j) (char= key #\n))))
        (when (< (model-cursor model) (1- (length todos)))
          (incf (model-cursor model)))
+       (values model nil))
+
+      ;; Page up (Ctrl+U or Page Up key)
+      ((or (eq key :page-up)
+           (and ctrl (characterp key) (char= key #\u)))
+       (let* ((page-size (max 1 (- (model-term-height model) 6)))
+              (new-pos (max 0 (- (model-cursor model) page-size))))
+         (setf (model-cursor model) new-pos))
+       (values model nil))
+
+      ;; Page down (Ctrl+D or Page Down key)
+      ((or (eq key :page-down)
+           (and ctrl (characterp key) (char= key #\d)))
+       (let* ((page-size (max 1 (- (model-term-height model) 6)))
+              (max-pos (max 0 (1- (length todos))))
+              (new-pos (min max-pos (+ (model-cursor model) page-size))))
+         (setf (model-cursor model) new-pos))
        (values model nil))
 
       ;; Increase priority (Shift+Up)
@@ -383,7 +652,7 @@
        (setf (model-cursor model) (max 0 (1- (length todos))))
        (values model nil))
 
-      ;; Toggle status (Space): TODO -> DONE -> WAITING -> TODO
+      ;; Toggle status (Space): TODO -> DONE -> WAITING -> CANCELLED -> TODO
       ((and (characterp key) (char= key #\Space))
        (when (< (model-cursor model) (length todos))
          (let ((todo (nth (model-cursor model) todos)))
@@ -395,6 +664,9 @@
               (setf (todo-status todo) +status-waiting+)
               (setf (todo-completed-at todo) nil))
              (:waiting
+              (setf (todo-status todo) +status-cancelled+)
+              (setf (todo-completed-at todo) nil))
+             (:cancelled
               (setf (todo-status todo) +status-pending+)
               (setf (todo-completed-at todo) nil))
              (:in-progress
@@ -464,7 +736,8 @@
                 (all-todos (model-todos model)))
            ;; Only toggle if has children
            (when (has-children-p all-todos todo)
-             (toggle-collapse model todo))))
+             (toggle-collapse model todo)
+             (invalidate-visible-todos-cache model))))
        (values model nil))
 
       ;; Indent: make child of previous sibling (Tab or >)
@@ -478,7 +751,8 @@
            (when (equal (todo-parent-id todo) (todo-parent-id prev-todo))
              ;; Make todo a child of prev-todo
              (setf (todo-parent-id todo) (todo-id prev-todo))
-             (save-todos all-todos))))
+             (save-todos all-todos)
+             (invalidate-visible-todos-cache model))))
        (values model nil))
 
       ;; Outdent: move to parent's level (Shift+Tab or <)
@@ -492,7 +766,8 @@
              (let ((parent (find parent-id all-todos :key #'todo-id :test #'equal)))
                (when parent
                  (setf (todo-parent-id todo) (todo-parent-id parent))
-                 (save-todos all-todos))))))
+                 (save-todos all-todos)
+                 (invalidate-visible-todos-cache model))))))
        (values model nil))
 
       ;; Add child to selected item (Shift+A)
@@ -538,12 +813,14 @@
 
       ;; Filter by status (f cycles through)
       ((and (characterp key) (char= key #\f))
+       (invalidate-visible-todos-cache model)
        (setf (model-filter-status model)
              (case (model-filter-status model)
                ((nil) :pending)
                (:pending :in-progress)
                (:in-progress :waiting)
-               (:waiting :completed)
+               (:waiting :cancelled)
+               (:cancelled :completed)
                (:completed nil)))
        (setf (model-cursor model) 0)
        (values model nil))
@@ -558,7 +835,7 @@
                (:title :priority)))
        (values model nil))
 
-      ;; Refresh ordering (r)
+      ;; Refresh ordering (r) - resort and regroup todos
       ((and (characterp key) (char= key #\r))
        (let* ((selected-id (when (< (model-cursor model) (length todos))
                              (todo-id (nth (model-cursor model) todos)))))
@@ -567,6 +844,8 @@
                               (model-sort-by model)
                               (model-sort-descending model)))
          (save-todos (model-todos model))
+         ;; Invalidate cache to pick up new ordering
+         (invalidate-visible-todos-cache model)
          (when selected-id
            (let* ((visible (get-visible-todos model))
                   (new-index (position selected-id visible :key #'todo-id :test #'string=)))
@@ -576,9 +855,11 @@
 
       ;; Clear filters (c)
       ((and (characterp key) (char= key #\c))
+       (invalidate-visible-todos-cache model)
        (setf (model-filter-status model) nil)
        (setf (model-filter-priority model) nil)
        (setf (model-search-query model) "")
+       (clrhash (model-selected-tags model))
        (setf (model-cursor model) 0)
        (values model nil))
 
@@ -719,6 +1000,8 @@
                  (setf (todo-enriching-p new-todo) t)
                  (push new-todo (model-todos model))
                  (save-todos (model-todos model))
+                 ;; Invalidate cache so new todo appears
+                 (invalidate-visible-todos-cache model)
                  ;; Clear pending parent-id
                  (setf (model-pending-parent-id model) nil)
                  (setf (model-view-state model) :list)
@@ -765,6 +1048,7 @@
       ((eq key :enter)
        (setf (model-search-query model)
              (tui.textinput:textinput-value (model-search-input model)))
+       (invalidate-visible-todos-cache model)
        (setf (model-cursor model) 0)
        (setf (model-view-state model) :list)
        (values model nil))
@@ -778,6 +1062,7 @@
          ;; Live search as you type
          (setf (model-search-query model)
                (tui.textinput:textinput-value (model-search-input model)))
+         (invalidate-visible-todos-cache model)
          (setf (model-cursor model) 0))
        (values model nil)))))
 
@@ -838,6 +1123,8 @@
                               (member (todo-id item) ids-to-delete :test #'string=))
                            all-todos))
            (save-todos (model-todos model))
+           ;; Invalidate cache so deleted items disappear
+           (invalidate-visible-todos-cache model)
            (setf (model-cursor model)
                  (min (model-cursor model) (max 0 (1- (length (get-visible-todos model))))))))
        (setf (model-view-state model) :list)
@@ -860,6 +1147,8 @@
              (remove-if (lambda (item) (eq (todo-status item) +status-completed+))
                         (model-todos model)))
        (save-todos (model-todos model))
+       ;; Invalidate cache so deleted items disappear
+       (invalidate-visible-todos-cache model)
        (setf (model-cursor model)
              (min (model-cursor model) (max 0 (1- (length (get-visible-todos model))))))
        (setf (model-view-state model) :list)
@@ -874,7 +1163,8 @@
 
 (defun handle-detail-keys (model msg)
   "Handle keyboard input in detail view."
-  (let ((key (tui:key-msg-key msg)))
+  (let ((key (tui:key-msg-key msg))
+        (todos (get-visible-todos model)))
     (cond
       ;; Back to list with Escape, q, or Enter
       ((or (eq key :escape)
@@ -885,20 +1175,109 @@
 
       ;; Edit from detail view
       ((and (characterp key) (char= key #\e))
-       (let ((todos (get-visible-todos model)))
-         (when (< (model-cursor model) (length todos))
-           (let ((todo (nth (model-cursor model) todos)))
-             (setf (model-view-state model) :edit)
-             (setf (model-edit-todo-id model) (todo-id todo))
-             (setf (model-edit-priority model) (todo-priority todo))
-             (setf (model-active-field model) :title)
-             (tui.textinput:textinput-set-value (model-title-input model) (todo-title todo))
-             (tui.textinput:textinput-set-value (model-description-input model) (or (todo-description todo) ""))
-             (tui.textinput:textinput-focus (model-title-input model))
-             (tui.textinput:textinput-blur (model-description-input model)))))
+       (when (< (model-cursor model) (length todos))
+         (let ((todo (nth (model-cursor model) todos)))
+           (setf (model-view-state model) :edit)
+           (setf (model-edit-todo-id model) (todo-id todo))
+           (setf (model-edit-priority model) (todo-priority todo))
+           (setf (model-active-field model) :title)
+           (tui.textinput:textinput-set-value (model-title-input model) (todo-title todo))
+           (tui.textinput:textinput-set-value (model-description-input model) (or (todo-description todo) ""))
+           (tui.textinput:textinput-focus (model-title-input model))
+           (tui.textinput:textinput-blur (model-description-input model))))
+       (values model nil))
+
+      ;; Edit scheduled date (s)
+      ((and (characterp key) (char= key #\s))
+       (when (< (model-cursor model) (length todos))
+         (let* ((todo (nth (model-cursor model) todos))
+                (scheduled (todo-scheduled-date todo))
+                (picker (model-date-picker model)))
+           ;; Initialize datepicker with current scheduled date or today
+           (if scheduled
+               (let ((utime (lt:timestamp-to-universal scheduled)))
+                 (tui.datepicker:datepicker-set-time picker utime)
+                 (setf (tui.datepicker:datepicker-selected picker) utime))
+               (progn
+                 (tui.datepicker:datepicker-set-time picker (get-universal-time))
+                 (tui.datepicker:datepicker-unselect picker)))
+           (tui.datepicker:datepicker-focus picker)
+           (setf (model-editing-date-type model) :scheduled)
+           (setf (model-view-state model) :edit-date)))
+       (values model nil))
+
+      ;; Edit deadline date (d)
+      ((and (characterp key) (char= key #\d))
+       (when (< (model-cursor model) (length todos))
+         (let* ((todo (nth (model-cursor model) todos))
+                (deadline (todo-due-date todo))
+                (picker (model-date-picker model)))
+           ;; Initialize datepicker with current deadline or today
+           (if deadline
+               (let ((utime (lt:timestamp-to-universal deadline)))
+                 (tui.datepicker:datepicker-set-time picker utime)
+                 (setf (tui.datepicker:datepicker-selected picker) utime))
+               (progn
+                 (tui.datepicker:datepicker-set-time picker (get-universal-time))
+                 (tui.datepicker:datepicker-unselect picker)))
+           (tui.datepicker:datepicker-focus picker)
+           (setf (model-editing-date-type model) :deadline)
+           (setf (model-view-state model) :edit-date)))
        (values model nil))
 
       (t (values model nil)))))
+
+;;── Date Edit View Key Handling ────────────────────────────────────────────────
+
+(defun handle-date-edit-keys (model msg)
+  "Handle keyboard input in date editing view."
+  (let ((key (tui:key-msg-key msg))
+        (ctrl (tui:key-msg-ctrl msg))
+        (todos (get-visible-todos model))
+        (picker (model-date-picker model)))
+    (cond
+      ;; Cancel with Escape or Ctrl+C - go back to detail view
+      ((or (eq key :escape)
+           (and ctrl (characterp key) (char= key #\c)))
+       (setf (model-view-state model) :detail)
+       (values model nil))
+
+      ;; Confirm with Enter - save the date and go back
+      ((eq key :enter)
+       (when (< (model-cursor model) (length todos))
+         (let* ((todo (nth (model-cursor model) todos))
+                (selected (tui.datepicker:datepicker-selected picker))
+                (timestamp (when selected
+                             (lt:universal-to-timestamp selected))))
+           ;; Save the date based on which type we're editing
+           (case (model-editing-date-type model)
+             (:scheduled
+              (setf (todo-scheduled-date todo) timestamp))
+             (:deadline
+              (setf (todo-due-date todo) timestamp)))
+           (save-todos (model-todos model))))
+       (setf (model-view-state model) :detail)
+       (values model nil))
+
+      ;; Clear date with Backspace or Delete
+      ((or (eq key :backspace) (eq key :delete))
+       (when (< (model-cursor model) (length todos))
+         (let ((todo (nth (model-cursor model) todos)))
+           (case (model-editing-date-type model)
+             (:scheduled
+              (setf (todo-scheduled-date todo) nil))
+             (:deadline
+              (setf (todo-due-date todo) nil)))
+           (save-todos (model-todos model))))
+       (setf (model-view-state model) :detail)
+       (values model nil))
+
+      ;; Pass other keys to datepicker
+      (t
+       (multiple-value-bind (new-picker cmd)
+           (tui.datepicker:datepicker-update picker msg)
+         (setf (model-date-picker model) new-picker)
+         (values model cmd))))))
 
 ;;── Help View Key Handling ─────────────────────────────────────────────────────
 
@@ -930,6 +1309,7 @@
     (:delete-confirm (handle-delete-confirm-keys model msg))
     (:delete-done-confirm (handle-delete-done-confirm-keys model msg))
     (:detail (handle-detail-keys model msg))
+    (:edit-date (handle-date-edit-keys model msg))
     (:help (handle-help-keys model msg))
     (:context-info (handle-context-info-keys model msg))
     (t (values model nil))))
@@ -998,7 +1378,9 @@
         (when (getf data :location-info)
           (setf (todo-location-info todo) (getf data :location-info))))
       ;; Save updated todos
-      (save-todos (model-todos model)))
+      (save-todos (model-todos model))
+      ;; Refresh tags cache since enrichment may add tags
+      (refresh-tags-cache model))
     (values model nil)))
 
 (defun make-enrichment-cmd (todo-id raw-title raw-notes)
@@ -1072,6 +1454,10 @@
           (push new-todo (model-todos model))))
       ;; Save all todos
       (save-todos (model-todos model))
+      ;; Invalidate cache so new todos appear
+      (invalidate-visible-todos-cache model)
+      ;; Refresh tags cache after import
+      (refresh-tags-cache model)
       (llog:info "Imported todos saved" :count (length todos-data)))
     (values model nil)))
 
