@@ -63,10 +63,12 @@
     (setf (gethash "tags" ht) (todo-tags todo))
     (setf (gethash "estimated_minutes" ht) (todo-estimated-minutes todo))
     (setf (gethash "location_info" ht) (location-info-to-hash-table (todo-location-info todo)))
+    (setf (gethash "url" ht) (todo-url todo))
     (setf (gethash "created_at" ht) (lt:format-rfc3339-timestring nil (todo-created-at todo)))
     (setf (gethash "completed_at" ht) (when (todo-completed-at todo)
                                          (lt:format-rfc3339-timestring nil (todo-completed-at todo))))
     (setf (gethash "parent_id" ht) (todo-parent-id todo))
+    (setf (gethash "device_id" ht) (todo-device-id todo))
     ht))
 
 (defun hash-table-to-todo (ht)
@@ -74,21 +76,32 @@
   (make-instance 'todo
                  :id (gethash "id" ht)
                  :title (gethash "title" ht)
-                 :description (gethash "description" ht)
+                 :description (let ((d (gethash "description" ht)))
+                                (unless (eq d 'null) d))
                  :priority (intern (string-upcase (gethash "priority" ht)) :keyword)
                  :status (intern (string-upcase (gethash "status" ht)) :keyword)
                  :scheduled-date (let ((d (gethash "scheduled_date" ht)))
-                                   (when d (lt:parse-rfc3339-timestring d)))
+                                   (when (and d (not (eq d 'null)) (stringp d))
+                                     (lt:parse-timestring d)))
                  :due-date (let ((d (gethash "due_date" ht)))
-                             (when d (lt:parse-rfc3339-timestring d)))
+                             (when (and d (not (eq d 'null)) (stringp d))
+                               (lt:parse-timestring d)))
                  :tags (let ((tags (gethash "tags" ht)))
-                         (when tags (coerce tags 'list)))
-                 :estimated-minutes (gethash "estimated_minutes" ht)
+                         (when (and tags (not (eq tags 'null)) (typep tags 'sequence))
+                           (coerce tags 'list)))
+                 :estimated-minutes (let ((m (gethash "estimated_minutes" ht)))
+                                      (unless (eq m 'null) m))
                  :location-info (hash-table-to-location-info (gethash "location_info" ht))
-                 :created-at (lt:parse-rfc3339-timestring (gethash "created_at" ht))
+                 :url (let ((u (gethash "url" ht)))
+                        (unless (eq u 'null) u))
+                 :created-at (lt:parse-timestring (gethash "created_at" ht))
                  :completed-at (let ((c (gethash "completed_at" ht)))
-                                 (when c (lt:parse-rfc3339-timestring c)))
-                 :parent-id (gethash "parent_id" ht)))
+                                 (when (and c (not (eq c 'null)) (stringp c))
+                                   (lt:parse-timestring c)))
+                 :parent-id (let ((p (gethash "parent_id" ht)))
+                              (unless (eq p 'null) p))
+                 :device-id (let ((d (gethash "device_id" ht)))
+                              (unless (eq d 'null) d))))
 
 ;;── Load/Save ──────────────────────────────────────────────────────────────────
 
@@ -103,17 +116,50 @@
               (map 'list #'hash-table-to-todo todos-array))))
         nil)))
 
-(defun save-todos (todos)
-  "Save todos to the data file."
+(defun save-todos (todos &optional presets)
+  "Save todos to the data file. Optionally save presets as well."
   (ensure-data-directory)
   (let ((data (make-hash-table :test #'equal)))
     (setf (gethash "version" data) 1)
     (setf (gethash "todos" data) (mapcar #'todo-to-hash-table todos))
+    ;; Save presets if provided
+    (when presets
+      (setf (gethash "tag_presets" data)
+            (map 'list (lambda (p) (if p (coerce p 'list) :null)) presets)))
+    ;; Also preserve existing presets if not provided
+    (unless presets
+      (let ((existing (load-presets)))
+        (when existing
+          (setf (gethash "tag_presets" data)
+                (map 'list (lambda (p) (if p (coerce p 'list) :null)) existing)))))
     (with-open-file (stream (todos-file)
                             :direction :output
                             :if-exists :supersede
                             :if-does-not-exist :create)
       (jzon:stringify data :stream stream :pretty t))))
+
+(defun load-presets ()
+  "Load tag presets from the data file. Returns array of 10 preset lists."
+  (let ((file (todos-file)))
+    (if (probe-file file)
+        (let* ((data (with-open-file (stream file :direction :input)
+                       (jzon:parse stream)))
+               (presets-data (gethash "tag_presets" data)))
+          ;; Check that presets-data is actually a sequence (not :null or nil)
+          (if (and presets-data (typep presets-data 'sequence))
+              (let ((presets (make-array 10 :initial-element nil)))
+                (loop for i from 0 below (min 10 (length presets-data))
+                      for p = (aref presets-data i)
+                      do (when (and p (not (eq p 'null)) (typep p 'sequence))
+                           (setf (aref presets i) (coerce p 'list))))
+                presets)
+              (make-array 10 :initial-element nil)))
+        (make-array 10 :initial-element nil))))
+
+(defun save-presets (presets)
+  "Save just the presets by loading existing todos and resaving with new presets."
+  (let ((todos (load-todos)))
+    (save-todos todos presets)))
 
 ;;── User Context ──────────────────────────────────────────────────────────────
 

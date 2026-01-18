@@ -16,6 +16,7 @@
 (defconstant +status-in-progress+ :in-progress)
 (defconstant +status-completed+ :completed)
 (defconstant +status-waiting+ :waiting)
+(defconstant +status-cancelled+ :cancelled)
 
 ;;── TODO Class ─────────────────────────────────────────────────────────────────
 
@@ -78,6 +79,12 @@
     :accessor todo-location-info
     :type (or null list)
     :documentation "Location/business info plist with :name :address :phone :map-url :website.")
+   (url
+    :initarg :url
+    :initform nil
+    :accessor todo-url
+    :type (or null string)
+    :documentation "URL associated with this TODO (e.g., email link).")
    (created-at
     :initarg :created-at
     :accessor todo-created-at
@@ -100,7 +107,13 @@
     :initform nil
     :accessor todo-parent-id
     :type (or null string)
-    :documentation "ID of parent TODO, nil for top-level items."))
+    :documentation "ID of parent TODO, nil for top-level items.")
+   (device-id
+    :initarg :device-id
+    :initform nil
+    :accessor todo-device-id
+    :type (or null string)
+    :documentation "UUID of the device that created/modified this TODO."))
   (:documentation "A TODO item."))
 
 (defun generate-id ()
@@ -109,7 +122,7 @@
           (get-universal-time)
           (random 100000)))
 
-(defun make-todo (title &key description priority scheduled-date due-date tags estimated-minutes location-info parent-id)
+(defun make-todo (title &key description priority scheduled-date due-date tags estimated-minutes location-info url parent-id device-id)
   "Create a new TODO item with the given properties."
   (make-instance 'todo
                  :id (generate-id)
@@ -121,7 +134,9 @@
                  :tags (or tags nil)
                  :estimated-minutes estimated-minutes
                  :location-info location-info
+                 :url url
                  :parent-id parent-id
+                 :device-id device-id
                  :created-at (lt:now)))
 
 (defmethod print-object ((todo todo) stream)
