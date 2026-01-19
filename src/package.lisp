@@ -5,8 +5,9 @@
 ;;; Copyright (C) 2026 Anthony Green <green@moxielogic.com>
 
 (defpackage #:cloodoo
-  (:use #:cl #:tuition)
-  (:local-nicknames (#:jzon #:com.inuoe.jzon)
+  (:use #:cl)
+  (:local-nicknames (#:tui #:tuition)
+                    (#:jzon #:com.inuoe.jzon)
                     (#:lt #:local-time))
   (:documentation "Personal TODO system with a modern TUI.")
   (:export

@@ -247,34 +247,34 @@
                                (prefix (format nil "~A~A~A~A~A ~A "
                                                depth-indent indent collapse-ind
                                                schedule-text status-text priority-text))
-                               (prefix-len (length prefix))
-                               (tags-len (length tags-str))
-                               (progress-len (if progress-str (+ 1 (length progress-str)) 0))
+                               (prefix-len (tui:visible-length prefix))
+                               (tags-len (tui:visible-length tags-str))
+                               (progress-len (if progress-str (+ 1 (tui:visible-length progress-str)) 0))
                                (suffix-len (+ tags-len progress-len
                                               (if (and (> tags-len 0) (> progress-len 0)) 1 0)))
                                (avail (max 0 (- list-width prefix-len
                                                 (if (> suffix-len 0) (+ suffix-len 1) 0))))
                                (title-text (todo-title todo))
-                               (trunc-title (if (> (length title-text) avail)
+                               (trunc-title (if (> (tui:visible-length title-text) avail)
                                                 (concatenate 'string
                                                              (subseq title-text 0 (max 0 (- avail 2)))
                                                              "..")
                                                 title-text))
                                (base (format nil "~A~A" prefix trunc-title))
-                               (base-len (length base))
+                               (base-len (tui:visible-length base))
                                (suffix (cond
                                          ((and progress-str (> tags-len 0))
                                           (format nil "~A ~A" progress-str tags-str))
                                          (progress-str progress-str)
                                          ((> tags-len 0) tags-str)
                                          (t "")))
-                               (suffix-actual-len (length suffix))
+                               (suffix-actual-len (tui:visible-length suffix))
                                (pad (max 0 (- list-width base-len suffix-actual-len)))
                                (line-content (format nil "~A~A~A" base
                                                      (make-string pad :initial-element #\Space)
                                                      suffix))
                                ;; Pad to exact width for full-row highlight
-                               (final-len (length line-content))
+                               (final-len (tui:visible-length line-content))
                                (final-pad (max 0 (- list-width final-len)))
                                (padded-line (format nil "~A~A" line-content
                                                     (make-string final-pad :initial-element #\Space)))
