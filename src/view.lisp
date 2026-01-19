@@ -712,7 +712,38 @@
                               (tui:colored (format nil "[~A]" repeat-str) :fg tui:*fg-bright-black*))
                           (if (eq (model-active-field model) :repeat)
                               (tui:colored "  (←/→ to change)" :fg tui:*fg-bright-black*)
-                              ""))))))
+                              "")))
+
+                ;; Labels/Tags
+                (let* ((edit-tags (model-edit-tags model))
+                       (tags-focused (eq (model-active-field model) :tags)))
+                  (format c "~%~A Labels:    "
+                          (if tags-focused
+                              (tui:colored ">" :fg tui:*fg-cyan*)
+                              " "))
+                  ;; Show current tags as chips
+                  (if edit-tags
+                      (format c "~{~A~^ ~}"
+                              (mapcar (lambda (tag)
+                                        (tui:colored (format nil "[~A]" tag) :fg tui:*fg-magenta*))
+                                      (reverse edit-tags)))
+                      (format c "~A" (tui:colored "(none)" :fg tui:*fg-bright-black*)))
+                  ;; Show input when field is active
+                  (when tags-focused
+                    (format c " ~A" (tui.textinput:textinput-view (model-tags-input model)))
+                    ;; Show dropdown if visible
+                    (when (model-tag-dropdown-visible model)
+                      (let* ((filtered (model-tag-dropdown-filtered model))
+                             (cursor (model-tag-dropdown-cursor model))
+                             (max-items 5)
+                             (display-items (subseq filtered 0 (min max-items (length filtered)))))
+                        (format c "~%             ")  ; Indent to align with input
+                        (loop for tag in display-items
+                              for idx from 0
+                              do (format c "~%             ~A"
+                                         (if (= idx cursor)
+                                             (tui:colored (format nil "> ~A" tag) :bg tui:*bg-cyan* :fg tui:*fg-black*)
+                                             (format nil "  ~A" tag)))))))))))
 
         ;; Pad to full width and render with border
         (let ((inner-width (- term-width 2)))
@@ -1010,7 +1041,7 @@
                 '((">" . "Indent (child)")
                   ("<" . "Outdent")
                   ("z" . "Collapse/expand")
-                  ("r" . "Refresh order")
+                  ("t" . "Edit tags")
                   ("/" . "Search")
                   ("f" . "Filter status")
                   ("s" . "Cycle sort")
@@ -1088,6 +1119,58 @@
          (footer (tui:colored "Press any key to close" :fg tui:*fg-bright-black*))
          (inner (format nil "~%~A~%~A" content footer))
          (modal (render-box-with-title "KEYBOARD SHORTCUTS" inner)))
+    (tui:overlay-centered modal background)))
+
+(defun render-inline-tag-editor (model)
+  "Render the inline tag editor as an overlay on the list view."
+  (let* ((background (render-list-view model))
+         (todos (get-visible-todos model))
+         (todo (when (and (model-edit-todo-id model)
+                         (< (model-cursor model) (length todos)))
+                 (find (model-edit-todo-id model) todos :key #'todo-id :test #'string=)))
+         (edit-tags (model-edit-tags model))
+         (title (if todo
+                    (let ((t-title (todo-title todo)))
+                      (if (> (length t-title) 40)
+                          (concatenate 'string (subseq t-title 0 38) "..")
+                          t-title))
+                    "(no task selected)"))
+         (content
+           (with-output-to-string (c)
+             ;; Todo title (truncated)
+             (format c "~A~%" (tui:colored title :fg tui:*fg-bright-black*))
+             ;; Separator
+             (format c "~A~%" (make-string 42 :initial-element #\─))
+             ;; Current tags
+             (format c "Tags: ")
+             (if edit-tags
+                 (format c "~{~A~^ ~}~%"
+                         (mapcar (lambda (tag)
+                                   (tui:colored (format nil "[~A]" tag) :fg tui:*fg-magenta*))
+                                 (reverse edit-tags)))
+                 (format c "~A~%" (tui:colored "(none)" :fg tui:*fg-bright-black*)))
+             ;; Blank line
+             (format c "~%")
+             ;; Input field
+             (format c "Add: ~A~%" (tui.textinput:textinput-view (model-tags-input model)))
+             ;; Dropdown if visible
+             (when (model-tag-dropdown-visible model)
+               (let* ((filtered (model-tag-dropdown-filtered model))
+                      (cursor (model-tag-dropdown-cursor model))
+                      (max-items 5)
+                      (display-items (subseq filtered 0 (min max-items (length filtered)))))
+                 (loop for tag in display-items
+                       for idx from 0
+                       do (format c "      ~A~%"
+                                  (if (= idx cursor)
+                                      (tui:colored (format nil "> ~A" tag) :bg tui:*bg-cyan* :fg tui:*fg-black*)
+                                      (format nil "  ~A" tag))))))
+             ;; Blank line before help
+             (format c "~%")
+             ;; Help line
+             (format c "~A"
+                     (tui:colored "Enter:add/save  Backspace:remove  Esc:save" :fg tui:*fg-bright-black*))))
+         (modal (render-box-with-title "EDIT TAGS" content)))
     (tui:overlay-centered modal background)))
 
 (defun render-form-date-edit-view (model)
@@ -1265,5 +1348,6 @@
     (:list-set-date (render-list-date-modal model))
     ((:add-scheduled-date :add-due-date) (render-form-date-edit-view model))
     (:help (render-help-view model))
+    (:inline-tags (render-inline-tag-editor model))
     (:context-info (render-context-info-view model))
     (otherwise (render-list-view model))))

@@ -165,6 +165,27 @@
     :initform nil
     :accessor model-edit-repeat-unit
     :documentation "Repeat unit being edited: :day, :week, :month, :year.")
+   ;; Tags editing state
+   (tags-input
+    :initform nil
+    :accessor model-tags-input
+    :documentation "Text input for typing tag names in form.")
+   (edit-tags
+    :initform nil
+    :accessor model-edit-tags
+    :documentation "List of tags being edited in form or inline editor.")
+   (tag-dropdown-visible
+    :initform nil
+    :accessor model-tag-dropdown-visible
+    :documentation "Whether tag autocomplete dropdown is visible.")
+   (tag-dropdown-cursor
+    :initform 0
+    :accessor model-tag-dropdown-cursor
+    :documentation "Selected item in tag autocomplete dropdown.")
+   (tag-dropdown-filtered
+    :initform nil
+    :accessor model-tag-dropdown-filtered
+    :documentation "Filtered list of tags matching current input.")
    ;; Visible todos cache for stable ordering
    (visible-todos-cache
     :initform nil
@@ -237,6 +258,50 @@
          (some (lambda (tag) (gethash tag selected-tags))
                (todo-tags todo)))
        todos)))
+
+;;── Tag Autocomplete Helpers ──────────────────────────────────────────────────
+
+(defun filter-tags-by-query (all-tags query already-selected)
+  "Filter tags containing query substring (case-insensitive).
+   Excludes tags that are already selected."
+  (let ((q (string-downcase (or query ""))))
+    (if (= (length q) 0)
+        ;; No query - show all unselected tags
+        (remove-if (lambda (tag) (member tag already-selected :test #'string=)) all-tags)
+        ;; Filter by query substring
+        (remove-if (lambda (tag)
+                     (or (member tag already-selected :test #'string=)
+                         (not (search q (string-downcase tag)))))
+                   all-tags))))
+
+(defun update-tag-dropdown (model)
+  "Update filtered tags based on input, excluding already-selected tags."
+  (let* ((query (tui.textinput:textinput-value (model-tags-input model)))
+         (all-tags (model-all-tags-cache model))
+         (edit-tags (model-edit-tags model))
+         (filtered (filter-tags-by-query all-tags query edit-tags)))
+    (setf (model-tag-dropdown-filtered model) filtered)
+    ;; Reset cursor if out of bounds
+    (when (>= (model-tag-dropdown-cursor model) (length filtered))
+      (setf (model-tag-dropdown-cursor model) (max 0 (1- (length filtered)))))
+    ;; Show dropdown if there are matches and input is non-empty
+    (setf (model-tag-dropdown-visible model)
+          (and (> (length filtered) 0)
+               (> (length query) 0)))))
+
+(defun add-tag-to-edit-tags (model tag)
+  "Add a tag to the edit-tags list if not already present."
+  (unless (member tag (model-edit-tags model) :test #'string=)
+    (push tag (model-edit-tags model)))
+  ;; Clear input and update dropdown
+  (tui.textinput:textinput-set-value (model-tags-input model) "")
+  (setf (model-tag-dropdown-visible model) nil)
+  (setf (model-tag-dropdown-cursor model) 0))
+
+(defun remove-last-tag-from-edit-tags (model)
+  "Remove the last tag from edit-tags list (for backspace on empty input)."
+  (when (model-edit-tags model)
+    (setf (model-edit-tags model) (butlast (model-edit-tags model)))))
 
 ;;── Filtering and Sorting ─────────────────────────────────────────────────────
 
@@ -477,6 +542,12 @@
          :placeholder "Path to org-mode file..."
          :width 60
          :char-limit 500))
+  (setf (model-tags-input model)
+        (tui.textinput:make-textinput
+         :prompt ""
+         :placeholder "Type to add..."
+         :width 25
+         :char-limit 50))
   ;; Initialize enrichment spinner
   (setf (model-enrichment-spinner model)
         (tui.spinner:make-spinner :frames tui.spinner:*spinner-minidot*
@@ -764,6 +835,11 @@
        (setf (model-edit-due-date model) nil)
        (setf (model-edit-repeat-interval model) nil)
        (setf (model-edit-repeat-unit model) nil)
+       ;; Clear tags fields
+       (setf (model-edit-tags model) nil)
+       (tui.textinput:textinput-set-value (model-tags-input model) "")
+       (setf (model-tag-dropdown-visible model) nil)
+       (setf (model-tag-dropdown-cursor model) 0)
        ;; Reset inputs - clear value and set focus
        (tui.textinput:textinput-set-value (model-title-input model) "")
        (tui.textinput:textinput-set-value (model-description-input model) "")
@@ -785,6 +861,11 @@
            (setf (model-edit-due-date model) (todo-due-date todo))
            (setf (model-edit-repeat-interval model) (todo-repeat-interval todo))
            (setf (model-edit-repeat-unit model) (todo-repeat-unit todo))
+           ;; Pre-fill tags fields
+           (setf (model-edit-tags model) (copy-list (todo-tags todo)))
+           (tui.textinput:textinput-set-value (model-tags-input model) "")
+           (setf (model-tag-dropdown-visible model) nil)
+           (setf (model-tag-dropdown-cursor model) 0)
            ;; Pre-fill text inputs
            (tui.textinput:textinput-set-value (model-title-input model) (todo-title todo))
            (tui.textinput:textinput-set-value (model-description-input model) (or (todo-description todo) ""))
@@ -862,6 +943,11 @@
            (setf (model-edit-due-date model) nil)
            (setf (model-edit-repeat-interval model) nil)
            (setf (model-edit-repeat-unit model) nil)
+           ;; Clear tags fields
+           (setf (model-edit-tags model) nil)
+           (tui.textinput:textinput-set-value (model-tags-input model) "")
+           (setf (model-tag-dropdown-visible model) nil)
+           (setf (model-tag-dropdown-cursor model) 0)
            ;; Reset inputs
            (tui.textinput:textinput-set-value (model-title-input model) "")
            (tui.textinput:textinput-set-value (model-description-input model) "")
@@ -992,6 +1078,19 @@
        (setf (model-view-state model) :help)
        (values model nil))
 
+      ;; Inline tag editor (t)
+      ((and (characterp key) (char= key #\t))
+       (when (< (model-cursor model) (length todos))
+         (let ((todo (nth (model-cursor model) todos)))
+           (setf (model-edit-todo-id model) (todo-id todo))
+           (setf (model-edit-tags model) (copy-list (todo-tags todo)))
+           (tui.textinput:textinput-set-value (model-tags-input model) "")
+           (tui.textinput:textinput-focus (model-tags-input model))
+           (setf (model-tag-dropdown-visible model) nil)
+           (setf (model-tag-dropdown-cursor model) 0)
+           (setf (model-view-state model) :inline-tags)))
+       (values model nil))
+
       ;; Edit user context (u)
       ((and (characterp key) (char= key #\u))
        (llog:info "Opening user context editor")
@@ -1053,7 +1152,7 @@
        (setf (model-view-state model) :list)
        (values model nil))
 
-      ;; Tab to next field: title → description → priority → scheduled → due → repeat → title
+      ;; Tab to next field: title → description → priority → scheduled → due → repeat → tags → title
       ((eq key :tab)
        (case (model-active-field model)
          (:title
@@ -1070,7 +1169,13 @@
          (:due
           (setf (model-active-field model) :repeat))
          (:repeat
+          (setf (model-active-field model) :tags)
+          (tui.textinput:textinput-focus (model-tags-input model))
+          (update-tag-dropdown model))
+         (:tags
           (setf (model-active-field model) :title)
+          (tui.textinput:textinput-blur (model-tags-input model))
+          (setf (model-tag-dropdown-visible model) nil)
           (tui.textinput:textinput-focus (model-title-input model))))
        (values model nil))
 
@@ -1078,8 +1183,10 @@
       ((eq key :backtab)
        (case (model-active-field model)
          (:title
-          (setf (model-active-field model) :repeat)
-          (tui.textinput:textinput-blur (model-title-input model)))
+          (setf (model-active-field model) :tags)
+          (tui.textinput:textinput-blur (model-title-input model))
+          (tui.textinput:textinput-focus (model-tags-input model))
+          (update-tag-dropdown model))
          (:description
           (setf (model-active-field model) :title)
           (tui.textinput:textinput-blur (model-description-input model))
@@ -1092,7 +1199,11 @@
          (:due
           (setf (model-active-field model) :scheduled))
          (:repeat
-          (setf (model-active-field model) :due)))
+          (setf (model-active-field model) :due))
+         (:tags
+          (setf (model-active-field model) :repeat)
+          (tui.textinput:textinput-blur (model-tags-input model))
+          (setf (model-tag-dropdown-visible model) nil)))
        (values model nil))
 
       ;; Priority selection when in priority field (A/B/C org-style)
@@ -1175,6 +1286,59 @@
                (setf (model-edit-repeat-unit model) nil))))
        (values model nil))
 
+      ;; Tags field: Up/Down to navigate dropdown
+      ((and (eq (model-active-field model) :tags)
+            (or (eq key :up) (eq key :down)))
+       (let* ((filtered (model-tag-dropdown-filtered model))
+              (max-idx (max 0 (1- (length filtered)))))
+         (when (and (model-tag-dropdown-visible model) (> (length filtered) 0))
+           (if (eq key :up)
+               (setf (model-tag-dropdown-cursor model)
+                     (max 0 (1- (model-tag-dropdown-cursor model))))
+               (setf (model-tag-dropdown-cursor model)
+                     (min max-idx (1+ (model-tag-dropdown-cursor model)))))))
+       (values model nil))
+
+      ;; Tags field: Enter to select from dropdown OR create new tag
+      ((and (eq (model-active-field model) :tags)
+            (eq key :enter))
+       (let* ((query (tui.textinput:textinput-value (model-tags-input model)))
+              (filtered (model-tag-dropdown-filtered model))
+              (cursor (model-tag-dropdown-cursor model)))
+         (cond
+           ;; Dropdown visible with selection - add selected tag
+           ((and (model-tag-dropdown-visible model) (> (length filtered) 0))
+            (add-tag-to-edit-tags model (nth cursor filtered)))
+           ;; No dropdown but has input - create new tag
+           ((> (length query) 0)
+            (add-tag-to-edit-tags model query)))
+         (update-tag-dropdown model))
+       (values model nil))
+
+      ;; Tags field: Backspace with empty input removes last tag
+      ((and (eq (model-active-field model) :tags)
+            (eq key :backspace))
+       (let ((query (tui.textinput:textinput-value (model-tags-input model))))
+         (if (= (length query) 0)
+             ;; Empty input - remove last tag
+             (remove-last-tag-from-edit-tags model)
+             ;; Non-empty - pass to text input
+             (multiple-value-bind (new-input cmd)
+                 (tui.textinput:textinput-update (model-tags-input model) msg)
+               (declare (ignore cmd))
+               (setf (model-tags-input model) new-input)
+               (update-tag-dropdown model))))
+       (values model nil))
+
+      ;; Tags field: Other keys pass to text input
+      ((eq (model-active-field model) :tags)
+       (multiple-value-bind (new-input cmd)
+           (tui.textinput:textinput-update (model-tags-input model) msg)
+         (declare (ignore cmd))
+         (setf (model-tags-input model) new-input)
+         (update-tag-dropdown model))
+       (values model nil))
+
       ;; Save on Enter (when not in text field or when in priority field)
       ((eq key :enter)
        (let ((title (tui.textinput:textinput-value (model-title-input model))))
@@ -1195,13 +1359,18 @@
                    ;; Save repeat settings
                    (setf (todo-repeat-interval todo) (model-edit-repeat-interval model))
                    (setf (todo-repeat-unit todo) (model-edit-repeat-unit model))
-                   (save-todos (model-todos model)))
+                   ;; Save tags
+                   (setf (todo-tags todo) (reverse (model-edit-tags model)))
+                   (save-todos (model-todos model))
+                   ;; Refresh tags cache since tags may have changed
+                   (refresh-tags-cache model))
                  (setf (model-view-state model) :list)
                  (return-from handle-add-edit-keys (values model nil)))
                ;; Create new TODO with async LLM enrichment
                (let* ((desc-input (tui.textinput:textinput-value (model-description-input model)))
                       (desc-value (when (> (length desc-input) 0) desc-input))
                       (parent-id (model-pending-parent-id model))
+                      (tags (reverse (model-edit-tags model)))
                       ;; Create todo immediately with raw data, mark as enriching
                       (new-todo (make-todo title
                                           :description desc-value
@@ -1211,12 +1380,17 @@
                                           :repeat-interval (model-edit-repeat-interval model)
                                           :repeat-unit (model-edit-repeat-unit model)
                                           :parent-id parent-id)))
+                 ;; Set tags if provided
+                 (when tags
+                   (setf (todo-tags new-todo) tags))
                  ;; Mark as being enriched
                  (setf (todo-enriching-p new-todo) t)
                  (push new-todo (model-todos model))
                  (save-todos (model-todos model))
                  ;; Invalidate cache so new todo appears
                  (invalidate-visible-todos-cache model)
+                 ;; Refresh tags cache since new tags may have been added
+                 (refresh-tags-cache model)
                  ;; Clear pending parent-id
                  (setf (model-pending-parent-id model) nil)
                  (setf (model-view-state model) :list)
@@ -1279,6 +1453,85 @@
                (tui.textinput:textinput-value (model-search-input model)))
          (invalidate-visible-todos-cache model)
          (setf (model-cursor model) 0))
+       (values model nil)))))
+
+;;── Inline Tags Editor Key Handling ────────────────────────────────────────────
+
+(defun handle-inline-tags-keys (model msg)
+  "Handle keyboard input in inline tag editor overlay."
+  (let ((key (tui:key-msg-key msg)))
+    (cond
+      ;; Escape - save tags and close
+      ((eq key :escape)
+       (let ((todo (find (model-edit-todo-id model) (model-todos model)
+                        :key #'todo-id :test #'string=)))
+         (when todo
+           (setf (todo-tags todo) (reverse (model-edit-tags model)))
+           (save-todos (model-todos model))
+           (refresh-tags-cache model)))
+       (setf (model-view-state model) :list)
+       (setf (model-edit-todo-id model) nil)
+       (values model nil))
+
+      ;; Up/Down - navigate dropdown
+      ((or (eq key :up) (eq key :down))
+       (let* ((filtered (model-tag-dropdown-filtered model))
+              (max-idx (max 0 (1- (length filtered)))))
+         (when (and (model-tag-dropdown-visible model) (> (length filtered) 0))
+           (if (eq key :up)
+               (setf (model-tag-dropdown-cursor model)
+                     (max 0 (1- (model-tag-dropdown-cursor model))))
+               (setf (model-tag-dropdown-cursor model)
+                     (min max-idx (1+ (model-tag-dropdown-cursor model)))))))
+       (values model nil))
+
+      ;; Enter - add tag from dropdown or input, or save and close if empty
+      ((eq key :enter)
+       (let* ((query (tui.textinput:textinput-value (model-tags-input model)))
+              (filtered (model-tag-dropdown-filtered model))
+              (cursor (model-tag-dropdown-cursor model)))
+         (cond
+           ;; Dropdown visible with selection - add selected tag
+           ((and (model-tag-dropdown-visible model) (> (length filtered) 0))
+            (add-tag-to-edit-tags model (nth cursor filtered))
+            (update-tag-dropdown model)
+            (values model nil))
+           ;; No dropdown but has input - create new tag
+           ((> (length query) 0)
+            (add-tag-to-edit-tags model query)
+            (update-tag-dropdown model)
+            (values model nil))
+           ;; Empty input and no dropdown - save and close
+           (t
+            (let ((todo (find (model-edit-todo-id model) (model-todos model)
+                             :key #'todo-id :test #'string=)))
+              (when todo
+                (setf (todo-tags todo) (reverse (model-edit-tags model)))
+                (save-todos (model-todos model))
+                (refresh-tags-cache model)))
+            (setf (model-view-state model) :list)
+            (setf (model-edit-todo-id model) nil)
+            (values model nil)))))
+
+      ;; Backspace - remove last tag if input empty, else pass to input
+      ((eq key :backspace)
+       (let ((query (tui.textinput:textinput-value (model-tags-input model))))
+         (if (= (length query) 0)
+             (remove-last-tag-from-edit-tags model)
+             (multiple-value-bind (new-input cmd)
+                 (tui.textinput:textinput-update (model-tags-input model) msg)
+               (declare (ignore cmd))
+               (setf (model-tags-input model) new-input)
+               (update-tag-dropdown model))))
+       (values model nil))
+
+      ;; Other keys - pass to text input
+      (t
+       (multiple-value-bind (new-input cmd)
+           (tui.textinput:textinput-update (model-tags-input model) msg)
+         (declare (ignore cmd))
+         (setf (model-tags-input model) new-input)
+         (update-tag-dropdown model))
        (values model nil)))))
 
 ;;── Import View Key Handling ───────────────────────────────────────────────────
@@ -1635,6 +1888,7 @@
     (:list (handle-list-keys model msg))
     ((:add :edit) (handle-add-edit-keys model msg))
     (:search (handle-search-keys model msg))
+    (:inline-tags (handle-inline-tags-keys model msg))
     (:import (handle-import-keys model msg))
     (:delete-confirm (handle-delete-confirm-keys model msg))
     (:delete-done-confirm (handle-delete-done-confirm-keys model msg))
