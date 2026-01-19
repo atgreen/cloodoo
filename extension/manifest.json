@@ -1,12 +1,14 @@
 {
   "manifest_version": 3,
-  "name": "Cluedo - Gmail TODO Capture",
+  "name": "Cloodoo - Gmail TODO Capture",
   "version": "1.0.0",
-  "description": "Capture TODOs from Gmail emails directly into Cluedo",
+  "description": "Capture TODOs from Gmail emails directly into Cloodoo",
   "author": "Anthony Green <green@moxielogic.com>",
   "permissions": [
     "activeTab",
-    "storage"
+    "storage",
+    "alarms",
+    "nativeMessaging"
   ],
   "host_permissions": [
     "https://mail.google.com/*",
@@ -29,7 +31,8 @@
     {
       "matches": ["https://mail.google.com/*"],
       "js": ["content.js"],
-      "css": ["content.css"]
+      "css": ["content.css"],
+      "run_at": "document_end"
     }
   ],
   "icons": {

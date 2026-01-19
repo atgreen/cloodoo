@@ -152,17 +152,22 @@ Respond with ONLY the JSON object, no markdown formatting or additional text.")
 (defun parse-iso-date (date-string)
   "Parse an ISO 8601 date string into a local-time timestamp.
    Handles formats like '2026-01-20' and '2026-01-20T14:00:00'.
+   Date-only strings are interpreted as midnight in LOCAL time (not UTC).
    Returns NIL if parsing fails or date-string is nil/empty."
   (when (and date-string (stringp date-string) (> (length date-string) 0))
     (handler-case
         (let ((trimmed (string-trim '(#\Space #\Newline #\Tab) date-string)))
           (cond
-            ;; Full ISO with time
+            ;; Full ISO with time - parse as-is
             ((find #\T trimmed)
              (lt:parse-timestring trimmed))
-            ;; Date only - parse as start of day
+            ;; Date only - parse as midnight LOCAL time
             ((= (length trimmed) 10)
-             (lt:parse-timestring (concatenate 'string trimmed "T00:00:00")))
+             (let ((year (parse-integer trimmed :start 0 :end 4))
+                   (month (parse-integer trimmed :start 5 :end 7))
+                   (day (parse-integer trimmed :start 8 :end 10)))
+               (lt:encode-timestamp 0 0 0 0 day month year
+                                    :timezone lt:*default-timezone*)))
             (t nil)))
       (error (e)
         (llog:debug "Failed to parse date"

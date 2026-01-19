@@ -21,12 +21,14 @@
                :completions
                :cl-dotenv
                :llog
-               :bordeaux-threads)
+               :bordeaux-threads
+               :sqlite)
   :serial t
   :components ((:module "src"
                 :components ((:file "package")
                              (:file "model")
                              (:file "storage")
+                             (:file "db")
                              (:file "enrich")
                              (:file "update")
                              (:file "components")

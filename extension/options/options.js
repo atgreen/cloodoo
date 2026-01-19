@@ -1,4 +1,4 @@
-// Cluedo Gmail Extension - Options Script
+// Cloodoo Gmail Extension - Options Script
 // SPDX-License-Identifier: MIT
 // Copyright (C) 2026 Anthony Green <green@moxielogic.com>
 

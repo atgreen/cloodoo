@@ -113,7 +113,19 @@
     :initform nil
     :accessor todo-device-id
     :type (or null string)
-    :documentation "UUID of the device that created/modified this TODO."))
+    :documentation "UUID of the device that created/modified this TODO.")
+   (repeat-interval
+    :initarg :repeat-interval
+    :initform nil
+    :accessor todo-repeat-interval
+    :type (or null integer)
+    :documentation "Number of units between repetitions (e.g., 2 for every 2 days).")
+   (repeat-unit
+    :initarg :repeat-unit
+    :initform nil
+    :accessor todo-repeat-unit
+    :type (or null keyword)
+    :documentation "Unit for repetition: :day, :week, :month, :year."))
   (:documentation "A TODO item."))
 
 (defun generate-id ()
@@ -122,7 +134,7 @@
           (get-universal-time)
           (random 100000)))
 
-(defun make-todo (title &key description priority scheduled-date due-date tags estimated-minutes location-info url parent-id device-id)
+(defun make-todo (title &key description priority scheduled-date due-date tags estimated-minutes location-info url parent-id device-id repeat-interval repeat-unit)
   "Create a new TODO item with the given properties."
   (make-instance 'todo
                  :id (generate-id)
@@ -137,6 +149,8 @@
                  :url url
                  :parent-id parent-id
                  :device-id device-id
+                 :repeat-interval repeat-interval
+                 :repeat-unit repeat-unit
                  :created-at (lt:now)))
 
 (defmethod print-object ((todo todo) stream)
@@ -194,3 +208,19 @@
                  (collect (todo-id child)))))
       (collect parent-id))
     (nreverse result)))
+
+;;── Repeating Task Helpers ────────────────────────────────────────────────────
+
+(defun calculate-next-occurrence (todo)
+  "Calculate next scheduled date based on repeat interval and unit.
+   Returns a timestamp for the next occurrence, or NIL if not a repeating task."
+  (let ((interval (todo-repeat-interval todo))
+        (unit (todo-repeat-unit todo)))
+    (when (and interval unit (> interval 0))
+      (let ((base (or (todo-scheduled-date todo) (lt:now))))
+        (case unit
+          (:day (lt:timestamp+ base interval :day))
+          (:week (lt:timestamp+ base (* interval 7) :day))
+          (:month (lt:timestamp+ base interval :month))
+          (:year (lt:timestamp+ base interval :year))
+          (otherwise nil))))))

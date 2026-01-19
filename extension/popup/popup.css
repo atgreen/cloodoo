@@ -1,4 +1,4 @@
-/* Cluedo Gmail Extension - Popup Styles */
+/* Cloodoo Gmail Extension - Popup Styles */
 /* SPDX-License-Identifier: MIT */
 /* Copyright (C) 2026 Anthony Green <green@moxielogic.com> */
 
@@ -50,6 +50,48 @@ header h1 {
 .status.disconnected {
   background: #fce8e6;
   color: #c5221f;
+}
+
+.status.offline {
+  background: #fef7e0;
+  color: #b06000;
+}
+
+.status.native {
+  background: #e8f5e9;
+  color: #2e7d32;
+}
+
+.pending-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: #e8f0fe;
+  color: #1967d2;
+  padding: 8px 12px;
+  border-radius: 4px;
+  margin-bottom: 12px;
+  font-size: 13px;
+}
+
+.sync-btn {
+  background: none;
+  border: none;
+  color: #1967d2;
+  font-size: 16px;
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: 4px;
+  transition: background 0.2s;
+}
+
+.sync-btn:hover {
+  background: rgba(25, 103, 210, 0.1);
+}
+
+.sync-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 .form-group {

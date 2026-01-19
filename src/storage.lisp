@@ -69,6 +69,9 @@
                                          (lt:format-rfc3339-timestring nil (todo-completed-at todo))))
     (setf (gethash "parent_id" ht) (todo-parent-id todo))
     (setf (gethash "device_id" ht) (todo-device-id todo))
+    (setf (gethash "repeat_interval" ht) (todo-repeat-interval todo))
+    (setf (gethash "repeat_unit" ht) (when (todo-repeat-unit todo)
+                                        (string-downcase (symbol-name (todo-repeat-unit todo)))))
     ht))
 
 (defun hash-table-to-todo (ht)
@@ -101,7 +104,12 @@
                  :parent-id (let ((p (gethash "parent_id" ht)))
                               (unless (eq p 'null) p))
                  :device-id (let ((d (gethash "device_id" ht)))
-                              (unless (eq d 'null) d))))
+                              (unless (eq d 'null) d))
+                 :repeat-interval (let ((i (gethash "repeat_interval" ht)))
+                                    (unless (or (null i) (eq i 'null)) i))
+                 :repeat-unit (let ((u (gethash "repeat_unit" ht)))
+                                (when (and u (not (eq u 'null)) (stringp u))
+                                  (intern (string-upcase u) :keyword)))))
 
 ;;── Load/Save ──────────────────────────────────────────────────────────────────
 

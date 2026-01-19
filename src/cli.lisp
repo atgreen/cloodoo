@@ -21,15 +21,15 @@
       (cond
         ;; Today
         ((or (string= lower "today") (string= lower "tod"))
-         (lt:today))
+         (local-today))
 
         ;; Tomorrow
         ((or (string= lower "tomorrow") (string= lower "tom"))
-         (lt:timestamp+ (lt:today) 1 :day))
+         (lt:timestamp+ (local-today) 1 :day))
 
         ;; Next week
         ((or (string= lower "next week") (string= lower "nextweek"))
-         (lt:timestamp+ (lt:today) 7 :day))
+         (lt:timestamp+ (local-today) 7 :day))
 
         ;; Day names
         ((member lower '("sunday" "sun") :test #'string=)
@@ -63,7 +63,7 @@
 
 (defun next-weekday (target-day)
   "Return the next occurrence of TARGET-DAY (0=Sunday, 1=Monday, etc.)."
-  (let* ((today (lt:today))
+  (let* ((today (local-today))
          (current-day (lt:timestamp-day-of-week today))
          (days-ahead (mod (- target-day current-day) 7)))
     ;; If it's the same day, go to next week

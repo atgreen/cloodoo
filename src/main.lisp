@@ -49,8 +49,8 @@
 
 (defun main ()
   "The main entrypoint."
-  (handler-case
-      (clingon:run (make-app))
-    (error (e)
-      (format *error-output* "Error: ~A~%" e)
-      (uiop:quit 1))))
+  (handler-bind ((error (lambda (e)
+                          (format *error-output* "~%Error: ~A~%~%" e)
+                          #+sbcl (sb-debug:print-backtrace :stream *error-output* :count 20)
+                          (uiop:quit 1))))
+    (clingon:run (make-app))))

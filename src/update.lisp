@@ -6,6 +6,11 @@
 
 (in-package #:cloodoo)
 
+;;── Constants ─────────────────────────────────────────────────────────────────
+
+(defconstant +header-lines+ 3
+  "Number of lines each date category header takes (top border, content, bottom border).")
+
 ;;── Application State (Model) ──────────────────────────────────────────────────
 
 (defclass app-model ()
@@ -23,7 +28,7 @@
     :initarg :view-state
    :initform :list
    :accessor model-view-state
-    :documentation "Current view: :list, :detail, :add, :edit, :help, :search, :delete-confirm, :delete-done-confirm, :import, :edit-scheduled, :edit-deadline.")
+    :documentation "Current view: :list, :detail, :add, :edit, :help, :search, :delete-confirm, :delete-done-confirm, :import, :edit-date, :add-scheduled-date, :add-due-date.")
    (filter-status
     :initarg :filter-status
     :initform nil
@@ -143,6 +148,23 @@
     :initform nil
     :accessor model-editing-date-type
     :documentation "Which date we're editing: :scheduled or :deadline.")
+   ;; Form state for dates and repeating in add/edit view
+   (edit-scheduled-date
+    :initform nil
+    :accessor model-edit-scheduled-date
+    :documentation "Scheduled date being edited in add/edit form.")
+   (edit-due-date
+    :initform nil
+    :accessor model-edit-due-date
+    :documentation "Due date being edited in add/edit form.")
+   (edit-repeat-interval
+    :initform nil
+    :accessor model-edit-repeat-interval
+    :documentation "Repeat interval being edited (e.g., 1, 2, 7).")
+   (edit-repeat-unit
+    :initform nil
+    :accessor model-edit-repeat-unit
+    :documentation "Repeat unit being edited: :day, :week, :month, :year.")
    ;; Visible todos cache for stable ordering
    (visible-todos-cache
     :initform nil
@@ -376,8 +398,8 @@
   (let ((current 0)
         (line-idx 0))
     (dolist (group groups)
-      ;; Header line
-      (incf line-idx)
+      ;; Header takes +header-lines+ lines (pager-style box)
+      (incf line-idx +header-lines+)
       (dolist (todo (cdr group))
         (when (= current cursor)
           (return-from list-line-index-for-cursor line-idx))
@@ -385,21 +407,40 @@
         (incf line-idx)))
     (max 0 (1- line-idx))))
 
+(defun header-start-line-for-cursor (groups cursor)
+  "Return the 0-based line index where the header for the cursor's group starts."
+  (let ((current 0)
+        (line-idx 0))
+    (dolist (group groups)
+      (let ((header-start line-idx))
+        ;; Skip header lines
+        (incf line-idx +header-lines+)
+        (dolist (todo (cdr group))
+          (when (= current cursor)
+            (return-from header-start-line-for-cursor header-start))
+          (incf current)
+          (incf line-idx))))
+    0))
+
 (defun adjust-scroll (model viewport-height)
   "Adjust scroll offset to keep selected item visible."
   (let* ((cursor (model-cursor model))
          (offset (model-scroll-offset model))
          (todos (get-visible-todos model))
          (groups (group-todos-by-date todos))
-         (num-lines (max 1 (+ (length todos) (length groups))))
+         (num-lines (max 1 (+ (length todos) (* (length groups) +header-lines+))))
          (cursor-line (list-line-index-for-cursor groups cursor))
+         (header-start (header-start-line-for-cursor groups cursor))
          (max-offset (max 0 (- num-lines viewport-height))))
     (cond
+      ;; Scrolling up: show the group header when the item would be off-screen
       ((< cursor-line offset)
-       (setf (model-scroll-offset model) cursor-line))
+       (setf (model-scroll-offset model) (max 0 header-start)))
+      ;; Scrolling down: keep the item visible at bottom
       ((>= cursor-line (+ offset viewport-height))
        (setf (model-scroll-offset model)
              (min max-offset (- cursor-line viewport-height -1))))
+      ;; Clamp to max offset
       ((> offset max-offset)
        (setf (model-scroll-offset model) max-offset)))))
 
@@ -653,13 +694,40 @@
        (values model nil))
 
       ;; Toggle status (Space): TODO -> DONE -> WAITING -> CANCELLED -> TODO
+      ;; For repeating tasks, completing reschedules to next occurrence
       ((and (characterp key) (char= key #\Space))
        (when (< (model-cursor model) (length todos))
          (let ((todo (nth (model-cursor model) todos)))
            (case (todo-status todo)
-             (:pending
-              (setf (todo-status todo) +status-completed+)
-              (setf (todo-completed-at todo) (lt:now)))
+             ((:pending :in-progress)
+              ;; Check if this is a repeating task
+              (if (and (todo-repeat-interval todo) (todo-repeat-unit todo))
+                  ;; Auto-reschedule: calculate next occurrence and stay pending
+                  (let ((next-date (calculate-next-occurrence todo)))
+                    (when next-date
+                      (setf (todo-scheduled-date todo) next-date)
+                      ;; Adjust due-date if it was set (shift by same interval)
+                      (when (todo-due-date todo)
+                        (let* ((interval (todo-repeat-interval todo))
+                               (unit (todo-repeat-unit todo)))
+                          (setf (todo-due-date todo)
+                                (case unit
+                                  (:day (lt:timestamp+ (todo-due-date todo) interval :day))
+                                  (:week (lt:timestamp+ (todo-due-date todo) (* interval 7) :day))
+                                  (:month (lt:timestamp+ (todo-due-date todo) interval :month))
+                                  (:year (lt:timestamp+ (todo-due-date todo) interval :year))
+                                  (otherwise (todo-due-date todo))))))
+                      ;; Keep status as pending (or reset from in-progress)
+                      (setf (todo-status todo) +status-pending+)
+                      (setf (todo-completed-at todo) nil))
+                    (setf (model-status-message model)
+                          (format nil "Rescheduled to ~A"
+                                  (lt:format-timestring nil next-date
+                                                       :format '(:short-month " " :day)))))
+                  ;; Non-repeating: mark as completed
+                  (progn
+                    (setf (todo-status todo) +status-completed+)
+                    (setf (todo-completed-at todo) (lt:now)))))
              (:completed
               (setf (todo-status todo) +status-waiting+)
               (setf (todo-completed-at todo) nil))
@@ -669,12 +737,10 @@
              (:cancelled
               (setf (todo-status todo) +status-pending+)
               (setf (todo-completed-at todo) nil))
-             (:in-progress
-              (setf (todo-status todo) +status-completed+)
-              (setf (todo-completed-at todo) (lt:now)))
              (otherwise
               (setf (todo-status todo) +status-pending+)
               (setf (todo-completed-at todo) nil)))
+           ;; Save but don't invalidate cache - item stays in place
            (save-todos (model-todos model))))
        (values model nil))
 
@@ -693,6 +759,11 @@
        (setf (model-active-field model) :title)
        ;; Clear pending parent - this is a sibling add
        (setf (model-pending-parent-id model) nil)
+       ;; Clear date and repeat fields
+       (setf (model-edit-scheduled-date model) nil)
+       (setf (model-edit-due-date model) nil)
+       (setf (model-edit-repeat-interval model) nil)
+       (setf (model-edit-repeat-unit model) nil)
        ;; Reset inputs - clear value and set focus
        (tui.textinput:textinput-set-value (model-title-input model) "")
        (tui.textinput:textinput-set-value (model-description-input model) "")
@@ -709,7 +780,12 @@
            (setf (model-edit-todo-id model) (todo-id todo))
            (setf (model-edit-priority model) (todo-priority todo))
            (setf (model-active-field model) :title)
-           ;; Pre-fill inputs
+           ;; Pre-fill date and repeat fields
+           (setf (model-edit-scheduled-date model) (todo-scheduled-date todo))
+           (setf (model-edit-due-date model) (todo-due-date todo))
+           (setf (model-edit-repeat-interval model) (todo-repeat-interval todo))
+           (setf (model-edit-repeat-unit model) (todo-repeat-unit todo))
+           ;; Pre-fill text inputs
            (tui.textinput:textinput-set-value (model-title-input model) (todo-title todo))
            (tui.textinput:textinput-set-value (model-description-input model) (or (todo-description todo) ""))
            (tui.textinput:textinput-focus (model-title-input model))
@@ -781,6 +857,11 @@
            (setf (model-active-field model) :title)
            ;; Store parent-id for the new todo
            (setf (model-pending-parent-id model) (todo-id parent-todo))
+           ;; Clear date and repeat fields
+           (setf (model-edit-scheduled-date model) nil)
+           (setf (model-edit-due-date model) nil)
+           (setf (model-edit-repeat-interval model) nil)
+           (setf (model-edit-repeat-unit model) nil)
            ;; Reset inputs
            (tui.textinput:textinput-set-value (model-title-input model) "")
            (tui.textinput:textinput-set-value (model-description-input model) "")
@@ -835,17 +916,60 @@
                (:title :priority)))
        (values model nil))
 
-      ;; Refresh ordering (r) - resort and regroup todos
+      ;; Set scheduled date (Shift+S) - opens modal datepicker
+      ((and (characterp key) (char= key #\S))
+       (when (< (model-cursor model) (length todos))
+         (let* ((todo (nth (model-cursor model) todos))
+                (scheduled (todo-scheduled-date todo))
+                (picker (model-date-picker model)))
+           ;; Initialize datepicker with current scheduled date or today
+           (if scheduled
+               (let ((utime (lt:timestamp-to-universal scheduled)))
+                 (tui.datepicker:datepicker-set-time picker utime)
+                 (setf (tui.datepicker:datepicker-selected picker) utime))
+               (progn
+                 (tui.datepicker:datepicker-set-time picker (get-universal-time))
+                 (tui.datepicker:datepicker-unselect picker)))
+           (tui.datepicker:datepicker-focus picker)
+           (setf (model-editing-date-type model) :scheduled)
+           (setf (model-view-state model) :list-set-date)))
+       (values model nil))
+
+      ;; Set deadline date (Shift+L) - opens modal datepicker
+      ((and (characterp key) (char= key #\L))
+       (when (< (model-cursor model) (length todos))
+         (let* ((todo (nth (model-cursor model) todos))
+                (deadline (todo-due-date todo))
+                (picker (model-date-picker model)))
+           ;; Initialize datepicker with current deadline or today
+           (if deadline
+               (let ((utime (lt:timestamp-to-universal deadline)))
+                 (tui.datepicker:datepicker-set-time picker utime)
+                 (setf (tui.datepicker:datepicker-selected picker) utime))
+               (progn
+                 (tui.datepicker:datepicker-set-time picker (get-universal-time))
+                 (tui.datepicker:datepicker-unselect picker)))
+           (tui.datepicker:datepicker-focus picker)
+           (setf (model-editing-date-type model) :deadline)
+           (setf (model-view-state model) :list-set-date)))
+       (values model nil))
+
+      ;; Refresh (r) - reload from database to pick up external changes, then reorder
       ((and (characterp key) (char= key #\r))
        (let* ((selected-id (when (< (model-cursor model) (length todos))
                              (todo-id (nth (model-cursor model) todos)))))
+         ;; Reload from database to pick up externally added todos
+         (setf (model-todos model) (load-todos))
+         ;; Reorder after reload
          (setf (model-todos model)
                (reorder-todos (model-todos model)
                               (model-sort-by model)
                               (model-sort-descending model)))
-         (save-todos (model-todos model))
          ;; Invalidate cache to pick up new ordering
          (invalidate-visible-todos-cache model)
+         ;; Refresh tags cache in case new todos have new tags
+         (refresh-tags-cache model)
+         ;; Restore cursor position if possible
          (when selected-id
            (let* ((visible (get-visible-todos model))
                   (new-index (position selected-id visible :key #'todo-id :test #'string=)))
@@ -929,7 +1053,7 @@
        (setf (model-view-state model) :list)
        (values model nil))
 
-      ;; Tab to next field
+      ;; Tab to next field: title → description → priority → scheduled → due → repeat → title
       ((eq key :tab)
        (case (model-active-field model)
          (:title
@@ -940,6 +1064,12 @@
           (setf (model-active-field model) :priority)
           (tui.textinput:textinput-blur (model-description-input model)))
          (:priority
+          (setf (model-active-field model) :scheduled))
+         (:scheduled
+          (setf (model-active-field model) :due))
+         (:due
+          (setf (model-active-field model) :repeat))
+         (:repeat
           (setf (model-active-field model) :title)
           (tui.textinput:textinput-focus (model-title-input model))))
        (values model nil))
@@ -948,7 +1078,7 @@
       ((eq key :backtab)
        (case (model-active-field model)
          (:title
-          (setf (model-active-field model) :priority)
+          (setf (model-active-field model) :repeat)
           (tui.textinput:textinput-blur (model-title-input model)))
          (:description
           (setf (model-active-field model) :title)
@@ -956,7 +1086,13 @@
           (tui.textinput:textinput-focus (model-title-input model)))
          (:priority
           (setf (model-active-field model) :description)
-          (tui.textinput:textinput-focus (model-description-input model))))
+          (tui.textinput:textinput-focus (model-description-input model)))
+         (:scheduled
+          (setf (model-active-field model) :priority))
+         (:due
+          (setf (model-active-field model) :scheduled))
+         (:repeat
+          (setf (model-active-field model) :due)))
        (values model nil))
 
       ;; Priority selection when in priority field (A/B/C org-style)
@@ -968,6 +1104,75 @@
                (#\A :high)
                (#\B :medium)
                (#\C :low)))
+       (values model nil))
+
+      ;; Space to open datepicker for scheduled date
+      ((and (eq (model-active-field model) :scheduled)
+            (characterp key) (char= key #\Space))
+       (let ((picker (model-date-picker model))
+             (current (model-edit-scheduled-date model)))
+         (if current
+             (let ((utime (lt:timestamp-to-universal current)))
+               (tui.datepicker:datepicker-set-time picker utime)
+               (setf (tui.datepicker:datepicker-selected picker) utime))
+             (progn
+               (tui.datepicker:datepicker-set-time picker (get-universal-time))
+               (tui.datepicker:datepicker-unselect picker)))
+         (tui.datepicker:datepicker-focus picker)
+         (setf (model-editing-date-type model) :scheduled)
+         (setf (model-view-state model) :add-scheduled-date))
+       (values model nil))
+
+      ;; Space to open datepicker for due date
+      ((and (eq (model-active-field model) :due)
+            (characterp key) (char= key #\Space))
+       (let ((picker (model-date-picker model))
+             (current (model-edit-due-date model)))
+         (if current
+             (let ((utime (lt:timestamp-to-universal current)))
+               (tui.datepicker:datepicker-set-time picker utime)
+               (setf (tui.datepicker:datepicker-selected picker) utime))
+             (progn
+               (tui.datepicker:datepicker-set-time picker (get-universal-time))
+               (tui.datepicker:datepicker-unselect picker)))
+         (tui.datepicker:datepicker-focus picker)
+         (setf (model-editing-date-type model) :due)
+         (setf (model-view-state model) :add-due-date))
+       (values model nil))
+
+      ;; Backspace to clear dates
+      ((and (member (model-active-field model) '(:scheduled :due))
+            (eq key :backspace))
+       (case (model-active-field model)
+         (:scheduled (setf (model-edit-scheduled-date model) nil))
+         (:due (setf (model-edit-due-date model) nil)))
+       (values model nil))
+
+      ;; Repeat field: Left/h for previous preset, Right/l for next preset
+      ((and (eq (model-active-field model) :repeat)
+            (or (eq key :left) (eq key :right)
+                (and (characterp key) (or (char= key #\h) (char= key #\l)))))
+       (let* ((presets '(nil                       ; None
+                         (1 . :day)                ; Daily
+                         (1 . :week)               ; Weekly
+                         (2 . :week)               ; Biweekly
+                         (1 . :month)              ; Monthly
+                         (1 . :year)))             ; Yearly
+              (current (cons (model-edit-repeat-interval model)
+                             (model-edit-repeat-unit model)))
+              (idx (or (position current presets :test #'equal) 0))
+              (direction (if (or (eq key :left)
+                                 (and (characterp key) (char= key #\h)))
+                             -1 1))
+              (new-idx (mod (+ idx direction) (length presets)))
+              (new-val (nth new-idx presets)))
+         (if new-val
+             (progn
+               (setf (model-edit-repeat-interval model) (car new-val))
+               (setf (model-edit-repeat-unit model) (cdr new-val)))
+             (progn
+               (setf (model-edit-repeat-interval model) nil)
+               (setf (model-edit-repeat-unit model) nil))))
        (values model nil))
 
       ;; Save on Enter (when not in text field or when in priority field)
@@ -984,6 +1189,12 @@
                          (let ((desc (tui.textinput:textinput-value (model-description-input model))))
                            (if (> (length desc) 0) desc nil)))
                    (setf (todo-priority todo) (model-edit-priority model))
+                   ;; Save dates
+                   (setf (todo-scheduled-date todo) (model-edit-scheduled-date model))
+                   (setf (todo-due-date todo) (model-edit-due-date model))
+                   ;; Save repeat settings
+                   (setf (todo-repeat-interval todo) (model-edit-repeat-interval model))
+                   (setf (todo-repeat-unit todo) (model-edit-repeat-unit model))
                    (save-todos (model-todos model)))
                  (setf (model-view-state model) :list)
                  (return-from handle-add-edit-keys (values model nil)))
@@ -995,6 +1206,10 @@
                       (new-todo (make-todo title
                                           :description desc-value
                                           :priority (model-edit-priority model)
+                                          :scheduled-date (model-edit-scheduled-date model)
+                                          :due-date (model-edit-due-date model)
+                                          :repeat-interval (model-edit-repeat-interval model)
+                                          :repeat-unit (model-edit-repeat-unit model)
                                           :parent-id parent-id)))
                  ;; Mark as being enriched
                  (setf (todo-enriching-p new-todo) t)
@@ -1181,6 +1396,12 @@
            (setf (model-edit-todo-id model) (todo-id todo))
            (setf (model-edit-priority model) (todo-priority todo))
            (setf (model-active-field model) :title)
+           ;; Pre-fill date and repeat fields
+           (setf (model-edit-scheduled-date model) (todo-scheduled-date todo))
+           (setf (model-edit-due-date model) (todo-due-date todo))
+           (setf (model-edit-repeat-interval model) (todo-repeat-interval todo))
+           (setf (model-edit-repeat-unit model) (todo-repeat-unit todo))
+           ;; Pre-fill text inputs
            (tui.textinput:textinput-set-value (model-title-input model) (todo-title todo))
            (tui.textinput:textinput-set-value (model-description-input model) (or (todo-description todo) ""))
            (tui.textinput:textinput-focus (model-title-input model))
@@ -1226,6 +1447,63 @@
        (values model nil))
 
       (t (values model nil)))))
+
+;;── List Date Modal Key Handling ───────────────────────────────────────────────
+
+(defun handle-list-date-keys (model msg)
+  "Handle keyboard input in list view date modal."
+  (let ((key (tui:key-msg-key msg))
+        (ctrl (tui:key-msg-ctrl msg))
+        (todos (get-visible-todos model))
+        (picker (model-date-picker model)))
+    (cond
+      ;; Cancel with Escape or Ctrl+C - go back to list view
+      ((or (eq key :escape)
+           (and ctrl (characterp key) (char= key #\c)))
+       (setf (model-view-state model) :list)
+       (values model nil))
+
+      ;; Confirm with Enter - save the current cursor date and go back to list
+      ((eq key :enter)
+       (when (< (model-cursor model) (length todos))
+         (let* ((todo (nth (model-cursor model) todos))
+                ;; Use cursor position (datepicker-time), not selection
+                (current-date (tui.datepicker:datepicker-time picker))
+                (timestamp (when current-date
+                             (lt:universal-to-timestamp current-date))))
+           ;; Save the date based on which type we're editing
+           (case (model-editing-date-type model)
+             (:scheduled
+              (setf (todo-scheduled-date todo) timestamp))
+             (:deadline
+              (setf (todo-due-date todo) timestamp)))
+           (save-todos (model-todos model))
+           ;; Invalidate cache since dates affect grouping
+           (invalidate-visible-todos-cache model)))
+       (setf (model-view-state model) :list)
+       (values model nil))
+
+      ;; Clear date with Backspace or Delete
+      ((or (eq key :backspace) (eq key :delete))
+       (when (< (model-cursor model) (length todos))
+         (let ((todo (nth (model-cursor model) todos)))
+           (case (model-editing-date-type model)
+             (:scheduled
+              (setf (todo-scheduled-date todo) nil))
+             (:deadline
+              (setf (todo-due-date todo) nil)))
+           (save-todos (model-todos model))
+           ;; Invalidate cache since dates affect grouping
+           (invalidate-visible-todos-cache model)))
+       (setf (model-view-state model) :list)
+       (values model nil))
+
+      ;; Pass other keys to datepicker
+      (t
+       (multiple-value-bind (new-picker cmd)
+           (tui.datepicker:datepicker-update picker msg)
+         (setf (model-date-picker model) new-picker)
+         (values model cmd))))))
 
 ;;── Date Edit View Key Handling ────────────────────────────────────────────────
 
@@ -1279,6 +1557,58 @@
          (setf (model-date-picker model) new-picker)
          (values model cmd))))))
 
+(defun handle-form-date-edit-keys (model msg)
+  "Handle keyboard input in add/edit form date picker view."
+  (let* ((key (tui:key-msg-key msg))
+         (ctrl (tui:key-msg-ctrl msg))
+         (picker (model-date-picker model))
+         (return-view (if (model-edit-todo-id model) :edit :add))
+         (date-type (model-editing-date-type model)))
+    (cond
+      ;; Cancel with Escape or Ctrl+C - go back to add/edit view without saving
+      ((or (eq key :escape)
+           (and ctrl (characterp key) (char= key #\c)))
+       (setf (model-view-state model) return-view)
+       (setf (model-active-field model) (if (eq date-type :scheduled) :scheduled :due))
+       (values model nil))
+
+      ;; Confirm with Enter - save the date to form state and go back
+      ((eq key :enter)
+       (let* ((selected (when picker (tui.datepicker:datepicker-selected picker)))
+              (timestamp (when selected
+                           (lt:universal-to-timestamp selected))))
+         ;; Save the date to form state based on which type we're editing
+         (cond
+           ((eq date-type :scheduled)
+            (setf (model-edit-scheduled-date model) timestamp)
+            (setf (model-active-field model) :scheduled))
+           ((eq date-type :due)
+            (setf (model-edit-due-date model) timestamp)
+            (setf (model-active-field model) :due))))
+       (setf (model-view-state model) return-view)
+       (values model nil))
+
+      ;; Clear date with Backspace or Delete
+      ((or (eq key :backspace) (eq key :delete))
+       (cond
+         ((eq date-type :scheduled)
+          (setf (model-edit-scheduled-date model) nil)
+          (setf (model-active-field model) :scheduled))
+         ((eq date-type :due)
+          (setf (model-edit-due-date model) nil)
+          (setf (model-active-field model) :due)))
+       (setf (model-view-state model) return-view)
+       (values model nil))
+
+      ;; Pass other keys to datepicker
+      (t
+       (when picker
+         (multiple-value-bind (new-picker cmd)
+             (tui.datepicker:datepicker-update picker msg)
+           (setf (model-date-picker model) new-picker)
+           (return-from handle-form-date-edit-keys (values model cmd))))
+       (values model nil)))))
+
 ;;── Help View Key Handling ─────────────────────────────────────────────────────
 
 (defun handle-help-keys (model msg)
@@ -1310,6 +1640,8 @@
     (:delete-done-confirm (handle-delete-done-confirm-keys model msg))
     (:detail (handle-detail-keys model msg))
     (:edit-date (handle-date-edit-keys model msg))
+    (:list-set-date (handle-list-date-keys model msg))
+    ((:add-scheduled-date :add-due-date) (handle-form-date-edit-keys model msg))
     (:help (handle-help-keys model msg))
     (:context-info (handle-context-info-keys model msg))
     (t (values model nil))))

@@ -81,6 +81,8 @@ serapeum, ghcr.io/ocicl/serapeum@sha256:b0d8c3875e11c24c1184a5d4b1654a5b44f27e3e
 smart-buffer, ghcr.io/ocicl/smart-buffer@sha256:b8d194f5881c415fd7f0099b88dfd9e2158405c2966de15c716b155a364bf0f7, smart-buffer-20240503-619759d/smart-buffer.asd
 smart-buffer-test, ghcr.io/ocicl/smart-buffer@sha256:b8d194f5881c415fd7f0099b88dfd9e2158405c2966de15c716b155a364bf0f7, smart-buffer-20240503-619759d/smart-buffer-test.asd
 split-sequence, ghcr.io/ocicl/split-sequence@sha256:3a37662eedd99c42995587b9d443c4631f25c4c523091bcca31a27b880585b8e, split-sequence-2.0.1/split-sequence.asd
+sqlite, ghcr.io/ocicl/sqlite@sha256:a7f80757e6ee13af06e2eeaeff1e079dba439d85ea5c7f68e262bccc40dcbd5c, cl-sqlite-0.2.1/sqlite.asd
+sqlite-tests, ghcr.io/ocicl/sqlite@sha256:a7f80757e6ee13af06e2eeaeff1e079dba439d85ea5c7f68e262bccc40dcbd5c, cl-sqlite-0.2.1/sqlite-tests.asd
 static-vectors, ghcr.io/ocicl/static-vectors@sha256:53e11e5689c3dbea6a3017760b55f052588003d774913539930ddc4330a69970, static-vectors-20240624-3d9d89b/static-vectors.asd
 str, ghcr.io/ocicl/str@sha256:685078f7554071268bca9e933392904940d6751077718a4aafaf3d0424003f26, cl-str-20250905-69ef8b4/str.asd
 str.test, ghcr.io/ocicl/str@sha256:685078f7554071268bca9e933392904940d6751077718a4aafaf3d0424003f26, cl-str-20250905-69ef8b4/str.test.asd
@@ -112,7 +114,7 @@ trivial-macroexpand-all, ghcr.io/ocicl/trivial-macroexpand-all@sha256:b23da4c2e5
 trivial-mimes, ghcr.io/ocicl/trivial-mimes@sha256:11c8aa199a3dea490cf8360bfa0c528e0e0e3e952b7b7d330208659662af93ed, trivial-mimes-20250813-98641f2/trivial-mimes.asd
 trivial-timeout, ghcr.io/ocicl/trivial-timeout@sha256:18f5f87e1fa3a35e5608cd424d22c2b24f581f810d9f9f8c6229b849c2f239ad, trivial-timeout-20240503-e70d9b4/trivial-timeout.asd
 trivial-timeout-test, ghcr.io/ocicl/trivial-timeout@sha256:18f5f87e1fa3a35e5608cd424d22c2b24f581f810d9f9f8c6229b849c2f239ad, trivial-timeout-20240503-e70d9b4/trivial-timeout-test.asd
-tuition, ghcr.io/ocicl/tuition@sha256:6dc2f6525db9177eb9d02b46859c795377375cb2cc987dfbb74cb94e12bd6101, cl-tuition-20260117-a7e4e6f/tuition.asd
+tuition, ghcr.io/ocicl/tuition@sha256:dc2ec9f270bb3901b04a313d91390dd6ba9751ed6dddd88102da9965c6380da0, cl-tuition-20260119-28ba1ce/tuition.asd
 type-i, ghcr.io/ocicl/type-i@sha256:de5c3e7f7b72409c5ec49885eea8c6fe2e02def2846cf97f70c1c21f21a1567c, type-i-20240503-4407a68/type-i.asd
 type-i.test, ghcr.io/ocicl/type-i@sha256:de5c3e7f7b72409c5ec49885eea8c6fe2e02def2846cf97f70c1c21f21a1567c, type-i-20240503-4407a68/type-i.test.asd
 uffi, ghcr.io/ocicl/cffi@sha256:d415b2cde8431fb3e7d5fc358fccb4aaa0a028dd8819e14608b4d245d0bff9e4, cffi-20250822-dad3520/uffi-compat/uffi.asd

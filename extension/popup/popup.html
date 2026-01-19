@@ -3,17 +3,22 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Cluedo - Add TODO</title>
+  <title>Cloodoo - Add TODO</title>
   <link rel="stylesheet" href="popup.css">
 </head>
 <body>
   <div class="container">
     <header>
-      <h1>Cluedo</h1>
-      <span id="status" class="status"></span>
+      <h1>Cloodoo</h1>
+      <span id="status" class="status" role="status" aria-live="polite"></span>
     </header>
 
-    <div id="error-message" class="error hidden"></div>
+    <div id="pending-banner" class="pending-banner hidden" role="status">
+      <span id="pending-count">0</span> pending TODO(s) waiting to sync
+      <button id="sync-btn" class="sync-btn" title="Sync now">&#x21bb;</button>
+    </div>
+
+    <div id="error-message" class="error hidden" role="alert" aria-live="assertive"></div>
 
     <form id="todo-form">
       <div class="form-group">
@@ -52,9 +57,9 @@
       </div>
     </form>
 
-    <div id="success-message" class="success hidden">
+    <div id="success-message" class="success hidden" role="status" aria-live="polite">
       <span class="checkmark">&#10003;</span>
-      <span>TODO added successfully!</span>
+      <span id="success-text">TODO added successfully!</span>
     </div>
 
     <footer>

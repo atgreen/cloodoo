@@ -117,6 +117,18 @@
           ALTER TABLE todos ADD COLUMN device_id TEXT NOT NULL DEFAULT 'unknown'")
       (error () nil))  ; Column already exists
 
+    ;; Migration: add repeat_interval column if it doesn't exist
+    (handler-case
+        (sqlite:execute-non-query db "
+          ALTER TABLE todos ADD COLUMN repeat_interval INTEGER")
+      (error () nil))  ; Column already exists
+
+    ;; Migration: add repeat_unit column if it doesn't exist
+    (handler-case
+        (sqlite:execute-non-query db "
+          ALTER TABLE todos ADD COLUMN repeat_unit TEXT")
+      (error () nil))  ; Column already exists
+
     ;; Index for efficient current state queries
     (sqlite:execute-non-query db "
       CREATE INDEX IF NOT EXISTS idx_todos_current
@@ -165,11 +177,13 @@
   "Convert a database row to a TODO object.
    ROW is a list: (row_id id title description priority status scheduled_date
                   due_date tags estimated_minutes location_info url parent_id
-                  created_at completed_at valid_from valid_to device_id)"
+                  created_at completed_at valid_from valid_to device_id
+                  repeat_interval repeat_unit)"
   (destructuring-bind (row-id id title description priority status
                        scheduled-date due-date tags estimated-minutes
                        location-info url parent-id created-at completed-at
-                       valid-from valid-to device-id) row
+                       valid-from valid-to device-id
+                       &optional repeat-interval repeat-unit) row
     (declare (ignore row-id valid-from valid-to))
     (make-instance 'todo
                    :id id
@@ -194,6 +208,10 @@
                    :url (unless (eq url :null) url)
                    :parent-id (unless (eq parent-id :null) parent-id)
                    :device-id (unless (eq device-id :null) device-id)
+                   :repeat-interval (unless (or (null repeat-interval) (eq repeat-interval :null))
+                                      repeat-interval)
+                   :repeat-unit (when (and repeat-unit (not (eq repeat-unit :null)) (stringp repeat-unit))
+                                  (intern (string-upcase repeat-unit) :keyword))
                    :created-at (lt:parse-timestring created-at)
                    :completed-at (parse-timestamp completed-at))))
 
@@ -206,7 +224,7 @@
       SELECT row_id, id, title, description, priority, status,
              scheduled_date, due_date, tags, estimated_minutes,
              location_info, url, parent_id, created_at, completed_at,
-             valid_from, valid_to, device_id
+             valid_from, valid_to, device_id, repeat_interval, repeat_unit
       FROM todos
       WHERE valid_to IS NULL
       ORDER BY created_at DESC")))
@@ -223,7 +241,7 @@
         SELECT row_id, id, title, description, priority, status,
                scheduled_date, due_date, tags, estimated_minutes,
                location_info, url, parent_id, created_at, completed_at,
-               valid_from, valid_to, device_id
+               valid_from, valid_to, device_id, repeat_interval, repeat_unit
         FROM todos
         WHERE valid_from <= ?
           AND (valid_to IS NULL OR valid_to > ?)
@@ -262,7 +280,11 @@
         (when (todo-completed-at todo)
           (lt:format-rfc3339-timestring nil (todo-completed-at todo)))
         ;; Use the todo's device-id if set, otherwise use this device's ID
-        (or (todo-device-id todo) (get-device-id))))
+        (or (todo-device-id todo) (get-device-id))
+        ;; Repeat fields
+        (todo-repeat-interval todo)
+        (when (todo-repeat-unit todo)
+          (string-downcase (symbol-name (todo-repeat-unit todo))))))
 
 (defun db-save-todo (todo)
   "Save a TODO to the database using append-only semantics.
@@ -285,12 +307,14 @@
                INSERT INTO todos (id, title, description, priority, status,
                                   scheduled_date, due_date, tags, estimated_minutes,
                                   location_info, url, parent_id, created_at,
-                                  completed_at, valid_from, valid_to, device_id)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?)"
+                                  completed_at, valid_from, valid_to, device_id,
+                                  repeat_interval, repeat_unit)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?)"
                (first values) (second values) (third values) (fourth values)
                (fifth values) (sixth values) (seventh values) (eighth values)
                (ninth values) (tenth values) (nth 10 values) (nth 11 values)
-               (nth 12 values) (nth 13 values) now (nth 14 values))
+               (nth 12 values) (nth 13 values) now (nth 14 values)
+               (nth 15 values) (nth 16 values))
              (sqlite:execute-non-query db "COMMIT")
              (setf committed t))
         (unless committed
@@ -298,16 +322,21 @@
 
 (defun db-save-todos (todos)
   "Save all TODOs to the database.
-   This is used for bulk operations like migration."
+   Only updates todos that are in the incoming list, preserving externally added ones."
   (with-db (db)
     (let ((now (now-iso))
-          (committed nil))
+          (committed nil)
+          ;; Get IDs of todos being saved
+          (incoming-ids (mapcar #'todo-id todos)))
       (sqlite:execute-non-query db "BEGIN IMMEDIATE")
       (unwind-protect
            (progn
-             ;; Mark all current versions as superseded
-             (sqlite:execute-non-query db "
-               UPDATE todos SET valid_to = ? WHERE valid_to IS NULL" now)
+             ;; Only invalidate todos that are in our incoming list
+             ;; This preserves externally added todos
+             (dolist (id incoming-ids)
+               (sqlite:execute-non-query db "
+                 UPDATE todos SET valid_to = ?
+                 WHERE id = ? AND valid_to IS NULL" now id))
              ;; Insert all TODOs as new versions
              (dolist (todo todos)
                (let ((values (todo-to-db-values todo)))
@@ -315,12 +344,14 @@
                    INSERT INTO todos (id, title, description, priority, status,
                                       scheduled_date, due_date, tags, estimated_minutes,
                                       location_info, url, parent_id, created_at,
-                                      completed_at, valid_from, valid_to, device_id)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?)"
+                                      completed_at, valid_from, valid_to, device_id,
+                                      repeat_interval, repeat_unit)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?)"
                    (first values) (second values) (third values) (fourth values)
                    (fifth values) (sixth values) (seventh values) (eighth values)
                    (ninth values) (tenth values) (nth 10 values) (nth 11 values)
-                   (nth 12 values) (nth 13 values) now (nth 14 values))))
+                   (nth 12 values) (nth 13 values) now (nth 14 values)
+                   (nth 15 values) (nth 16 values))))
              (sqlite:execute-non-query db "COMMIT")
              (setf committed t))
         (unless committed
@@ -395,12 +426,14 @@
                          INSERT INTO todos (id, title, description, priority, status,
                                             scheduled_date, due_date, tags, estimated_minutes,
                                             location_info, url, parent_id, created_at,
-                                            completed_at, valid_from, valid_to, device_id)
-                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?)"
+                                            completed_at, valid_from, valid_to, device_id,
+                                            repeat_interval, repeat_unit)
+                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?)"
                          (first values) (second values) (third values) (fourth values)
                          (fifth values) (sixth values) (seventh values) (eighth values)
                          (ninth values) (tenth values) (nth 10 values) (nth 11 values)
-                         (nth 12 values) (nth 13 values) now (nth 14 values))))
+                         (nth 12 values) (nth 13 values) now (nth 14 values)
+                         (nth 15 values) (nth 16 values))))
                    (sqlite:execute-non-query db "COMMIT")
                    (setf committed t))
               (unless committed
@@ -485,7 +518,8 @@
   (destructuring-bind (row-id id title description priority status
                        scheduled-date due-date tags estimated-minutes
                        location-info url parent-id created-at completed-at
-                       valid-from valid-to device-id) row
+                       valid-from valid-to device-id
+                       &optional repeat-interval repeat-unit) row
     (let ((ht (make-hash-table :test #'equal)))
       (setf (gethash "row_id" ht) row-id)
       (setf (gethash "id" ht) id)
@@ -505,6 +539,8 @@
       (setf (gethash "valid_from" ht) valid-from)
       (setf (gethash "valid_to" ht) (db-null-to-json-null valid-to))
       (setf (gethash "device_id" ht) device-id)
+      (setf (gethash "repeat_interval" ht) (db-null-to-json-null repeat-interval))
+      (setf (gethash "repeat_unit" ht) (db-null-to-json-null repeat-unit))
       ht)))
 
 (defun db-load-rows-since (timestamp)
@@ -519,7 +555,7 @@
         SELECT row_id, id, title, description, priority, status,
                scheduled_date, due_date, tags, estimated_minutes,
                location_info, url, parent_id, created_at, completed_at,
-               valid_from, valid_to, device_id
+               valid_from, valid_to, device_id, repeat_interval, repeat_unit
         FROM todos
         WHERE valid_from > ?
         ORDER BY valid_from ASC" ts)))
@@ -556,8 +592,9 @@
                            INSERT INTO todos (id, title, description, priority, status,
                                               scheduled_date, due_date, tags, estimated_minutes,
                                               location_info, url, parent_id, created_at,
-                                              completed_at, valid_from, valid_to, device_id)
-                           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+                                              completed_at, valid_from, valid_to, device_id,
+                                              repeat_interval, repeat_unit)
+                           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
                            id
                            (gethash "title" row)
                            (gethash "description" row)
@@ -574,7 +611,9 @@
                            (gethash "completed_at" row)
                            valid-from
                            valid-to
-                           device-id)
+                           device-id
+                           (gethash "repeat_interval" row)
+                           (gethash "repeat_unit" row))
                          (incf accepted)))))
                (sqlite:execute-non-query db "COMMIT")
                (setf committed t))
