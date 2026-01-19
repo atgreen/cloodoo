@@ -6,71 +6,7 @@
 
 (in-package #:cloodoo)
 
-;;── 90s Text-Mode IDE Style UI Components ─────────────────────────────────────
-
-;;; Box drawing characters
-(defparameter *box-h* "─")      ; horizontal
-(defparameter *box-v* "│")      ; vertical
-(defparameter *box-tl* "┌")     ; top-left
-(defparameter *box-tr* "┐")     ; top-right
-(defparameter *box-bl* "└")     ; bottom-left
-(defparameter *box-br* "┘")     ; bottom-right
-(defparameter *box-lt* "├")     ; left-tee
-(defparameter *box-rt* "┤")     ; right-tee
-(defparameter *box-tt* "┬")     ; top-tee
-(defparameter *box-bt* "┴")     ; bottom-tee
-
-;;; Double-line box drawing
-(defparameter *dbox-h* "═")
-(defparameter *dbox-v* "║")
-(defparameter *dbox-tl* "╔")
-(defparameter *dbox-tr* "╗")
-(defparameter *dbox-bl* "╚")
-(defparameter *dbox-br* "╝")
-
-;;; Block/shade characters
-(defparameter *shade-light* "░")
-(defparameter *shade-med* "▒")
-(defparameter *shade-dark* "▓")
-(defparameter *block-full* "█")
-
-;;; Helper to make horizontal lines
-(defun make-hline (width &optional (char *box-h*))
-  (make-string width :initial-element (char char 0)))
-
-(defun make-box-top (width &optional (title nil))
-  "Create top of a box with optional centered title."
-  (if title
-      (let* ((inner (- width 4))
-             (title-len (min (length title) (- inner 2)))
-             (trimmed (subseq title 0 title-len))
-             (padding (- inner title-len))
-             (left-pad (floor padding 2))
-             (right-pad (- padding left-pad)))
-        (format nil "~A~A~A ~A ~A~A~A"
-                *box-tl*
-                (make-hline left-pad)
-                *box-rt*
-                trimmed
-                *box-lt*
-                (make-hline right-pad)
-                *box-tr*))
-      (format nil "~A~A~A" *box-tl* (make-hline (- width 2)) *box-tr*)))
-
-(defun make-box-bottom (width)
-  "Create bottom of a box."
-  (format nil "~A~A~A" *box-bl* (make-hline (- width 2)) *box-br*))
-
-(defun make-box-line (content width)
-  "Create a line inside a box with padding."
-  (let* ((content-len (length content))
-         (inner (- width 2))
-         (padding (max 0 (- inner content-len))))
-    (format nil "~A~A~A~A"
-            *box-v*
-            content
-            (make-string padding :initial-element #\Space)
-            *box-v*)))
+;;── UI Components ──────────────────────────────────────────────────────────────
 
 ;;; Priority formatting
 (defun priority-string (priority)

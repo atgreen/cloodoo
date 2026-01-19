@@ -1773,13 +1773,13 @@
        (setf (model-view-state model) :detail)
        (values model nil))
 
-      ;; Confirm with Enter - save the date and go back
+      ;; Confirm with Enter - save the cursor date and go back
       ((eq key :enter)
        (when (< (model-cursor model) (length todos))
          (let* ((todo (nth (model-cursor model) todos))
-                (selected (tui.datepicker:datepicker-selected picker))
-                (timestamp (when selected
-                             (lt:universal-to-timestamp selected))))
+                (current-date (tui.datepicker:datepicker-time picker))
+                (timestamp (when current-date
+                             (lt:universal-to-timestamp current-date))))
            ;; Save the date based on which type we're editing
            (case (model-editing-date-type model)
              (:scheduled
@@ -1825,11 +1825,11 @@
        (setf (model-active-field model) (if (eq date-type :scheduled) :scheduled :due))
        (values model nil))
 
-      ;; Confirm with Enter - save the date to form state and go back
+      ;; Confirm with Enter - save the cursor date to form state and go back
       ((eq key :enter)
-       (let* ((selected (when picker (tui.datepicker:datepicker-selected picker)))
-              (timestamp (when selected
-                           (lt:universal-to-timestamp selected))))
+       (let* ((current-date (when picker (tui.datepicker:datepicker-time picker)))
+              (timestamp (when current-date
+                           (lt:universal-to-timestamp current-date))))
          ;; Save the date to form state based on which type we're editing
          (cond
            ((eq date-type :scheduled)
