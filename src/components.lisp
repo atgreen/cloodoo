@@ -478,11 +478,11 @@
 
 (defun render-pager-header (title width &key (border *border-header-title*))
   "Render a pager-style header with title in a bordered box and a line extending to width.
-   Like bubbletea's pager example:
-     ╭───────────╮
-     │ Mr. Pager ├────────────────────────────────
-     ╰───────────╯
-   The horizontal line extends from the middle (content) row."
+   Format:
+      ╭───────────╮
+     ─┤ Mr. Pager ├────────────────────────────────
+      ╰───────────╯
+   The horizontal line extends from the middle (content) row, with ─┤ on the left."
   (let* (;; Render the title with padding inside the border
          (padded-title (format nil " ~A " title))
          ;; Create the bordered title box
@@ -493,8 +493,8 @@
          (box-width (if box-lines
                         (apply #'max (mapcar #'tui:visible-length box-lines))
                         0))
-         ;; Calculate remaining width for the line
-         (line-width (max 0 (- width box-width)))
+         ;; Calculate remaining width for the line (subtract 1 for the leading ─)
+         (line-width (max 0 (- width box-width 1)))
          (num-lines (length box-lines))
          ;; Middle row is where we extend with the horizontal line
          (middle-row (floor num-lines 2)))
@@ -503,8 +503,13 @@
       (loop for line in box-lines
             for i from 0
             do (when (> i 0) (format s "~%"))
-               ;; Middle row (content) gets horizontal line continuation
                (if (= i middle-row)
-                   (format s "~A~A" line (make-string line-width :initial-element #\─))
-                   ;; Other lines get spaces to maintain alignment
-                   (format s "~A~A" line (make-string line-width :initial-element #\Space)))))))
+                   ;; Middle row: ─┤ content ├────
+                   ;; Replace leading │ with ─┤
+                   (let ((modified-line (if (and (> (length line) 0)
+                                                 (char= (char line 0) #\│))
+                                            (concatenate 'string "─┤" (subseq line 1))
+                                            (concatenate 'string "─┤" line))))
+                     (format s "~A~A" modified-line (make-string line-width :initial-element #\─)))
+                   ;; Other rows: space prefix to align with ─┤
+                   (format s " ~A~A" line (make-string line-width :initial-element #\Space)))))))
