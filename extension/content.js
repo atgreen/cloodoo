@@ -1,44 +1,136 @@
-// Cloodoo Gmail Extension - Content Script
+// Cloodoo Browser Extension - Content Script
 // SPDX-License-Identifier: MIT
 // Copyright (C) 2026 Anthony Green <green@moxielogic.com>
 
 (function() {
   'use strict';
 
-  // Selectors for each field, ordered by reliability
-  const SELECTORS = {
-    subject: [
-      'h2[data-thread-perm-id]',
-      '[data-legacy-thread-id] h2',
-      '.hP',
-      'h2.hP',
-      '[role="main"] h2[tabindex="-1"]',
-      '.ha h2',
-      '[data-thread-id] h2'
-    ],
-    sender: [
-      '.gD[email]',
-      '[email]',
-      '.gD',
-      '.go',
-      '[data-hovercard-id]',
-      '.yP',
-      '.zF'
-    ],
-    body: [
-      '.a3s.aiL',
-      '[data-message-id] .ii.gt',
-      '.ii.gt .a3s',
-      '.ii.gt',
-      '.a3s'
-    ],
-    date: [
-      '.gH .g3',
-      '.g3',
-      'span[data-tooltip]',
-      '.gH span[title]'
-    ]
+  // Site-specific selectors for each field, ordered by reliability
+  const SITE_SELECTORS = {
+    gmail: {
+      subject: [
+        'h2[data-thread-perm-id]',
+        '[data-legacy-thread-id] h2',
+        '.hP',
+        'h2.hP',
+        '[role="main"] h2[tabindex="-1"]',
+        '.ha h2',
+        '[data-thread-id] h2'
+      ],
+      sender: [
+        '.gD[email]',
+        '[email]',
+        '.gD',
+        '.go',
+        '[data-hovercard-id]',
+        '.yP',
+        '.zF'
+      ],
+      body: [
+        '.a3s.aiL',
+        '[data-message-id] .ii.gt',
+        '.ii.gt .a3s',
+        '.ii.gt',
+        '.a3s'
+      ],
+      date: [
+        '.gH .g3',
+        '.g3',
+        'span[data-tooltip]',
+        '.gH span[title]'
+      ]
+    },
+    outlook: {
+      subject: [
+        // Stable: title attribute on span inside subject container
+        '[id$="_SUBJECT"] span[title]',
+        // Stable: heading role with subject aria
+        '[role="heading"][aria-level="3"] span[title]',
+        // Less stable: specific class with title
+        'span[title][class]'
+      ],
+      sender: [
+        // Stable: aria-label starting with "From:"
+        '[aria-label^="From:"]',
+        // Stable: ID pattern ending in _FROM, find nested span
+        '[id$="_FROM"] span[class]'
+      ],
+      body: [
+        // Stable: aria-label for message body
+        '[aria-label="Message body"]',
+        // Stable: ID pattern for message body
+        '[id^="UniqueMessageBody"]'
+      ],
+      date: [
+        // Stable: data-testid is usually not minified
+        '[data-testid="SentReceivedSavedTime"]',
+        // Stable: ID pattern ending in _DATETIME
+        '[id$="_DATETIME"]'
+      ]
+    }
   };
+
+  // Known email sites for DOM recording and selector lookup
+  const KNOWN_EMAIL_SITES = {
+    'mail.google.com': 'gmail',
+    'outlook.live.com': 'outlook',
+    'outlook.office.com': 'outlook',
+    'outlook.office365.com': 'outlook',
+    'mail.yahoo.com': 'yahoo',
+    'mail.proton.me': 'protonmail',
+    'mail.zoho.com': 'zoho'
+  };
+
+  // Check if we're on a known email site
+  function getEmailSite() {
+    const hostname = window.location.hostname;
+    for (const [domain, site] of Object.entries(KNOWN_EMAIL_SITES)) {
+      if (hostname.includes(domain)) {
+        return site;
+      }
+    }
+    return null;
+  }
+
+  // Get selectors for the current site, with fallback to gmail (most complete)
+  function getSelectors() {
+    const site = getEmailSite();
+    return SITE_SELECTORS[site] || SITE_SELECTORS.gmail;
+  }
+
+  // Check if extraction result has useful data
+  function hasUsefulData(data) {
+    return data && (data.subject || data.sender);
+  }
+
+  // Record DOM for later analysis when extraction fails
+  function recordDomForAnalysis(extractionResult) {
+    const site = getEmailSite();
+    console.log('Cloodoo: recordDomForAnalysis called, site:', site, 'extractionResult:', extractionResult);
+    if (!site) return; // Only record for known email sites
+
+    console.log('Cloodoo: Recording DOM for analysis (extraction failed)');
+
+    // Get the main content area HTML to avoid capturing the entire page
+    const mainContent = document.querySelector('[role="main"]');
+    const html = mainContent ? mainContent.outerHTML : document.body.innerHTML;
+
+    // Limit size to avoid huge payloads (max 500KB)
+    const maxSize = 500 * 1024;
+    const truncatedHtml = html.length > maxSize
+      ? html.substring(0, maxSize) + '\n<!-- TRUNCATED -->'
+      : html;
+
+    chrome.runtime.sendMessage({
+      action: 'recordDom',
+      site: site,
+      url: window.location.href,
+      html: truncatedHtml,
+      extractionResult: extractionResult
+    }).catch(err => {
+      console.log('Cloodoo: Failed to record DOM:', err);
+    });
+  }
 
   // Try multiple selectors until one works
   function queryWithFallbacks(selectors) {
@@ -55,6 +147,7 @@
 
   // Extract email data from the currently open email
   function extractEmailData() {
+    const selectors = getSelectors();
     const data = {
       subject: '',
       sender: '',
@@ -63,29 +156,39 @@
       url: window.location.href
     };
 
-    // Extract subject
-    const subjectEl = queryWithFallbacks(SELECTORS.subject);
+    // Extract subject - for Outlook, prefer title attribute
+    const subjectEl = queryWithFallbacks(selectors.subject);
     if (subjectEl) {
-      data.subject = subjectEl.textContent.trim();
+      data.subject = subjectEl.getAttribute('title') ||
+                     subjectEl.textContent.trim();
     }
 
-    // Extract sender - prefer email attribute
-    const senderEl = queryWithFallbacks(SELECTORS.sender);
+    // Extract sender - prefer email attribute, then parse aria-label, then text
+    const senderEl = queryWithFallbacks(selectors.sender);
     if (senderEl) {
+      const ariaLabel = senderEl.getAttribute('aria-label') || '';
+      // Try to extract email from aria-label like "From: Name <email>"
+      const emailMatch = ariaLabel.match(/<([^>]+)>/);
+      // Try to extract name from aria-label like "From: Name" or "From: Name <email>"
+      const fromMatch = ariaLabel.match(/^From:\s*([^<]+)/);
+      const nameFromLabel = fromMatch ? fromMatch[1].trim() : null;
+
       data.sender = senderEl.getAttribute('email') ||
                     senderEl.getAttribute('data-hovercard-id') ||
+                    (emailMatch ? emailMatch[1] : null) ||
+                    nameFromLabel ||
                     senderEl.textContent.trim();
     }
 
     // Extract body snippet
-    const bodyEl = queryWithFallbacks(SELECTORS.body);
+    const bodyEl = queryWithFallbacks(selectors.body);
     if (bodyEl) {
       const text = bodyEl.textContent.trim();
       data.snippet = text.substring(0, 200) + (text.length > 200 ? '...' : '');
     }
 
     // Extract date
-    const dateEl = queryWithFallbacks(SELECTORS.date);
+    const dateEl = queryWithFallbacks(selectors.date);
     if (dateEl) {
       data.date = dateEl.getAttribute('title') ||
                   dateEl.getAttribute('data-tooltip') ||
@@ -154,7 +257,13 @@
           resolved = true;
           observer.disconnect();
           clearInterval(interval);
-          resolve(extractEmailData());
+          const finalData = extractEmailData();
+          console.log('Cloodoo: finalData:', finalData, 'hasUsefulData:', hasUsefulData(finalData), 'emailSite:', getEmailSite());
+          // Record DOM if we couldn't extract useful data from a known email site
+          if (!hasUsefulData(finalData) && getEmailSite()) {
+            recordDomForAnalysis(finalData);
+          }
+          resolve(finalData);
         }
       }, timeout);
     });
@@ -223,7 +332,8 @@
     }
   }
 
-  console.log('Cloodoo: Content script loaded');
+  console.log('Cloodoo: Content script loaded on', window.location.hostname);
+  console.log('Cloodoo: Detected email site:', getEmailSite());
   startObserver();
 
 })();

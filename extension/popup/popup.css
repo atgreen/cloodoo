@@ -1,4 +1,4 @@
-/* Cloodoo Gmail Extension - Popup Styles */
+/* Cloodoo Browser Extension - Popup Styles */
 /* SPDX-License-Identifier: MIT */
 /* Copyright (C) 2026 Anthony Green <green@moxielogic.com> */
 
@@ -233,4 +233,37 @@ footer a:hover {
 
 @keyframes spin {
   to { transform: rotate(360deg); }
+}
+
+/* Autocomplete dropdown */
+.autocomplete-list {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  background: #fff;
+  border: 1px solid #dadce0;
+  border-top: none;
+  border-radius: 0 0 4px 4px;
+  max-height: 200px;
+  overflow-y: auto;
+  z-index: 1000;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+}
+
+.autocomplete-item {
+  padding: 8px 12px;
+  cursor: pointer;
+  font-size: 13px;
+  color: #333;
+}
+
+.autocomplete-item:hover,
+.autocomplete-item.selected {
+  background: #e8f0fe;
+  color: #1967d2;
+}
+
+.autocomplete-item + .autocomplete-item {
+  border-top: 1px solid #f0f0f0;
 }

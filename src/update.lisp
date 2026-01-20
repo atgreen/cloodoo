@@ -204,7 +204,11 @@
    (visible-todos-dirty
     :initform t
     :accessor model-visible-todos-dirty
-    :documentation "When T, regenerate visible-todos-cache on next access."))
+    :documentation "When T, regenerate visible-todos-cache on next access.")
+   (deleting-tag
+    :initform nil
+    :accessor model-deleting-tag
+    :documentation "Tag name being deleted (for confirmation dialog)."))
   (:documentation "The application model following TEA pattern."))
 
 (defun make-initial-model ()
@@ -758,6 +762,20 @@
        (setf (model-sidebar-focused model) nil)
        (values model nil))
 
+      ;; Delete - delete the selected tag (not available for "All")
+      ((or (eq key :delete) (eq key :backspace)
+           (and (characterp key) (char= key #\d)))
+       (let ((cursor (model-sidebar-cursor model)))
+         (if (= cursor 0)
+             ;; "All" is selected - can't delete
+             (values model nil)
+             ;; Delete specific tag
+             (let ((tag (nth (1- cursor) tags)))
+               (when tag
+                 (setf (model-deleting-tag model) tag)
+                 (setf (model-view-state model) :delete-tag-confirm))
+               (values model nil)))))
+
       (t (values model nil)))))
 
 ;;── List View Key Handling ─────────────────────────────────────────────────────
@@ -856,7 +874,7 @@
                    (:low :medium)
                    (:medium :high)
                    (:high :high)))  ; Already at max
-           (save-todos (model-todos model))))
+           (save-todo todo)))
        (values model nil))
 
       ;; Decrease priority (Shift+Down)
@@ -868,7 +886,7 @@
                    (:high :medium)
                    (:medium :low)
                    (:low :low)))  ; Already at min
-           (save-todos (model-todos model))))
+           (save-todo todo)))
        (values model nil))
 
       ;; Go to top
@@ -929,7 +947,7 @@
               (setf (todo-status todo) +status-pending+)
               (setf (todo-completed-at todo) nil)))
            ;; Save but don't invalidate cache - item stays in place
-           (save-todos (model-todos model))))
+           (save-todo todo)))
        (values model nil))
 
       ;; View details (Enter)
@@ -1025,7 +1043,7 @@
            (when (equal (todo-parent-id todo) (todo-parent-id prev-todo))
              ;; Make todo a child of prev-todo
              (setf (todo-parent-id todo) (todo-id prev-todo))
-             (save-todos all-todos)
+             (save-todo todo)
              (invalidate-visible-todos-cache model))))
        (values model nil))
 
@@ -1040,7 +1058,7 @@
              (let ((parent (find parent-id all-todos :key #'todo-id :test #'equal)))
                (when parent
                  (setf (todo-parent-id todo) (todo-parent-id parent))
-                 (save-todos all-todos)
+                 (save-todo todo)
                  (invalidate-visible-todos-cache model))))))
        (values model nil))
 
@@ -1085,14 +1103,14 @@
        (when (< (model-cursor model) (length todos))
          (let ((todo (nth (model-cursor model) todos)))
            (setf (todo-priority todo) :medium)
-           (save-todos (model-todos model))))
+           (save-todo todo)))
        (values model nil))
 
       ((and (characterp key) (char-equal key #\C))
        (when (< (model-cursor model) (length todos))
          (let ((todo (nth (model-cursor model) todos)))
            (setf (todo-priority todo) :low)
-           (save-todos (model-todos model))))
+           (save-todo todo)))
        (values model nil))
 
       ;; Filter by status (f cycles through)
@@ -1233,7 +1251,7 @@
                         :todo-id (todo-id todo)
                         :title (todo-title todo))
              (setf (todo-enriching-p todo) t)
-             (save-todos (model-todos model))
+             (save-todo todo)
              (return-from handle-list-keys
                (values model (list (make-enrichment-cmd (todo-id todo)
                                                         (todo-title todo)
@@ -1512,7 +1530,7 @@
                    ;; Save tags (but not for child tasks - they inherit from parent)
                    (unless (todo-parent-id todo)
                      (setf (todo-tags todo) (reverse (model-edit-tags model))))
-                   (save-todos (model-todos model))
+                   (save-todo todo)
                    ;; Refresh tags cache since tags may have changed
                    (refresh-tags-cache model))
                  (setf (model-view-state model) :list)
@@ -1537,7 +1555,7 @@
                  ;; Mark as being enriched
                  (setf (todo-enriching-p new-todo) t)
                  (push new-todo (model-todos model))
-                 (save-todos (model-todos model))
+                 (save-todo new-todo)
                  ;; Invalidate cache so new todo appears
                  (invalidate-visible-todos-cache model)
                  ;; Refresh tags cache since new tags may have been added
@@ -1618,7 +1636,7 @@
                         :key #'todo-id :test #'string=)))
          (when todo
            (setf (todo-tags todo) (reverse (model-edit-tags model)))
-           (save-todos (model-todos model))
+           (save-todo todo)
            (refresh-tags-cache model)))
        (setf (model-view-state model) :list)
        (setf (model-edit-todo-id model) nil)
@@ -1658,7 +1676,7 @@
                              :key #'todo-id :test #'string=)))
               (when todo
                 (setf (todo-tags todo) (reverse (model-edit-tags model)))
-                (save-todos (model-todos model))
+                (save-todo todo)
                 (refresh-tags-cache model)))
             (setf (model-view-state model) :list)
             (setf (model-edit-todo-id model) nil)
@@ -1784,6 +1802,43 @@
        (setf (model-view-state model) :list)
        (values model nil)))))
 
+;;── Delete Tag Confirm Key Handling ────────────────────────────────────────────
+
+(defun handle-delete-tag-confirm-keys (model msg)
+  "Handle keyboard input in delete tag confirmation.
+   Removes the tag from all TODOs and updates the sidebar."
+  (let ((key (tui:key-msg-key msg))
+        (tag (model-deleting-tag model)))
+    (cond
+      ;; Confirm delete with y
+      ((and (characterp key) (char-equal key #\y))
+       (when tag
+         ;; Remove tag from all todos
+         (dolist (todo (model-todos model))
+           (when (todo-tags todo)
+             (setf (todo-tags todo)
+                   (remove tag (todo-tags todo) :test #'string=))))
+         ;; Save changes
+         (save-todos (model-todos model))
+         ;; Remove from selected-tags filter if present
+         (remhash tag (model-selected-tags model))
+         ;; Invalidate caches
+         (invalidate-visible-todos-cache model)
+         (setf (model-all-tags-cache model) nil)
+         ;; Adjust sidebar cursor if needed
+         (let ((tags (update-all-tags-cache model)))
+           (when (> (model-sidebar-cursor model) (length tags))
+             (setf (model-sidebar-cursor model) (max 0 (length tags))))))
+       (setf (model-deleting-tag model) nil)
+       (setf (model-view-state model) :list)
+       (values model nil))
+
+      ;; Cancel with anything else
+      (t
+       (setf (model-deleting-tag model) nil)
+       (setf (model-view-state model) :list)
+       (values model nil)))))
+
 ;;── Detail View Key Handling ───────────────────────────────────────────────────
 
 (defun handle-detail-keys (model msg)
@@ -1896,7 +1951,7 @@
               (setf (todo-scheduled-date todo) timestamp))
              (:deadline
               (setf (todo-due-date todo) timestamp)))
-           (save-todos (model-todos model))
+           (save-todo todo)
            ;; Invalidate cache since dates affect grouping
            (invalidate-visible-todos-cache model)))
        (setf (model-view-state model) :list)
@@ -1911,7 +1966,7 @@
               (setf (todo-scheduled-date todo) nil))
              (:deadline
               (setf (todo-due-date todo) nil)))
-           (save-todos (model-todos model))
+           (save-todo todo)
            ;; Invalidate cache since dates affect grouping
            (invalidate-visible-todos-cache model)))
        (setf (model-view-state model) :list)
@@ -1952,7 +2007,7 @@
               (setf (todo-scheduled-date todo) timestamp))
              (:deadline
               (setf (todo-due-date todo) timestamp)))
-           (save-todos (model-todos model))))
+           (save-todo todo)))
        (setf (model-view-state model) :detail)
        (values model nil))
 
@@ -1965,7 +2020,7 @@
               (setf (todo-scheduled-date todo) nil))
              (:deadline
               (setf (todo-due-date todo) nil)))
-           (save-todos (model-todos model))))
+           (save-todo todo)))
        (setf (model-view-state model) :detail)
        (values model nil))
 
@@ -2058,6 +2113,7 @@
     (:import (handle-import-keys model msg))
     (:delete-confirm (handle-delete-confirm-keys model msg))
     (:delete-done-confirm (handle-delete-done-confirm-keys model msg))
+    (:delete-tag-confirm (handle-delete-tag-confirm-keys model msg))
     (:detail (handle-detail-keys model msg))
     (:edit-date (handle-date-edit-keys model msg))
     (:list-set-date (handle-list-date-keys model msg))
@@ -2210,8 +2266,8 @@
           (setf (todo-due-date todo) (getf data :due-date)))
         (when (getf data :location-info)
           (setf (todo-location-info todo) (getf data :location-info))))
-      ;; Save updated todos
-      (save-todos (model-todos model))
+      ;; Save updated todo
+      (save-todo todo)
       ;; Refresh tags cache since enrichment may add tags
       (refresh-tags-cache model))
     (values model nil)))

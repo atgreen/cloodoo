@@ -823,43 +823,29 @@
                 (render-help-line help term-width :fg tui:*fg-yellow* :bg tui:*bg-blue*))))))
 
 (defun render-delete-confirm-view (model)
-  "Render the delete confirmation dialog."
+  "Render the delete confirmation dialog as an overlay."
   (let* ((term-width (model-term-width model))
          (todos (get-visible-todos model))
          (todo (when (< (model-cursor model) (length todos))
-                (nth (model-cursor model) todos))))
-    (with-output-to-string (s)
-      ;; Title bar (red for danger)
-      (let* ((title " DELETE ITEM ")
-             (pad (max 0 (- term-width (length title)))))
-        (format s "~A~%"
-                (tui:bold (tui:colored
-                          (format nil "~A~A" title (make-string pad :initial-element #\─))
-                          :fg tui:*fg-white* :bg tui:*bg-red*))))
-
-      (when todo
-        (let ((content
-                (with-output-to-string (c)
-                  (format c "~A~%~%  ~A ~A ~A"
-                          (tui:bold "Delete this item?")
-                          (org-status-colored (todo-status todo))
-                          (org-priority-colored (todo-priority todo))
-                          (todo-title todo)))))
-          ;; Pad to full width
-          (let ((inner-width (- term-width 2)))
-            (format s "~A~%"
-                    (tui:render-border (pad-content-to-width content inner-width)
-                                       tui:*border-double*)))))
-
-      ;; Help bar
-      (let ((help " y:confirm  any other key:cancel "))
-        (format s "~A"
-                (render-help-line help term-width :fg tui:*fg-yellow* :bg tui:*bg-red*))))))
+                 (nth (model-cursor model) todos)))
+         (background (render-list-view model))
+         (content (if todo
+                      (with-output-to-string (c)
+                        (format c "~A~%~%"
+                                (tui:bold "Delete this item?"))
+                        (format c "~A" (todo-title todo)))
+                      "No item selected"))
+         (max-width (max 20 (- term-width 2)))
+         (modal-width (min 50 max-width))
+         (modal (render-modal-dialog " DELETE ITEM " content
+                                     " y:confirm  any other key:cancel "
+                                     modal-width
+                                     :title-bg tui:*bg-red*)))
+    (tui:overlay-centered modal background)))
 
 (defun render-delete-done-confirm-view (model)
   "Render the delete-done confirmation dialog as an overlay."
   (let* ((term-width (model-term-width model))
-         (term-height (model-term-height model))
          (done-count (count-if (lambda (todo) (eq (todo-status todo) +status-completed+))
                                (model-todos model)))
          (background (render-list-view model))
@@ -868,56 +854,62 @@
                             (tui:bold (format nil "Delete ~D DONE item~:P?" done-count)))
                     (format c "This will remove completed items from the list.")))
          (max-width (max 20 (- term-width 2)))
-         (modal-width (min 72 max-width))
+         (modal-width (min 60 max-width))
          (modal (render-modal-dialog " DELETE DONE ITEMS " content
                                      " y:confirm  any other key:cancel "
                                      modal-width
-                                     :title-bg tui:*bg-red*))
-         (modal-height (length (uiop:split-string modal :separator '(#\Newline)))))
-    (overlay-modal background modal term-width term-height modal-width modal-height)))
+                                     :title-bg tui:*bg-red*)))
+    (tui:overlay-centered modal background)))
+
+(defun render-delete-tag-confirm-view (model)
+  "Render the delete tag confirmation dialog as an overlay."
+  (let* ((term-width (model-term-width model))
+         (tag (model-deleting-tag model))
+         (background (render-list-view model))
+         ;; Count how many todos have this tag
+         (count (count-if (lambda (todo)
+                            (member tag (todo-tags todo) :test #'string=))
+                          (model-todos model)))
+         (content (with-output-to-string (c)
+                    (format c "~A~%~%"
+                            (tui:bold (format nil "Delete label \"~A\"?" tag)))
+                    (format c "This will remove the label from ~D item~:P." count)))
+         (max-width (max 20 (- term-width 2)))
+         (modal-width (min 55 max-width))
+         (modal (render-modal-dialog " DELETE LABEL " content
+                                     " y:confirm  any other key:cancel "
+                                     modal-width
+                                     :title-bg tui:*bg-red*)))
+    (tui:overlay-centered modal background)))
 
 (defun render-context-info-view (model)
-  "Render the context info view showing where to edit user context."
+  "Render the context info view as an overlay showing where to edit user context."
   (let* ((term-width (model-term-width model))
          (context-file (namestring (user-context-file)))
-         (has-context (load-user-context)))
-    (with-output-to-string (s)
-      ;; Title bar
-      (let* ((title " USER CONTEXT ")
-             (pad (max 0 (- term-width (length title)))))
-        (format s "~A~%"
-                (tui:bold (tui:colored
-                          (format nil "~A~A" title (make-string pad :initial-element #\─))
-                          :fg tui:*fg-white* :bg tui:*bg-magenta*))))
-
-      ;; Content
-      (let ((content
-              (with-output-to-string (c)
-                (format c "~A~%~%"
-                        (tui:bold "User context provides personal information to help"))
-                (format c "the AI better understand and enrich your TODOs.~%~%")
-                (format c "~A~%"
-                        (tui:colored "Context File:" :fg tui:*fg-cyan*))
-                (format c "  ~A~%~%"
-                        (tui:colored context-file :fg tui:*fg-yellow*))
-                (format c "~A~%~%"
-                        (tui:colored "To edit, open this file in your favorite editor:" :fg tui:*fg-cyan*))
-                (format c "  ~A~%~%"
-                        (tui:colored (format nil "  $EDITOR ~A" context-file) :fg tui:*fg-green*))
-                (if has-context
-                    (format c "~A"
-                            (tui:colored "✓ Context file has content" :fg tui:*fg-green*))
-                    (format c "~A"
-                            (tui:colored "○ Context file is empty - add your info!" :fg tui:*fg-yellow*))))))
-        (let ((inner-width (- term-width 2)))
-          (format s "~A~%"
-                  (tui:render-border (pad-content-to-width content inner-width)
-                                     tui:*border-double*))))
-
-      ;; Help bar
-      (let ((help " Press any key to return "))
-        (format s "~A"
-                (render-help-line help term-width :fg tui:*fg-yellow* :bg tui:*bg-magenta*))))))
+         (has-context (load-user-context))
+         (background (render-list-view model))
+         (modal-width (min 65 (max 50 (- term-width 6))))
+         (content
+           (with-output-to-string (c)
+             (format c "User context provides personal information to help~%")
+             (format c "the AI better understand and enrich your TODOs.~%~%")
+             (format c "~A~%"
+                     (tui:colored "Context File:" :fg tui:*fg-cyan*))
+             (format c "  ~A~%~%"
+                     (tui:colored context-file :fg tui:*fg-yellow*))
+             (format c "~A~%"
+                     (tui:colored "To edit, open in your editor:" :fg tui:*fg-cyan*))
+             (format c "  ~A~%~%"
+                     (tui:colored (format nil "$EDITOR ~A" context-file) :fg tui:*fg-green*))
+             (if has-context
+                 (format c "~A~%"
+                         (tui:colored "✓ Context file has content" :fg tui:*fg-green*))
+                 (format c "~A~%"
+                         (tui:colored "○ Context file is empty - add your info!" :fg tui:*fg-yellow*)))
+             (format c "~%~A"
+                     (tui:colored "Press any key to close" :fg tui:*fg-bright-black*))))
+         (modal (render-box-with-title "USER CONTEXT" content :min-width modal-width)))
+    (tui:overlay-centered modal background)))
 
 (defun render-import-view (model)
   "Render the org-mode import view."
@@ -964,71 +956,66 @@
                 (render-help-line help term-width :fg tui:*fg-yellow* :bg tui:*bg-magenta*))))))
 
 (defun render-date-edit-view (model)
-  "Render the date picker view for editing scheduled/deadline dates."
+  "Render the date picker view for editing scheduled/deadline dates as an overlay."
   (let* ((term-width (model-term-width model))
          (picker (model-date-picker model))
          (date-type (model-editing-date-type model))
          (todos (get-visible-todos model))
          (todo (when (< (model-cursor model) (length todos))
                  (nth (model-cursor model) todos)))
-         (title (if (eq date-type :scheduled) " SET SCHEDULED DATE " " SET DEADLINE "))
+         (background (render-list-view model))
+         (title (if (eq date-type :scheduled) "SET SCHEDULED DATE" "SET DEADLINE"))
          (current-date (case date-type
                          (:scheduled (when todo (todo-scheduled-date todo)))
                          (:deadline (when todo (todo-due-date todo)))))
-         (selected (tui.datepicker:datepicker-selected picker)))
-    (with-output-to-string (s)
-      ;; Title bar
-      (let* ((pad (max 0 (- term-width (length title)))))
-        (format s "~A~%"
-                (tui:bold (tui:colored
-                          (format nil "~A~A" title (make-string pad :initial-element #\─))
-                          :fg tui:*fg-white* :bg tui:*bg-magenta*))))
+         (selected (tui.datepicker:datepicker-selected picker))
+         (modal-width (min 56 (max 44 (- term-width 8))))
+         (content
+           (with-output-to-string (c)
+             ;; Show todo title context
+             (when todo
+               (let ((todo-title (todo-title todo)))
+                 (format c "~A~%~%"
+                         (tui:colored
+                          (if (> (length todo-title) (- modal-width 6))
+                              (concatenate 'string (subseq todo-title 0 (- modal-width 8)) "..")
+                              todo-title)
+                          :fg tui:*fg-bright-black*))))
 
-      ;; Show todo title context
-      (when todo
-        (format s "~%~A~%"
-                (tui:colored (todo-title todo) :fg tui:*fg-bright-black*)))
+             ;; Current date status
+             (format c "~A ~A~%"
+                     (tui:bold (if (eq date-type :scheduled) "Current:" "Current:"))
+                     (if current-date
+                         (tui:colored
+                          (lt:format-timestring nil current-date
+                                               :format '(:short-month " " :day ", " :year))
+                          :fg tui:*fg-cyan*)
+                         (tui:colored "Not set" :fg tui:*fg-bright-black*)))
 
-      ;; Current date status
-      (format s "~%~A ~A~%"
-              (tui:bold (if (eq date-type :scheduled) "SCHEDULED:" "DEADLINE:"))
-              (if current-date
-                  (tui:colored
-                   (lt:format-timestring nil current-date
-                                        :format '(:long-weekday " " :short-month " " :day " " :year))
-                   :fg tui:*fg-cyan*)
-                  (tui:colored "Not set" :fg tui:*fg-bright-black*)))
+             ;; Datepicker calendar
+             (format c "~%~A~%" (tui.datepicker:datepicker-view picker))
 
-      ;; Datepicker calendar
-      (format s "~%~A~%" (tui.datepicker:datepicker-view picker))
+             ;; Selected date
+             (format c "~%~A ~A~%"
+                     (tui:bold "New:")
+                     (if selected
+                         (multiple-value-bind (sec min hour day month year)
+                             (decode-universal-time selected)
+                           (declare (ignore sec min hour))
+                           (tui:colored (format nil "~A ~D, ~D"
+                                                (aref #("Jan" "Feb" "Mar" "Apr" "May" "Jun"
+                                                       "Jul" "Aug" "Sep" "Oct" "Nov" "Dec")
+                                                      (1- month))
+                                                day year)
+                                       :fg tui:*fg-green*))
+                         (tui:colored "None" :fg tui:*fg-bright-black*)))
 
-      ;; Selected date
-      (format s "~%~A ~A~%"
-              (tui:bold "Selected:")
-              (if selected
-                  (multiple-value-bind (sec min hour day month year)
-                      (decode-universal-time selected)
-                    (declare (ignore sec min hour))
-                    (tui:colored (format nil "~A ~D, ~D"
-                                         (aref #("Jan" "Feb" "Mar" "Apr" "May" "Jun"
-                                                "Jul" "Aug" "Sep" "Oct" "Nov" "Dec")
-                                               (1- month))
-                                         day year)
-                                :fg tui:*fg-green*))
-                  (tui:colored "None" :fg tui:*fg-bright-black*)))
-
-      ;; Navigation help
-      (format s "~%~A~%"
-              (tui:colored "Navigation: ←→ or h/l = day  ↑↓ or j/k = week  [/] = month  {/} = year  Home = today"
-                          :fg tui:*fg-bright-black*))
-      (format s "~A~%"
-              (tui:colored "Actions:    Space = select date  Enter = save & close  Backspace = clear  Esc = cancel"
-                          :fg tui:*fg-bright-black*))
-
-      ;; Help bar
-      (let ((help " ←↑↓→/hjkl:day/week  []:month  {}:year  Home:today  Space:select  Enter:save  Del:clear  Esc:cancel "))
-        (format s "~%~A"
-                (render-help-line help term-width :fg tui:*fg-yellow* :bg tui:*bg-magenta*))))))
+             ;; Navigation help
+             (format c "~%~A"
+                     (tui:colored "hjkl:nav  []:month  {}:year  Home:today  RET:save  DEL:clear  ESC:cancel"
+                                 :fg tui:*fg-bright-black*))))
+         (modal (render-box-with-title title content :min-width modal-width)))
+    (tui:overlay-centered modal background)))
 
 (defun render-help-column (title entries &optional (key-width 10))
   "Render a help column with TITLE and list of (key . description) ENTRIES."
@@ -1420,6 +1407,7 @@
     (:import (render-import-view model))
     (:delete-confirm (render-delete-confirm-view model))
     (:delete-done-confirm (render-delete-done-confirm-view model))
+    (:delete-tag-confirm (render-delete-tag-confirm-view model))
     (:edit-date (render-date-edit-view model))
     (:list-set-date (render-list-date-modal model))
     ((:add-scheduled-date :add-due-date) (render-form-date-edit-view model))

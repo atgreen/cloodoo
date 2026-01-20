@@ -1,4 +1,4 @@
-// Cloodoo Gmail Extension - Background Service Worker
+// Cloodoo Browser Extension - Background Service Worker
 // SPDX-License-Identifier: MIT
 // Copyright (C) 2026 Anthony Green <green@moxielogic.com>
 
@@ -276,6 +276,52 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     checkNativeMessaging().then(available => {
       sendResponse({ available });
     });
+    return true;
+  }
+
+  if (request.action === 'recordDom') {
+    // Record DOM for analysis when extraction fails on known email sites
+    (async () => {
+      try {
+        const nativeAvailable = await checkNativeMessaging();
+        if (nativeAvailable) {
+          const response = await sendNativeMessage({
+            action: 'recordDom',
+            url: request.url,
+            html: request.html,
+            site: request.site,
+            extractionResult: request.extractionResult
+          });
+          console.log('Cloodoo: DOM recorded for analysis:', response);
+          sendResponse(response);
+        } else {
+          console.log('Cloodoo: Cannot record DOM - native messaging unavailable');
+          sendResponse({ success: false, error: 'Native messaging unavailable' });
+        }
+      } catch (error) {
+        console.log('Cloodoo: Failed to record DOM:', error);
+        sendResponse({ success: false, error: error.message });
+      }
+    })();
+    return true;
+  }
+
+  if (request.action === 'getTags') {
+    // Get list of all unique tags for autocomplete
+    (async () => {
+      try {
+        const nativeAvailable = await checkNativeMessaging();
+        if (nativeAvailable) {
+          const response = await sendNativeMessage({ action: 'getTags' });
+          sendResponse(response);
+        } else {
+          sendResponse({ success: false, error: 'Native messaging unavailable', tags: [] });
+        }
+      } catch (error) {
+        console.log('Cloodoo: Failed to get tags:', error);
+        sendResponse({ success: false, error: error.message, tags: [] });
+      }
+    })();
     return true;
   }
 });

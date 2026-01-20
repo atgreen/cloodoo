@@ -34,7 +34,7 @@
 
 (defun config-file-path ()
   "Return path to the config file."
-  (merge-pathnames "config.lisp" (data-directory)))
+  (merge-pathnames "config.lisp" (config-directory)))
 
 (defun load-config ()
   "Load configuration from config file or return defaults."
@@ -55,7 +55,7 @@
 
 (defun save-config (config)
   "Save configuration to config file."
-  (ensure-data-directory)
+  (ensure-config-directory)
   (let ((config-file (config-file-path)))
     (with-open-file (out config-file :direction :output :if-exists :supersede)
       (format out ";;; Cloodoo LLM Configuration~%")
@@ -93,7 +93,7 @@
   (let ((api-key-env (getf config :api-key-env)))
     (when api-key-env
       ;; Try loading .env files first
-      (let ((env-file (merge-pathnames ".env" (data-directory))))
+      (let ((env-file (merge-pathnames ".env" (config-directory))))
         (when (probe-file env-file)
           (dotenv:load-env env-file)))
       (when (probe-file ".env")
@@ -110,7 +110,8 @@
 
 (defun init-debug-logging ()
   "Initialize debug logging to cloodoo-debug.log file."
-  (let* ((log-file (merge-pathnames "cloodoo-debug.log" (data-directory)))
+  (ensure-cache-directory)
+  (let* ((log-file (merge-pathnames "cloodoo-debug.log" (cache-directory)))
          (file-output (llog:make-file-output (namestring log-file)
                                              :encoder (llog:make-json-encoder)
                                              :buffer-mode :none)))  ; Immediate flush
@@ -123,7 +124,7 @@
 (defun init-enrichment ()
   "Initialize enrichment by loading config and setting up the LLM provider."
   ;; Initialize debug logging first
-  (ensure-data-directory)
+  (ensure-config-directory)
   (init-debug-logging)
 
   (llog:info "Initializing enrichment system")

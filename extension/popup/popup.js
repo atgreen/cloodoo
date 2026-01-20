@@ -1,4 +1,4 @@
-// Cloodoo Gmail Extension - Popup Script
+// Cloodoo Browser Extension - Popup Script
 // SPDX-License-Identifier: MIT
 // Copyright (C) 2026 Anthony Green <green@moxielogic.com>
 
@@ -19,7 +19,132 @@ document.addEventListener('DOMContentLoaded', async () => {
   const pendingCountEl = document.getElementById('pending-count');
   const syncBtn = document.getElementById('sync-btn');
 
+  // Set due date to today by default
+  const today = new Date().toISOString().split('T')[0];
+  dueDateInput.value = today;
+
   let serverOnline = false;
+  let availableTags = [];  // Tags for autocomplete
+
+  // Create autocomplete dropdown
+  const autocompleteList = document.createElement('div');
+  autocompleteList.className = 'autocomplete-list hidden';
+  tagsInput.parentNode.style.position = 'relative';
+  tagsInput.parentNode.appendChild(autocompleteList);
+
+  // Fetch available tags from cloodoo
+  async function fetchTags() {
+    try {
+      const response = await chrome.runtime.sendMessage({ action: 'getTags' });
+      if (response.success && response.tags) {
+        availableTags = response.tags;
+        console.log('Cloodoo: Loaded', availableTags.length, 'tags for autocomplete');
+      }
+    } catch (error) {
+      console.log('Could not fetch tags:', error);
+    }
+  }
+
+  // Get the current word being typed (after last comma/space)
+  function getCurrentWord(input) {
+    const value = input.value;
+    const cursorPos = input.selectionStart;
+    const beforeCursor = value.substring(0, cursorPos);
+    const match = beforeCursor.match(/(?:^|[,\s])([^,\s]*)$/);
+    return match ? match[1] : '';
+  }
+
+  // Replace current word with selected tag
+  function selectTag(tag) {
+    const value = tagsInput.value;
+    const cursorPos = tagsInput.selectionStart;
+    const beforeCursor = value.substring(0, cursorPos);
+    const afterCursor = value.substring(cursorPos);
+
+    // Find where current word starts
+    const match = beforeCursor.match(/(?:^|[,\s])([^,\s]*)$/);
+    if (match) {
+      const wordStart = beforeCursor.length - match[1].length;
+      const newValue = value.substring(0, wordStart) + tag + ', ' + afterCursor.replace(/^[,\s]*/, '');
+      tagsInput.value = newValue.replace(/,\s*$/, '');  // Remove trailing comma
+      tagsInput.focus();
+    }
+    hideAutocomplete();
+  }
+
+  // Show autocomplete suggestions
+  function showAutocomplete(suggestions) {
+    if (suggestions.length === 0) {
+      hideAutocomplete();
+      return;
+    }
+    autocompleteList.innerHTML = '';
+    suggestions.slice(0, 8).forEach((tag, index) => {
+      const item = document.createElement('div');
+      item.className = 'autocomplete-item';
+      item.textContent = tag;
+      if (index === 0) item.classList.add('selected');
+      item.addEventListener('click', () => selectTag(tag));
+      autocompleteList.appendChild(item);
+    });
+    autocompleteList.classList.remove('hidden');
+  }
+
+  function hideAutocomplete() {
+    autocompleteList.classList.add('hidden');
+    autocompleteList.innerHTML = '';
+  }
+
+  // Handle tags input for autocomplete
+  tagsInput.addEventListener('input', () => {
+    const currentWord = getCurrentWord(tagsInput).toLowerCase();
+    if (currentWord.length === 0) {
+      hideAutocomplete();
+      return;
+    }
+    // Filter tags that match and aren't already in the input
+    const existingTags = tagsInput.value.toLowerCase().split(/[,\s]+/).filter(t => t);
+    const suggestions = availableTags.filter(tag =>
+      tag.toLowerCase().startsWith(currentWord) &&
+      !existingTags.includes(tag.toLowerCase())
+    );
+    showAutocomplete(suggestions);
+  });
+
+  // Handle keyboard navigation in autocomplete
+  tagsInput.addEventListener('keydown', (e) => {
+    if (autocompleteList.classList.contains('hidden')) return;
+
+    const items = autocompleteList.querySelectorAll('.autocomplete-item');
+    const selected = autocompleteList.querySelector('.autocomplete-item.selected');
+    const selectedIndex = Array.from(items).indexOf(selected);
+
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      if (selected) selected.classList.remove('selected');
+      const next = items[(selectedIndex + 1) % items.length];
+      next.classList.add('selected');
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      if (selected) selected.classList.remove('selected');
+      const prev = items[(selectedIndex - 1 + items.length) % items.length];
+      prev.classList.add('selected');
+    } else if (e.key === 'Enter' || e.key === 'Tab') {
+      if (selected) {
+        e.preventDefault();
+        selectTag(selected.textContent);
+      }
+    } else if (e.key === 'Escape') {
+      hideAutocomplete();
+    }
+  });
+
+  // Hide autocomplete when clicking outside
+  document.addEventListener('click', (e) => {
+    if (!tagsInput.contains(e.target) && !autocompleteList.contains(e.target)) {
+      hideAutocomplete();
+    }
+  });
   let pageUrl = null;  // Store current page URL
 
   // Check server health and update UI
@@ -86,7 +211,23 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
   }
 
-  // Capture current page URL and optionally extract email data from Gmail
+  // Known email sites where we inject content script
+  const EMAIL_SITES = [
+    'mail.google.com',
+    'outlook.live.com',
+    'outlook.office.com',
+    'outlook.office365.com',
+    'mail.yahoo.com',
+    'mail.proton.me',
+    'mail.zoho.com'
+  ];
+
+  // Check if URL is a known email site
+  function isEmailSite(url) {
+    return EMAIL_SITES.some(site => url.includes(site));
+  }
+
+  // Capture current page URL and optionally extract email data from email sites
   async function capturePageData() {
     try {
       const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -94,8 +235,10 @@ document.addEventListener('DOMContentLoaded', async () => {
         // Always capture the current page URL
         pageUrl = tab.url;
 
-        // If on Gmail, try to extract email-specific data
-        if (tab.url.includes('mail.google.com')) {
+        // If on a known email site, try to extract email-specific data
+        console.log('Cloodoo popup: checking URL', tab.url, 'isEmailSite:', isEmailSite(tab.url));
+        if (isEmailSite(tab.url)) {
+          console.log('Cloodoo popup: requesting email data from content script');
           try {
             const response = await chrome.tabs.sendMessage(tab.id, { action: 'getEmailData' });
             if (response) {
@@ -170,9 +313,17 @@ document.addEventListener('DOMContentLoaded', async () => {
       tags: tags.length > 0 ? tags : null
     };
 
-    // Add due date if set
+    // Add due date if set - use current time with local timezone offset
     if (dueDateInput.value) {
-      todo.due_date = dueDateInput.value + 'T00:00:00Z';
+      const now = new Date();
+      const hours = String(now.getHours()).padStart(2, '0');
+      const minutes = String(now.getMinutes()).padStart(2, '0');
+      const seconds = String(now.getSeconds()).padStart(2, '0');
+      const offset = -now.getTimezoneOffset();
+      const offsetSign = offset >= 0 ? '+' : '-';
+      const offsetHours = String(Math.floor(Math.abs(offset) / 60)).padStart(2, '0');
+      const offsetMins = String(Math.abs(offset) % 60).padStart(2, '0');
+      todo.due_date = `${dueDateInput.value}T${hours}:${minutes}:${seconds}${offsetSign}${offsetHours}:${offsetMins}`;
     }
 
     // Add page URL if available
@@ -221,6 +372,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   // Initialize
   await checkHealth();
   await checkPending();
+  await fetchTags();
   await capturePageData();
   titleInput.focus();
 });

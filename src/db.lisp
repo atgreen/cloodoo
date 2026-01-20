@@ -129,6 +129,12 @@
           ALTER TABLE todos ADD COLUMN repeat_unit TEXT")
       (error () nil))  ; Column already exists
 
+    ;; Migration: add enriching_p column if it doesn't exist
+    (handler-case
+        (sqlite:execute-non-query db "
+          ALTER TABLE todos ADD COLUMN enriching_p INTEGER DEFAULT 0")
+      (error () nil))  ; Column already exists
+
     ;; Index for efficient current state queries
     (sqlite:execute-non-query db "
       CREATE INDEX IF NOT EXISTS idx_todos_current
@@ -178,12 +184,12 @@
    ROW is a list: (row_id id title description priority status scheduled_date
                   due_date tags estimated_minutes location_info url parent_id
                   created_at completed_at valid_from valid_to device_id
-                  repeat_interval repeat_unit)"
+                  repeat_interval repeat_unit enriching_p)"
   (destructuring-bind (row-id id title description priority status
                        scheduled-date due-date tags estimated-minutes
                        location-info url parent-id created-at completed-at
                        valid-from valid-to device-id
-                       &optional repeat-interval repeat-unit) row
+                       &optional repeat-interval repeat-unit enriching-p) row
     (declare (ignore row-id valid-from valid-to))
     (make-instance 'todo
                    :id id
@@ -212,6 +218,7 @@
                                       repeat-interval)
                    :repeat-unit (when (and repeat-unit (not (eq repeat-unit :null)) (stringp repeat-unit))
                                   (intern (string-upcase repeat-unit) :keyword))
+                   :enriching-p (and enriching-p (not (eq enriching-p :null)) (= enriching-p 1))
                    :created-at (lt:parse-timestring created-at)
                    :completed-at (parse-timestamp completed-at))))
 
@@ -224,7 +231,8 @@
       SELECT row_id, id, title, description, priority, status,
              scheduled_date, due_date, tags, estimated_minutes,
              location_info, url, parent_id, created_at, completed_at,
-             valid_from, valid_to, device_id, repeat_interval, repeat_unit
+             valid_from, valid_to, device_id, repeat_interval, repeat_unit,
+             enriching_p
       FROM todos
       WHERE valid_to IS NULL
       ORDER BY created_at DESC")))
@@ -241,7 +249,8 @@
         SELECT row_id, id, title, description, priority, status,
                scheduled_date, due_date, tags, estimated_minutes,
                location_info, url, parent_id, created_at, completed_at,
-               valid_from, valid_to, device_id, repeat_interval, repeat_unit
+               valid_from, valid_to, device_id, repeat_interval, repeat_unit,
+               enriching_p
         FROM todos
         WHERE valid_from <= ?
           AND (valid_to IS NULL OR valid_to > ?)
@@ -284,7 +293,9 @@
         ;; Repeat fields
         (todo-repeat-interval todo)
         (when (todo-repeat-unit todo)
-          (string-downcase (symbol-name (todo-repeat-unit todo))))))
+          (string-downcase (symbol-name (todo-repeat-unit todo))))
+        ;; Enrichment flag
+        (if (todo-enriching-p todo) 1 0)))
 
 (defun db-save-todo (todo)
   "Save a TODO to the database using append-only semantics.
@@ -308,13 +319,13 @@
                                   scheduled_date, due_date, tags, estimated_minutes,
                                   location_info, url, parent_id, created_at,
                                   completed_at, valid_from, valid_to, device_id,
-                                  repeat_interval, repeat_unit)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?)"
+                                  repeat_interval, repeat_unit, enriching_p)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?)"
                (first values) (second values) (third values) (fourth values)
                (fifth values) (sixth values) (seventh values) (eighth values)
                (ninth values) (tenth values) (nth 10 values) (nth 11 values)
                (nth 12 values) (nth 13 values) now (nth 14 values)
-               (nth 15 values) (nth 16 values))
+               (nth 15 values) (nth 16 values) (nth 17 values))
              (sqlite:execute-non-query db "COMMIT")
              (setf committed t))
         (unless committed
@@ -352,13 +363,13 @@
                                       scheduled_date, due_date, tags, estimated_minutes,
                                       location_info, url, parent_id, created_at,
                                       completed_at, valid_from, valid_to, device_id,
-                                      repeat_interval, repeat_unit)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?)"
+                                      repeat_interval, repeat_unit, enriching_p)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?)"
                    (first values) (second values) (third values) (fourth values)
                    (fifth values) (sixth values) (seventh values) (eighth values)
                    (ninth values) (tenth values) (nth 10 values) (nth 11 values)
                    (nth 12 values) (nth 13 values) now (nth 14 values)
-                   (nth 15 values) (nth 16 values))))
+                   (nth 15 values) (nth 16 values) (nth 17 values))))
              (sqlite:execute-non-query db "COMMIT")
              (setf committed t))
         (unless committed
@@ -383,8 +394,10 @@
       (dolist (row (sqlite:execute-to-list db "SELECT slot, tags FROM tag_presets"))
         (destructuring-bind (slot tags) row
           (when (and tags (not (eq tags :null)) (< slot 10))
-            (setf (aref presets slot)
-                  (coerce (jzon:parse tags) 'list)))))
+            (let ((parsed (jzon:parse tags)))
+              ;; Only store if parsed result is an actual sequence (not null symbol)
+              (when (and parsed (not (eq parsed 'null)) (typep parsed 'sequence))
+                (setf (aref presets slot) (coerce parsed 'list)))))))
       presets)))
 
 (defun db-save-presets (presets)
@@ -394,7 +407,8 @@
       (let ((tags (aref presets i)))
         (sqlite:execute-non-query db "
           UPDATE tag_presets SET tags = ? WHERE slot = ?"
-          (when tags (jzon:stringify (coerce tags 'vector)))
+          (when (and tags (listp tags) (not (eq tags 'null)) (not (eq tags :null)))
+            (jzon:stringify (coerce tags 'vector)))
           i)))))
 
 ;;── Migration ─────────────────────────────────────────────────────────────────
@@ -434,13 +448,13 @@
                                             scheduled_date, due_date, tags, estimated_minutes,
                                             location_info, url, parent_id, created_at,
                                             completed_at, valid_from, valid_to, device_id,
-                                            repeat_interval, repeat_unit)
-                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?)"
+                                            repeat_interval, repeat_unit, enriching_p)
+                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?)"
                          (first values) (second values) (third values) (fourth values)
                          (fifth values) (sixth values) (seventh values) (eighth values)
                          (ninth values) (tenth values) (nth 10 values) (nth 11 values)
                          (nth 12 values) (nth 13 values) now (nth 14 values)
-                         (nth 15 values) (nth 16 values))))
+                         (nth 15 values) (nth 16 values) (nth 17 values))))
                    (sqlite:execute-non-query db "COMMIT")
                    (setf committed t))
               (unless committed
@@ -526,7 +540,7 @@
                        scheduled-date due-date tags estimated-minutes
                        location-info url parent-id created-at completed-at
                        valid-from valid-to device-id
-                       &optional repeat-interval repeat-unit) row
+                       &optional repeat-interval repeat-unit enriching-p) row
     (let ((ht (make-hash-table :test #'equal)))
       (setf (gethash "row_id" ht) row-id)
       (setf (gethash "id" ht) id)
@@ -548,6 +562,7 @@
       (setf (gethash "device_id" ht) device-id)
       (setf (gethash "repeat_interval" ht) (db-null-to-json-null repeat-interval))
       (setf (gethash "repeat_unit" ht) (db-null-to-json-null repeat-unit))
+      (setf (gethash "enriching_p" ht) (db-null-to-json-null enriching-p))
       ht)))
 
 (defun db-load-rows-since (timestamp)
@@ -562,7 +577,8 @@
         SELECT row_id, id, title, description, priority, status,
                scheduled_date, due_date, tags, estimated_minutes,
                location_info, url, parent_id, created_at, completed_at,
-               valid_from, valid_to, device_id, repeat_interval, repeat_unit
+               valid_from, valid_to, device_id, repeat_interval, repeat_unit,
+               enriching_p
         FROM todos
         WHERE valid_from > ?
         ORDER BY valid_from ASC" ts)))
@@ -600,8 +616,8 @@
                                               scheduled_date, due_date, tags, estimated_minutes,
                                               location_info, url, parent_id, created_at,
                                               completed_at, valid_from, valid_to, device_id,
-                                              repeat_interval, repeat_unit)
-                           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+                                              repeat_interval, repeat_unit, enriching_p)
+                           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
                            id
                            (gethash "title" row)
                            (gethash "description" row)
@@ -620,7 +636,8 @@
                            valid-to
                            device-id
                            (gethash "repeat_interval" row)
-                           (gethash "repeat_unit" row))
+                           (gethash "repeat_unit" row)
+                           (gethash "enriching_p" row))
                          (incf accepted)))))
                (sqlite:execute-non-query db "COMMIT")
                (setf committed t))

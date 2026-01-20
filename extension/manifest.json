@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "Cloodoo - Gmail TODO Capture",
+  "name": "Cloodoo Browser Extension",
   "version": "1.0.0",
-  "description": "Capture TODOs from Gmail emails directly into Cloodoo",
+  "description": "Capture TODOs from email directly into Cloodoo",
   "author": "Anthony Green <green@moxielogic.com>",
   "permissions": [
     "activeTab",
@@ -12,6 +12,12 @@
   ],
   "host_permissions": [
     "https://mail.google.com/*",
+    "https://outlook.live.com/*",
+    "https://outlook.office.com/*",
+    "https://outlook.office365.com/*",
+    "https://mail.yahoo.com/*",
+    "https://mail.proton.me/*",
+    "https://mail.zoho.com/*",
     "http://127.0.0.1:9876/*"
   ],
   "action": {
@@ -21,7 +27,7 @@
       "48": "icons/icon48.png",
       "128": "icons/icon128.png"
     },
-    "default_title": "Add TODO from Gmail"
+    "default_title": "Add TODO from Email"
   },
   "options_page": "options/options.html",
   "background": {
@@ -29,7 +35,15 @@
   },
   "content_scripts": [
     {
-      "matches": ["https://mail.google.com/*"],
+      "matches": [
+        "https://mail.google.com/*",
+        "https://outlook.live.com/*",
+        "https://outlook.office.com/*",
+        "https://outlook.office365.com/*",
+        "https://mail.yahoo.com/*",
+        "https://mail.proton.me/*",
+        "https://mail.zoho.com/*"
+      ],
       "js": ["content.js"],
       "css": ["content.css"],
       "run_at": "document_end"

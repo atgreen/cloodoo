@@ -303,6 +303,145 @@
                          (tui:bold (tui:colored (format nil "~D" overdue) :fg tui:*fg-red*))))
                 (format t "~%")))))
 
+(defun make-compact-command ()
+  "Create the 'compact' subcommand."
+  (let ((yes-opt (clingon:make-option
+                  :flag
+                  :short-name #\y
+                  :long-name "yes"
+                  :key :yes
+                  :description "Skip confirmation prompt")))
+    (clingon:make-command
+     :name "compact"
+     :description "Remove old versions from the database to reclaim space"
+     :options (list yes-opt)
+     :handler (lambda (cmd)
+                (block nil
+                  (let ((skip-confirm (clingon:getopt cmd :yes)))
+                    (ensure-db-initialized)
+                  (with-db (db)
+                    ;; Count before
+                    (let ((before (caar (sqlite:execute-to-list db "SELECT COUNT(*) FROM todos")))
+                          (current (caar (sqlite:execute-to-list db "SELECT COUNT(*) FROM todos WHERE valid_to IS NULL"))))
+                      (format t "Current todos: ~D~%" current)
+                      (format t "Total rows before: ~D~%" before)
+                      (format t "Old versions to remove: ~D~%~%" (- before current))
+                      (when (= before current)
+                        (format t "Nothing to compact.~%")
+                        (return))
+                      ;; Ask for confirmation unless --yes flag
+                      (unless skip-confirm
+                        (format t "This will permanently delete ~D old versions.~%" (- before current))
+                        (format t "This cannot be undone. Continue? [y/N] ")
+                        (finish-output)
+                        (let ((response (read-line *standard-input* nil "")))
+                          (unless (member response '("y" "Y" "yes" "Yes" "YES") :test #'string=)
+                            (format t "Aborted.~%")
+                            (return))))
+                      ;; Delete superseded rows
+                      (sqlite:execute-non-query db "DELETE FROM todos WHERE valid_to IS NOT NULL")
+                      ;; Vacuum to reclaim space
+                      (sqlite:execute-non-query db "VACUUM")
+                      ;; Count after
+                      (let ((after (caar (sqlite:execute-to-list db "SELECT COUNT(*) FROM todos"))))
+                        (format t "~%Total rows after: ~D~%" after)
+                        (format t "Removed ~D old versions.~%" (- before after)))))))))))
+
+(defun sql-escape-string (str)
+  "Escape a string for SQL insertion (single quotes doubled)."
+  (if (or (null str) (eq str :null))
+      "NULL"
+      (format nil "'~A'" (str:replace-all "'" "''" str))))
+
+(defun make-dump-command ()
+  "Create the 'dump' subcommand."
+  (clingon:make-command
+   :name "dump"
+   :description "Dump the SQLite database as SQL statements"
+   :handler (lambda (cmd)
+              (declare (ignore cmd))
+              (ensure-db-initialized)
+              (format t "-- Cloodoo database dump~%")
+              (format t "-- Generated: ~A~%~%" (lt:format-rfc3339-timestring nil (lt:now)))
+              (format t "BEGIN TRANSACTION;~%~%")
+              ;; Output schema
+              (format t "-- Table: todos~%")
+              (format t "CREATE TABLE IF NOT EXISTS todos (
+  row_id INTEGER PRIMARY KEY AUTOINCREMENT,
+  id TEXT NOT NULL,
+  title TEXT NOT NULL,
+  description TEXT,
+  priority TEXT NOT NULL DEFAULT 'medium',
+  status TEXT NOT NULL DEFAULT 'pending',
+  scheduled_date TEXT,
+  due_date TEXT,
+  tags TEXT,
+  estimated_minutes INTEGER,
+  location_info TEXT,
+  url TEXT,
+  parent_id TEXT,
+  created_at TEXT NOT NULL,
+  completed_at TEXT,
+  valid_from TEXT NOT NULL,
+  valid_to TEXT,
+  device_id TEXT,
+  repeat_interval INTEGER,
+  repeat_unit TEXT,
+  enriching_p INTEGER DEFAULT 0
+);~%~%")
+              (format t "-- Table: tag_presets~%")
+              (format t "CREATE TABLE IF NOT EXISTS tag_presets (
+  slot INTEGER PRIMARY KEY,
+  tags TEXT
+);~%~%")
+              (with-db (db)
+                ;; Dump todos data
+                (format t "-- Data: todos~%")
+                (let ((rows (sqlite:execute-to-list db "
+                  SELECT id, title, description, priority, status,
+                         scheduled_date, due_date, tags, estimated_minutes,
+                         location_info, url, parent_id, created_at, completed_at,
+                         valid_from, valid_to, device_id, repeat_interval, repeat_unit, enriching_p
+                  FROM todos
+                  WHERE valid_to IS NULL
+                  ORDER BY created_at")))
+                  (dolist (row rows)
+                    (destructuring-bind (id title description priority status
+                                         scheduled-date due-date tags estimated-minutes
+                                         location-info url parent-id created-at completed-at
+                                         valid-from valid-to device-id repeat-interval repeat-unit enriching-p) row
+                      (format t "INSERT INTO todos (id, title, description, priority, status, scheduled_date, due_date, tags, estimated_minutes, location_info, url, parent_id, created_at, completed_at, valid_from, valid_to, device_id, repeat_interval, repeat_unit, enriching_p) VALUES (~A, ~A, ~A, ~A, ~A, ~A, ~A, ~A, ~A, ~A, ~A, ~A, ~A, ~A, ~A, ~A, ~A, ~A, ~A, ~A);~%"
+                              (sql-escape-string id)
+                              (sql-escape-string title)
+                              (sql-escape-string description)
+                              (sql-escape-string priority)
+                              (sql-escape-string status)
+                              (sql-escape-string scheduled-date)
+                              (sql-escape-string due-date)
+                              (sql-escape-string tags)
+                              (if (or (null estimated-minutes) (eq estimated-minutes :null)) "NULL" estimated-minutes)
+                              (sql-escape-string location-info)
+                              (sql-escape-string url)
+                              (sql-escape-string parent-id)
+                              (sql-escape-string created-at)
+                              (sql-escape-string completed-at)
+                              (sql-escape-string valid-from)
+                              (sql-escape-string valid-to)
+                              (sql-escape-string device-id)
+                              (if (or (null repeat-interval) (eq repeat-interval :null)) "NULL" repeat-interval)
+                              (sql-escape-string repeat-unit)
+                              (if (or (null enriching-p) (eq enriching-p :null)) "0" enriching-p))))
+                  (format t "~%-- ~D todos exported~%~%" (length rows)))
+                ;; Dump tag_presets data
+                (format t "-- Data: tag_presets~%")
+                (let ((presets (sqlite:execute-to-list db "SELECT slot, tags FROM tag_presets ORDER BY slot")))
+                  (dolist (preset presets)
+                    (format t "INSERT INTO tag_presets (slot, tags) VALUES (~A, ~A);~%"
+                            (first preset)
+                            (sql-escape-string (second preset))))
+                  (format t "~%-- ~D presets exported~%~%" (length presets))))
+              (format t "COMMIT;~%"))))
+
 (defun make-server-command ()
   "Create the 'server' subcommand."
   (let ((port-opt (clingon:make-option
@@ -380,7 +519,7 @@
 
 (defun native-host-log (format-string &rest args)
   "Write debug log for native messaging host."
-  (let ((log-file (merge-pathnames "native-host.log" (data-directory))))
+  (let ((log-file (merge-pathnames "native-host.log" (cache-directory))))
     (ensure-directories-exist log-file)
     (with-open-file (stream log-file
                             :direction :output
@@ -481,6 +620,93 @@
           (setf (gethash "error" response) "Missing title")
           response))))
 
+(defun dom-samples-directory ()
+  "Return the directory for storing DOM samples for analysis."
+  (ensure-cache-directory)
+  (merge-pathnames "dom-samples/" (cache-directory)))
+
+(defun handle-native-record-dom (message)
+  "Handle a recordDom message from the browser extension.
+   Saves the DOM/HTML content for later analysis to improve extraction."
+  (let* ((url (gethash "url" message))
+         (html (gethash "html" message))
+         (site (gethash "site" message))  ; e.g., 'gmail', 'outlook'
+         (extraction-result (gethash "extractionResult" message)))
+    (if (and url html)
+        (handler-case
+            (let* ((samples-dir (dom-samples-directory))
+                   (timestamp (lt:format-timestring nil (lt:now)
+                                :format '(:year :month :day "-" :hour :min :sec)))
+                   (safe-site (or site "unknown"))
+                   (filename (format nil "~A-~A.html" safe-site timestamp))
+                   (filepath (merge-pathnames filename samples-dir))
+                   (meta-filepath (merge-pathnames (format nil "~A-~A.json" safe-site timestamp)
+                                                   samples-dir)))
+              ;; Ensure directory exists
+              (ensure-directories-exist filepath)
+              ;; Write HTML content
+              (with-open-file (stream filepath
+                                      :direction :output
+                                      :if-exists :supersede
+                                      :if-does-not-exist :create
+                                      :external-format :utf-8)
+                (write-string html stream))
+              ;; Write metadata
+              (with-open-file (stream meta-filepath
+                                      :direction :output
+                                      :if-exists :supersede
+                                      :if-does-not-exist :create
+                                      :external-format :utf-8)
+                (let ((meta (make-hash-table :test #'equal)))
+                  (setf (gethash "url" meta) url)
+                  (setf (gethash "site" meta) safe-site)
+                  (setf (gethash "timestamp" meta) timestamp)
+                  (setf (gethash "extractionResult" meta) extraction-result)
+                  (write-string (jzon:stringify meta) stream)))
+              (native-host-log "Saved DOM sample: ~A" filename)
+              (let ((response (make-hash-table :test #'equal)))
+                (setf (gethash "success" response) t)
+                (setf (gethash "filename" response) filename)
+                response))
+          (error (e)
+            (native-host-log "Error saving DOM: ~A" e)
+            (let ((response (make-hash-table :test #'equal)))
+              (setf (gethash "success" response) nil)
+              (setf (gethash "error" response) (format nil "~A" e))
+              response)))
+        ;; Missing required fields
+        (let ((response (make-hash-table :test #'equal)))
+          (setf (gethash "success" response) nil)
+          (setf (gethash "error" response) "Missing url or html")
+          response))))
+
+(defun handle-native-get-tags (message)
+  "Handle a getTags message from the browser extension.
+   Returns a list of all unique tags used across todos."
+  (declare (ignore message))
+  (handler-case
+      (let* ((todos (load-todos))
+             (all-tags (make-hash-table :test #'equal)))
+        ;; Collect unique tags from all todos
+        (dolist (todo todos)
+          (dolist (tag (todo-tags todo))
+            (when (and tag (stringp tag))
+              (setf (gethash tag all-tags) t))))
+        ;; Convert to sorted list
+        (let ((tags-list (sort (loop for tag being the hash-keys of all-tags
+                                     collect tag)
+                               #'string<)))
+          (let ((response (make-hash-table :test #'equal)))
+            (setf (gethash "success" response) t)
+            (setf (gethash "tags" response) (coerce tags-list 'vector))
+            response)))
+    (error (e)
+      (native-host-log "Error getting tags: ~A" e)
+      (let ((response (make-hash-table :test #'equal)))
+        (setf (gethash "success" response) nil)
+        (setf (gethash "error" response) (format nil "~A" e))
+        response))))
+
 (defun make-native-host-command ()
   "Create the 'native-host' subcommand for browser extension native messaging."
   (clingon:make-command
@@ -520,6 +746,12 @@
                                             (setf (gethash "success" r) t)
                                             (setf (gethash "pong" r) t)
                                             r))
+                                         ((string= action "recordDom")
+                                          (native-host-log "Recording DOM sample...")
+                                          (handle-native-record-dom message))
+                                         ((string= action "getTags")
+                                          (native-host-log "Getting tags...")
+                                          (handle-native-get-tags message))
                                          (t
                                           (native-host-log "Unknown action: ~A" action)
                                           (let ((r (make-hash-table :test #'equal)))
@@ -551,6 +783,9 @@
   (or
    ;; Check if we're running from a known location
    (let ((exe (merge-pathnames "cloodoo" (uiop:getcwd))))
+     (when (probe-file exe) (namestring exe)))
+   ;; Check the git/cluedo build directory
+   (let ((exe (merge-pathnames "git/cluedo/cloodoo" (user-homedir-pathname))))
      (when (probe-file exe) (namestring exe)))
    ;; Check common install locations
    (let ((exe "/usr/local/bin/cloodoo"))
@@ -707,6 +942,8 @@
                        (make-list-command)
                        (make-done-command)
                        (make-stats-command)
+                       (make-dump-command)
+                       (make-compact-command)
                        (make-server-command)
                        (make-enrich-pending-command)
                        (make-native-host-command)

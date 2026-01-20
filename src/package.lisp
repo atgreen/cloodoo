@@ -37,6 +37,11 @@
    #:load-todos
    #:save-todos
    #:data-directory
+   #:config-directory
+   #:cache-directory
+   #:ensure-data-directory
+   #:ensure-config-directory
+   #:ensure-cache-directory
 
    ;; Server
    #:start-server

@@ -6,11 +6,98 @@
 
 (in-package #:cloodoo)
 
-;;── Data Directory ─────────────────────────────────────────────────────────────
+;;── Platform-Aware Directory Support ──────────────────────────────────────────
+;;
+;; On Unix/Linux: Uses XDG Base Directory Specification
+;;   - Data:   $XDG_DATA_HOME/cloodoo/   (default ~/.local/share/cloodoo/)
+;;   - Config: $XDG_CONFIG_HOME/cloodoo/ (default ~/.config/cloodoo/)
+;;   - Cache:  $XDG_CACHE_HOME/cloodoo/  (default ~/.cache/cloodoo/)
+;;
+;; On Windows: Uses %APPDATA%
+;;   - All:    %APPDATA%\cloodoo\
+;;
+;; Legacy ~/.cloodoo/ is supported for backward compatibility on Unix.
+
+(defun windowsp ()
+  "Return T if running on Windows."
+  (member :windows *features*))
+
+(defun legacy-data-directory ()
+  "Return the legacy ~/.cloodoo/ directory path."
+  (merge-pathnames ".cloodoo/" (user-homedir-pathname)))
+
+(defun windows-appdata ()
+  "Return Windows %APPDATA% directory."
+  (let ((appdata (uiop:getenv "APPDATA")))
+    (when (and appdata (> (length appdata) 0))
+      (pathname (if (str:ends-with-p "\\" appdata)
+                    appdata
+                    (concatenate 'string appdata "\\"))))))
+
+(defun xdg-data-home ()
+  "Return XDG_DATA_HOME or default ~/.local/share/"
+  (let ((env (uiop:getenv "XDG_DATA_HOME")))
+    (if (and env (> (length env) 0))
+        (uiop:ensure-directory-pathname env)
+        (merge-pathnames ".local/share/" (user-homedir-pathname)))))
+
+(defun xdg-config-home ()
+  "Return XDG_CONFIG_HOME or default ~/.config/"
+  (let ((env (uiop:getenv "XDG_CONFIG_HOME")))
+    (if (and env (> (length env) 0))
+        (uiop:ensure-directory-pathname env)
+        (merge-pathnames ".config/" (user-homedir-pathname)))))
+
+(defun xdg-cache-home ()
+  "Return XDG_CACHE_HOME or default ~/.cache/"
+  (let ((env (uiop:getenv "XDG_CACHE_HOME")))
+    (if (and env (> (length env) 0))
+        (uiop:ensure-directory-pathname env)
+        (merge-pathnames ".cache/" (user-homedir-pathname)))))
 
 (defun data-directory ()
-  "Return the path to the cloodoo data directory."
-  (merge-pathnames ".cloodoo/" (user-homedir-pathname)))
+  "Return the path to the cloodoo data directory.
+   On Windows: %APPDATA%\\cloodoo\\
+   On Unix: XDG_DATA_HOME/cloodoo/ (default ~/.local/share/cloodoo/)
+   Falls back to legacy ~/.cloodoo/ if it exists and new location doesn't."
+  (if (windowsp)
+      ;; Windows: use %APPDATA%\cloodoo\
+      (let ((appdata (windows-appdata)))
+        (if appdata
+            (merge-pathnames "cloodoo/" appdata)
+            (legacy-data-directory)))
+      ;; Unix: use XDG with legacy fallback
+      (let ((xdg-dir (merge-pathnames "cloodoo/" (xdg-data-home)))
+            (legacy-dir (legacy-data-directory)))
+        (if (or (probe-file xdg-dir)
+                (not (probe-file legacy-dir)))
+            xdg-dir
+            legacy-dir))))
+
+(defun config-directory ()
+  "Return the path to the cloodoo config directory.
+   On Windows: %APPDATA%\\cloodoo\\
+   On Unix: XDG_CONFIG_HOME/cloodoo/ (default ~/.config/cloodoo/)"
+  (if (windowsp)
+      (data-directory)  ; Windows uses same dir for data and config
+      ;; Unix: use XDG with legacy fallback
+      (let ((xdg-dir (merge-pathnames "cloodoo/" (xdg-config-home)))
+            (legacy-dir (legacy-data-directory)))
+        (if (or (probe-file xdg-dir)
+                (not (probe-file legacy-dir)))
+            xdg-dir
+            legacy-dir))))
+
+(defun cache-directory ()
+  "Return the path to the cloodoo cache directory.
+   On Windows: %LOCALAPPDATA%\\cloodoo\\
+   On Unix: XDG_CACHE_HOME/cloodoo/ (default ~/.cache/cloodoo/)"
+  (if (windowsp)
+      (let ((localappdata (uiop:getenv "LOCALAPPDATA")))
+        (if (and localappdata (> (length localappdata) 0))
+            (merge-pathnames "cloodoo/" (uiop:ensure-directory-pathname localappdata))
+            (data-directory)))
+      (merge-pathnames "cloodoo/" (xdg-cache-home))))
 
 (defun todos-file ()
   "Return the path to the todos.json file."
@@ -18,11 +105,19 @@
 
 (defun user-context-file ()
   "Return the path to the user context file."
-  (merge-pathnames "context.txt" (data-directory)))
+  (merge-pathnames "context.txt" (config-directory)))
 
 (defun ensure-data-directory ()
   "Ensure the data directory exists."
   (ensure-directories-exist (data-directory)))
+
+(defun ensure-config-directory ()
+  "Ensure the config directory exists."
+  (ensure-directories-exist (config-directory)))
+
+(defun ensure-cache-directory ()
+  "Ensure the cache directory exists."
+  (ensure-directories-exist (cache-directory)))
 
 ;;── Serialization ──────────────────────────────────────────────────────────────
 
