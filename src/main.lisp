@@ -38,11 +38,11 @@
     #+sbcl
     (handler-bind ((warning #'muffle-warning))
       (let* ((model (make-initial-model))
-             (program (tui:make-program model :alt-screen t)))
+             (program (tui:make-program model :alt-screen t :mouse :cell-motion)))
         (tui:run program)))
     #-sbcl
     (let* ((model (make-initial-model))
-           (program (tui:make-program model :alt-screen t)))
+           (program (tui:make-program model :alt-screen t :mouse :cell-motion)))
       (tui:run program))))
 
 ;;── Entry Point ────────────────────────────────────────────────────────────────

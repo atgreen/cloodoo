@@ -17,6 +17,7 @@
 (defconstant +status-completed+ :completed)
 (defconstant +status-waiting+ :waiting)
 (defconstant +status-cancelled+ :cancelled)
+(defconstant +status-deleted+ :deleted)
 
 ;;── TODO Class ─────────────────────────────────────────────────────────────────
 
@@ -133,6 +134,28 @@
   (format nil "~A-~A"
           (get-universal-time)
           (random 100000)))
+
+(defun parse-tags (input)
+  "Parse tags from INPUT, splitting on whitespace and commas.
+   INPUT can be a string, a list of strings, or nil.
+   Returns a flat list of non-empty tag strings."
+  (cond
+    ((null input) nil)
+    ((stringp input)
+     ;; Split string on whitespace and commas using regex
+     (let ((result nil))
+       (dolist (part (cl-ppcre:split "[\\s,]+" input))
+         (when (> (length part) 0)
+           (push part result)))
+       (nreverse result)))
+    ((listp input)
+     ;; Process each element and flatten
+     (let ((result nil))
+       (dolist (item input)
+         (dolist (tag (parse-tags item))
+           (push tag result)))
+       (nreverse result)))
+    (t nil)))
 
 (defun make-todo (title &key description priority scheduled-date due-date tags estimated-minutes location-info url parent-id device-id repeat-interval repeat-unit)
   "Create a new TODO item with the given properties."

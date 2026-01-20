@@ -10,6 +10,8 @@
 
 (defconstant +header-lines+ 3
   "Number of lines each date category header takes (top border, content, bottom border).")
+(defconstant +list-top-lines+ 2
+  "Number of lines above the list viewport (title and date header).")
 
 ;;── Application State (Model) ──────────────────────────────────────────────────
 
@@ -29,6 +31,10 @@
    :initform :list
    :accessor model-view-state
     :documentation "Current view: :list, :detail, :add, :edit, :help, :search, :delete-confirm, :delete-done-confirm, :import, :edit-date, :add-scheduled-date, :add-due-date.")
+   (detail-urls
+    :initform nil
+    :accessor model-detail-urls
+    :documentation "List of (start-line end-line url) for clickable URLs in detail view.")
    (filter-status
     :initarg :filter-status
     :initform nil
@@ -69,6 +75,10 @@
     :initform 0
     :accessor model-scroll-offset
     :documentation "Scroll offset for the list view.")
+   (scrollbar-dragging
+    :initform nil
+    :accessor model-scrollbar-dragging
+    :documentation "Non-nil when dragging the scrollbar.")
    ;; Text input for add/edit/search
    (title-input
     :initform nil
@@ -248,16 +258,37 @@
 
 ;;── Tag Filtering ─────────────────────────────────────────────────────────────
 
-(defun filter-todos-by-tags (todos selected-tags)
-  "Filter todos to those matching ANY selected tag.
+(defun filter-todos-by-tags (todos selected-tags all-todos)
+  "Filter todos to those matching ANY selected tag (using effective tags for children).
    Empty selection = show all."
   (if (zerop (hash-table-count selected-tags))
       todos
       (remove-if-not
        (lambda (todo)
          (some (lambda (tag) (gethash tag selected-tags))
-               (todo-tags todo)))
+               (get-effective-tags todo all-todos)))
        todos)))
+
+;;── Child Task Helpers ────────────────────────────────────────────────────────
+
+(defun editing-child-p (model)
+  "Return T if currently editing or adding a child task."
+  (or (model-pending-parent-id model)
+      (and (model-edit-todo-id model)
+           (let ((todo (find (model-edit-todo-id model) (model-todos model)
+                             :key #'todo-id :test #'equal)))
+             (and todo (todo-parent-id todo))))))
+
+(defun get-effective-tags (todo all-todos)
+  "Get the effective tags for a todo. For children, returns parent's tags."
+  (if (todo-parent-id todo)
+      ;; Child task - get tags from parent (walking up if needed)
+      (let ((parent (find (todo-parent-id todo) all-todos :key #'todo-id :test #'equal)))
+        (if parent
+            (get-effective-tags parent all-todos)
+            nil))
+      ;; Top-level task - return its own tags
+      (todo-tags todo)))
 
 ;;── Tag Autocomplete Helpers ──────────────────────────────────────────────────
 
@@ -290,9 +321,11 @@
                (> (length query) 0)))))
 
 (defun add-tag-to-edit-tags (model tag)
-  "Add a tag to the edit-tags list if not already present."
-  (unless (member tag (model-edit-tags model) :test #'string=)
-    (push tag (model-edit-tags model)))
+  "Add tag(s) to the edit-tags list if not already present.
+   TAG is parsed to split on whitespace/commas into multiple tags."
+  (dolist (parsed-tag (parse-tags tag))
+    (unless (member parsed-tag (model-edit-tags model) :test #'string=)
+      (push parsed-tag (model-edit-tags model))))
   ;; Clear input and update dropdown
   (tui.textinput:textinput-set-value (model-tags-input model) "")
   (setf (model-tag-dropdown-visible model) nil)
@@ -306,8 +339,13 @@
 ;;── Filtering and Sorting ─────────────────────────────────────────────────────
 
 (defun filter-todos (todos &key status priority search-query)
-  "Filter todos by status, priority, and search query."
+  "Filter todos by status, priority, and search query.
+   Deleted items are always excluded."
   (let ((result todos))
+    ;; Always exclude deleted items
+    (setf result (remove-if (lambda (todo)
+                              (eq (todo-status todo) :deleted))
+                            result))
     (when status
       (setf result (remove-if-not (lambda (todo)
                                     (eq (todo-status todo) status))
@@ -387,12 +425,27 @@
   "Mark the visible todos cache as dirty so it will be regenerated."
   (setf (model-visible-todos-dirty model) t))
 
+(defun add-parent-chain-to-group (todo all-todos group-set)
+  "Add the parent chain of TODO to GROUP-SET (a hash table of todo-ids).
+   Returns list of parent todos added (for ordering purposes)."
+  (let ((added nil)
+        (parent-id (todo-parent-id todo)))
+    (loop while parent-id
+          for parent = (find parent-id all-todos :key #'todo-id :test #'equal)
+          while parent
+          unless (gethash (todo-id parent) group-set)
+          do (setf (gethash (todo-id parent) group-set) parent)
+             (push parent added)
+          do (setf parent-id (todo-parent-id parent)))
+    added))
+
 (defun compute-visible-todos-grouped (model)
   "Compute the grouped list of visible todos after filtering, sorting, and collapsing.
-   Returns an alist of (category . todo-ids) preserving display order."
+   Returns an alist of (category . todo-ids) preserving display order.
+   When children appear in a group, their parent chain is included for context."
   (let* ((all-todos (model-todos model))
-         ;; Apply tag filter first
-         (tag-filtered (filter-todos-by-tags all-todos (model-selected-tags model)))
+         ;; Apply tag filter first (using all-todos for effective tags lookup)
+         (tag-filtered (filter-todos-by-tags all-todos (model-selected-tags model) all-todos))
          (filtered (filter-todos tag-filtered
                                  :status (model-filter-status model)
                                  :priority (model-filter-priority model)
@@ -403,15 +456,33 @@
     (dolist (group groups)
       (let* ((category (car group))
              (group-todos (cdr group))
-             ;; Order hierarchically within each group
-             (ordered (order-todos-hierarchically group-todos))
-             (visible-ids nil))
-        (dolist (todo ordered)
-          ;; Skip if any ancestor is collapsed
-          (unless (any-ancestor-collapsed-p model all-todos todo)
-            (push (todo-id todo) visible-ids)))
-        (when visible-ids
-          (push (cons category (nreverse visible-ids)) result))))
+             ;; Build a set of todos in this group, then add parent chains
+             (group-set (make-hash-table :test #'equal)))
+        ;; First add all todos that belong to this group by date
+        (dolist (todo group-todos)
+          (setf (gethash (todo-id todo) group-set) todo))
+        ;; Then add parent chains for any children in the group
+        (dolist (todo group-todos)
+          (when (todo-parent-id todo)
+            (add-parent-chain-to-group todo all-todos group-set)))
+        ;; Collect all todos now in the group
+        (let ((expanded-group nil))
+          (maphash (lambda (id todo)
+                     (declare (ignore id))
+                     (push todo expanded-group))
+                   group-set)
+          ;; Sort top-level items by priority, then order hierarchically
+          (let* ((top-level (remove-if #'todo-parent-id expanded-group))
+                 (children (remove-if-not #'todo-parent-id expanded-group))
+                 (sorted-top (sort-todos top-level :priority t))
+                 (ordered (order-todos-hierarchically (append sorted-top children)))
+                 (visible-ids nil))
+            (dolist (todo ordered)
+              ;; Skip if any ancestor is collapsed
+              (unless (any-ancestor-collapsed-p model all-todos todo)
+                (push (todo-id todo) visible-ids)))
+            (when visible-ids
+              (push (cons category (nreverse visible-ids)) result))))))
     (nreverse result)))
 
 (defun get-visible-todos-grouped (model)
@@ -487,6 +558,22 @@
           (incf line-idx))))
     0))
 
+(defun cursor-index-for-line (groups line-idx)
+  "Return the cursor index for a given 0-based line index, or NIL if none."
+  (let ((current 0)
+        (line 0))
+    (dolist (group groups)
+      ;; Header lines
+      (when (< line-idx (+ line +header-lines+))
+        (return-from cursor-index-for-line nil))
+      (incf line +header-lines+)
+      (dolist (todo (cdr group))
+        (when (= line-idx line)
+          (return-from cursor-index-for-line current))
+        (incf current)
+        (incf line)))
+    nil))
+
 (defun adjust-scroll (model viewport-height)
   "Adjust scroll offset to keep selected item visible."
   (let* ((cursor (model-cursor model))
@@ -508,6 +595,36 @@
       ;; Clamp to max offset
       ((> offset max-offset)
        (setf (model-scroll-offset model) max-offset)))))
+
+(defun scroll-to-y-position (model y-pos viewport-height)
+  "Scroll the list to position based on Y coordinate in the scrollbar area."
+  (let* ((todos (get-visible-todos model))
+         (groups (group-todos-by-date todos))
+         (num-lines (max 1 (+ (length todos) (* (length groups) +header-lines+))))
+         (max-offset (max 0 (- num-lines viewport-height)))
+         (scroll-percent (/ (float y-pos) (max 1 (1- viewport-height))))
+         (new-offset (round (* scroll-percent max-offset))))
+    (setf (model-scroll-offset model) (max 0 (min max-offset new-offset)))))
+
+(defun get-todo-urls (todo)
+  "Extract all URLs from a todo as a list."
+  (let ((urls nil))
+    (when (todo-url todo)
+      (push (todo-url todo) urls))
+    (when (todo-location-info todo)
+      (let ((loc (todo-location-info todo)))
+        (when (getf loc :website)
+          (push (getf loc :website) urls))
+        (when (getf loc :map-url)
+          (push (getf loc :map-url) urls))))
+    (nreverse urls)))
+
+(defun open-url (url)
+  "Open URL in the system default browser."
+  (let ((command #+linux "xdg-open"
+                 #+darwin "open"
+                 #-(or linux darwin) "xdg-open"))
+    (uiop:launch-program (list command url))))
 
 ;;── TEA Methods ───────────────────────────────────────────────────────────────
 
@@ -873,8 +990,8 @@
            (tui.textinput:textinput-blur (model-description-input model))))
        (values model nil))
 
-      ;; Delete selected TODO
-      ((and (characterp key) (char= key #\d))
+      ;; Delete selected TODO (DEL key)
+      ((eq key :delete)
        (when (< (model-cursor model) (length todos))
          (setf (model-view-state model) :delete-confirm))
        (values model nil))
@@ -938,12 +1055,12 @@
            (setf (model-active-field model) :title)
            ;; Store parent-id for the new todo
            (setf (model-pending-parent-id model) (todo-id parent-todo))
-           ;; Clear date and repeat fields
+           ;; Clear scheduled date but inherit due date from parent
            (setf (model-edit-scheduled-date model) nil)
-           (setf (model-edit-due-date model) nil)
+           (setf (model-edit-due-date model) (todo-due-date parent-todo))
            (setf (model-edit-repeat-interval model) nil)
            (setf (model-edit-repeat-unit model) nil)
-           ;; Clear tags fields
+           ;; Child tasks don't have their own tags - they inherit from parent
            (setf (model-edit-tags model) nil)
            (tui.textinput:textinput-set-value (model-tags-input model) "")
            (setf (model-tag-dropdown-visible model) nil)
@@ -1169,24 +1286,52 @@
          (:due
           (setf (model-active-field model) :repeat))
          (:repeat
-          (setf (model-active-field model) :tags)
-          (tui.textinput:textinput-focus (model-tags-input model))
-          (update-tag-dropdown model))
+          ;; Skip tags for child tasks (they inherit from parent)
+          (if (editing-child-p model)
+              (progn
+                (setf (model-active-field model) :title)
+                (tui.textinput:textinput-focus (model-title-input model)))
+              (progn
+                (setf (model-active-field model) :tags)
+                (tui.textinput:textinput-focus (model-tags-input model))
+                (update-tag-dropdown model))))
          (:tags
-          (setf (model-active-field model) :title)
-          (tui.textinput:textinput-blur (model-tags-input model))
-          (setf (model-tag-dropdown-visible model) nil)
-          (tui.textinput:textinput-focus (model-title-input model))))
+          ;; Tab in tags field: complete tag if input present, else move to next field
+          (let* ((query (tui.textinput:textinput-value (model-tags-input model)))
+                 (filtered (model-tag-dropdown-filtered model))
+                 (cursor (model-tag-dropdown-cursor model))
+                 (has-completion (or (and (model-tag-dropdown-visible model)
+                                          (> (length filtered) 0))
+                                     (> (length query) 0))))
+            (if has-completion
+                ;; Complete the tag (same logic as Enter)
+                (progn
+                  (cond
+                    ((and (model-tag-dropdown-visible model) (> (length filtered) 0))
+                     (add-tag-to-edit-tags model (nth cursor filtered)))
+                    ((> (length query) 0)
+                     (add-tag-to-edit-tags model query)))
+                  (update-tag-dropdown model))
+                ;; No input - move to next field
+                (progn
+                  (setf (model-active-field model) :title)
+                  (tui.textinput:textinput-blur (model-tags-input model))
+                  (setf (model-tag-dropdown-visible model) nil)
+                  (tui.textinput:textinput-focus (model-title-input model)))))))
        (values model nil))
 
       ;; Shift+Tab to previous field
       ((eq key :backtab)
        (case (model-active-field model)
          (:title
-          (setf (model-active-field model) :tags)
+          ;; Skip tags for child tasks (they inherit from parent)
           (tui.textinput:textinput-blur (model-title-input model))
-          (tui.textinput:textinput-focus (model-tags-input model))
-          (update-tag-dropdown model))
+          (if (editing-child-p model)
+              (setf (model-active-field model) :repeat)
+              (progn
+                (setf (model-active-field model) :tags)
+                (tui.textinput:textinput-focus (model-tags-input model))
+                (update-tag-dropdown model))))
          (:description
           (setf (model-active-field model) :title)
           (tui.textinput:textinput-blur (model-description-input model))
@@ -1300,8 +1445,13 @@
        (values model nil))
 
       ;; Tags field: Enter to select from dropdown OR create new tag
+      ;; If nothing to complete, fall through to form submit
       ((and (eq (model-active-field model) :tags)
-            (eq key :enter))
+            (eq key :enter)
+            (let ((query (tui.textinput:textinput-value (model-tags-input model)))
+                  (filtered (model-tag-dropdown-filtered model)))
+              (or (and (model-tag-dropdown-visible model) (> (length filtered) 0))
+                  (> (length query) 0))))
        (let* ((query (tui.textinput:textinput-value (model-tags-input model)))
               (filtered (model-tag-dropdown-filtered model))
               (cursor (model-tag-dropdown-cursor model)))
@@ -1359,8 +1509,9 @@
                    ;; Save repeat settings
                    (setf (todo-repeat-interval todo) (model-edit-repeat-interval model))
                    (setf (todo-repeat-unit todo) (model-edit-repeat-unit model))
-                   ;; Save tags
-                   (setf (todo-tags todo) (reverse (model-edit-tags model)))
+                   ;; Save tags (but not for child tasks - they inherit from parent)
+                   (unless (todo-parent-id todo)
+                     (setf (todo-tags todo) (reverse (model-edit-tags model))))
                    (save-todos (model-todos model))
                    ;; Refresh tags cache since tags may have changed
                    (refresh-tags-cache model))
@@ -1573,7 +1724,8 @@
 ;;── Delete Confirm Key Handling ────────────────────────────────────────────────
 
 (defun handle-delete-confirm-keys (model msg)
-  "Handle keyboard input in delete confirmation."
+  "Handle keyboard input in delete confirmation.
+   Deletion is a status change to :deleted, not removal from database."
   (let ((key (tui:key-msg-key msg))
         (todos (get-visible-todos model)))
     (cond
@@ -1585,11 +1737,13 @@
                 ;; Get all descendants to delete as well
                 (descendants (get-descendants all-todos (todo-id todo-to-delete)))
                 (ids-to-delete (cons (todo-id todo-to-delete)
-                                     (mapcar #'todo-id descendants))))
-           (setf (model-todos model)
-                 (remove-if (lambda (item)
-                              (member (todo-id item) ids-to-delete :test #'string=))
-                           all-todos))
+                                     (mapcar #'todo-id descendants)))
+                (now (lt:now)))
+           ;; Mark items as deleted instead of removing
+           (dolist (todo all-todos)
+             (when (member (todo-id todo) ids-to-delete :test #'string=)
+               (setf (todo-status todo) :deleted)
+               (setf (todo-completed-at todo) now)))
            (save-todos (model-todos model))
            ;; Invalidate cache so deleted items disappear
            (invalidate-visible-todos-cache model)
@@ -1606,14 +1760,17 @@
 ;;── Delete DONE Confirm Key Handling ──────────────────────────────────────────
 
 (defun handle-delete-done-confirm-keys (model msg)
-  "Handle keyboard input in delete-done confirmation."
+  "Handle keyboard input in delete-done confirmation.
+   Marks all completed items as :deleted instead of removing."
   (let ((key (tui:key-msg-key msg)))
     (cond
       ;; Confirm delete with y
       ((and (characterp key) (char-equal key #\y))
-       (setf (model-todos model)
-             (remove-if (lambda (item) (eq (todo-status item) +status-completed+))
-                        (model-todos model)))
+       (let ((now (lt:now)))
+         (dolist (todo (model-todos model))
+           (when (eq (todo-status todo) +status-completed+)
+             (setf (todo-status todo) :deleted)
+             (setf (todo-completed-at todo) now))))
        (save-todos (model-todos model))
        ;; Invalidate cache so deleted items disappear
        (invalidate-visible-todos-cache model)
@@ -1697,6 +1854,15 @@
            (tui.datepicker:datepicker-focus picker)
            (setf (model-editing-date-type model) :deadline)
            (setf (model-view-state model) :edit-date)))
+       (values model nil))
+
+      ;; Open URL with 'o'
+      ((and (characterp key) (char= key #\o))
+       (when (< (model-cursor model) (length todos))
+         (let* ((todo (nth (model-cursor model) todos))
+                (urls (get-todo-urls todo)))
+           (when urls
+             (open-url (first urls)))))
        (values model nil))
 
       (t (values model nil)))))
@@ -1904,6 +2070,87 @@
   "Handle window resize."
   (setf (model-term-width model) (tui:window-size-msg-width msg))
   (setf (model-term-height model) (tui:window-size-msg-height msg))
+  (values model nil))
+
+(defmethod tui:update-message ((model app-model) (msg tui:mouse-scroll-event))
+  "Handle mouse scroll by moving selection up/down."
+  (when (eq (model-view-state model) :list)
+    (let ((direction (tui:mouse-scroll-direction msg))
+          (count (tui:mouse-scroll-count msg))
+          (todos (get-visible-todos model)))
+      (case direction
+        (:up (setf (model-cursor model)
+                   (max 0 (- (model-cursor model) count))))
+        (:down (setf (model-cursor model)
+                     (min (1- (length todos))
+                          (+ (model-cursor model) count)))))))
+  (values model nil))
+
+(defmethod tui:update-message ((model app-model) (msg tui:mouse-press-event))
+  "Handle mouse clicks in list and detail views."
+  (let ((view-state (model-view-state model))
+        (button (tui:mouse-event-button msg)))
+    (cond
+      ;; List view click handling
+      ((eq view-state :list)
+       (let* ((screen-x (1- (tui:mouse-event-x msg)))  ; Convert to 0-based
+              (screen-line (- (tui:mouse-event-y msg) 2))
+              (list-line (- screen-line +list-top-lines+))
+              (available-height (max 5 (- (model-term-height model) 3)))
+              (term-width (model-term-width model))
+              (scrollbar-col (1- term-width)))  ; Rightmost column
+         (when (and (>= list-line 0) (< list-line available-height))
+           (cond
+             ;; Left-click on scrollbar: start dragging
+             ((and (eq button :left) (= screen-x scrollbar-col))
+              (setf (model-scrollbar-dragging model) t)
+              (scroll-to-y-position model list-line available-height))
+             ;; Left-click on list: select item
+             ((eq button :left)
+              (let* ((line-idx (+ (model-scroll-offset model) list-line))
+                     (groups (get-visible-todos-grouped model))
+                     (cursor (cursor-index-for-line groups line-idx)))
+                (when cursor
+                  (setf (model-cursor model) cursor
+                        (model-sidebar-focused model) nil))))
+             ;; Right-click on list: select item and show details
+             ((eq button :right)
+              (let* ((line-idx (+ (model-scroll-offset model) list-line))
+                     (groups (get-visible-todos-grouped model))
+                     (cursor (cursor-index-for-line groups line-idx)))
+                (when cursor
+                  (setf (model-cursor model) cursor
+                        (model-sidebar-focused model) nil
+                        (model-view-state model) :detail))))))))
+      ;; Detail view: click on URL to open it
+      ;; URLs appear in the lower section; we check Y position and URL presence
+      ((eq view-state :detail)
+       (when (eq button :left)
+         (let* ((screen-y (- (tui:mouse-event-y msg) 2))
+                (todos (get-visible-todos model))
+                (todo (when (< (model-cursor model) (length todos))
+                        (nth (model-cursor model) todos))))
+           (when todo
+             (let ((urls (get-todo-urls todo)))
+               ;; Only respond to clicks in the lower portion where URLs appear
+               ;; (roughly after the basic info section, line 8+)
+               (when (and urls (>= screen-y 8))
+                 (open-url (first urls))))))))))
+  (values model nil))
+
+(defmethod tui:update-message ((model app-model) (msg tui:mouse-drag-event))
+  "Handle mouse drag for scrollbar."
+  (when (and (eq (model-view-state model) :list)
+             (model-scrollbar-dragging model))
+    (let* ((screen-line (- (tui:mouse-event-y msg) 2))
+           (list-line (- screen-line +list-top-lines+))
+           (available-height (max 5 (- (model-term-height model) 3))))
+      (scroll-to-y-position model (max 0 (min (1- available-height) list-line)) available-height)))
+  (values model nil))
+
+(defmethod tui:update-message ((model app-model) (msg tui:mouse-release-event))
+  "Handle mouse release to stop scrollbar dragging."
+  (setf (model-scrollbar-dragging model) nil)
   (values model nil))
 
 (defmethod tui:update-message ((model app-model) (msg tui.spinner:spinner-tick-msg))

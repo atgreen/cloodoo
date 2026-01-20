@@ -322,12 +322,19 @@
 
 (defun db-save-todos (todos)
   "Save all TODOs to the database.
-   Only updates todos that are in the incoming list, preserving externally added ones."
+   Only updates todos that are in the incoming list, preserving externally added ones.
+   Deduplicates by ID, keeping the first occurrence (most recent since lists are built with push)."
   (with-db (db)
-    (let ((now (now-iso))
-          (committed nil)
-          ;; Get IDs of todos being saved
-          (incoming-ids (mapcar #'todo-id todos)))
+    ;; Deduplicate todos by ID - keep first occurrence of each ID
+    (let* ((seen-ids (make-hash-table :test #'equal))
+           (unique-todos (loop for todo in todos
+                               for id = (todo-id todo)
+                               unless (gethash id seen-ids)
+                                 collect todo
+                                 and do (setf (gethash id seen-ids) t)))
+           (now (now-iso))
+           (committed nil)
+           (incoming-ids (mapcar #'todo-id unique-todos)))
       (sqlite:execute-non-query db "BEGIN IMMEDIATE")
       (unwind-protect
            (progn
@@ -338,7 +345,7 @@
                  UPDATE todos SET valid_to = ?
                  WHERE id = ? AND valid_to IS NULL" now id))
              ;; Insert all TODOs as new versions
-             (dolist (todo todos)
+             (dolist (todo unique-todos)
                (let ((values (todo-to-db-values todo)))
                  (sqlite:execute-non-query db "
                    INSERT INTO todos (id, title, description, priority, status,

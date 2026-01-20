@@ -37,7 +37,11 @@
          (title (gethash "title" data))
          (description (gethash "description" data))
          (priority (gethash "priority" data))
-         (tags (gethash "tags" data))
+         (tags-raw (gethash "tags" data))
+         (tags (when tags-raw
+                 (parse-tags (if (stringp tags-raw)
+                                 tags-raw
+                                 (coerce tags-raw 'list)))))
          (due-date (gethash "due_date" data)))
     (when title
       (let ((todo (make-todo title

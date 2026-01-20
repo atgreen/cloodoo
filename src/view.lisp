@@ -6,6 +6,47 @@
 
 (in-package #:cloodoo)
 
+;;── Terminal Size Constants ────────────────────────────────────────────────────
+
+(defparameter *min-terminal-width* 60
+  "Minimum terminal width required for the UI to render properly.")
+
+(defparameter *dialog-width-percent* 0.7
+  "Dialog width as a percentage of terminal width.")
+
+(defparameter *dialog-max-width* 65
+  "Maximum dialog width in characters.")
+
+(defparameter *dialog-min-width* 50
+  "Minimum dialog width in characters.")
+
+(defun render-terminal-too-narrow (model)
+  "Render a warning that the terminal is too narrow."
+  (let* ((term-width (model-term-width model))
+         (term-height (model-term-height model))
+         (msg1 "Terminal too narrow")
+         (msg2 (format nil "Need ~D cols, have ~D" *min-terminal-width* term-width)))
+    (with-output-to-string (s)
+      (let ((blank-lines (floor (- term-height 2) 2)))
+        ;; Fill with blank lines to center vertically
+        (dotimes (i blank-lines)
+          (format s "~%"))
+        ;; Centered warning
+        (let ((pad1 (max 0 (floor (- term-width (length msg1)) 2)))
+              (pad2 (max 0 (floor (- term-width (length msg2)) 2))))
+          (format s "~A~A~%"
+                  (make-string pad1 :initial-element #\Space)
+                  (tui:bold (tui:colored msg1 :fg tui:*fg-red*)))
+          (format s "~A~A"
+                  (make-string pad2 :initial-element #\Space)
+                  (tui:colored msg2 :fg tui:*fg-bright-black*)))))))
+
+(defun calculate-dialog-width (term-width)
+  "Calculate the dialog width based on terminal width."
+  (let ((percent-width (floor (* term-width *dialog-width-percent*))))
+    (max *dialog-min-width*
+         (min *dialog-max-width* percent-width))))
+
 ;;── View Functions ─────────────────────────────────────────────────────────────
 
 (defun overlay-modal (background modal term-width term-height modal-width modal-height)
@@ -65,7 +106,7 @@
 
 (defun render-help-bar-line (width)
   "Render the help bar."
-  (let ((help "F1:Help | jk:Nav | Enter:View | Space:Done | a:Add | e:Edit | d:Del | /:Search | q:Quit"))
+  (let ((help "F1:Help | jk:Nav | Enter:View | Space:Done | a:Add | e:Edit | DEL:Del | /:Search | q:Quit"))
     (render-help-line help width :fg tui:*fg-yellow* :bg tui:*bg-blue*)))
 
 (defun fit-to-width (text width)
@@ -119,7 +160,6 @@
          (selected (model-selected-tags model))
          (cursor (model-sidebar-cursor model))
          (focused (model-sidebar-focused model))
-         (presets (model-tag-presets model))
          (lines nil)
          (w (1- sidebar-width)))  ; Leave room for the vertical divider
     ;; Header
@@ -160,28 +200,6 @@
                        (t padded))
                      lines)))
 
-    ;; Preset section separator
-    (push (make-string w :initial-element #\Space) lines)
-    (push (make-string w :initial-element #\─) lines)
-
-    ;; Show presets (keys 1-9, 0)
-    (when (and presets (arrayp presets))
-      (loop for i from 0 below (min 10 (length presets))
-            for preset = (aref presets i)
-            when (and preset (listp preset))
-            do (let* ((key-char (if (= i 9) "0" (format nil "~D" (1+ i))))
-                      (tags-preview (format nil "~{~A~^,~}"
-                                           (subseq preset 0 (min 2 (length preset)))))
-                      (more (if (> (length preset) 2)
-                                (format nil "+~D" (- (length preset) 2))
-                                ""))
-                      (text (format nil "~A: ~A~A" key-char tags-preview more))
-                      (display-text (if (> (length text) w)
-                                        (subseq text 0 w)
-                                        text))
-                      (padded (pad-to-width display-text w)))
-                 (push (tui:colored padded :fg tui:*fg-bright-black*) lines))))
-
     ;; Pad to height with empty lines
     (loop while (< (length lines) height)
           do (push (make-string w :initial-element #\Space) lines))
@@ -219,11 +237,11 @@
                          ;; Progress indicator for items with children
                          (progress (count-subtask-progress all-todos (todo-id todo)))
                          (indent "  ")
-                         (tags-str (org-tags-string (todo-tags todo))))
+                         (tags-str (org-tags-string (get-effective-tags todo all-todos))))
                     ;; Build line differently based on selection state
                     (if selected-p
                         ;; SELECTED: Plain text with strong contrast highlight
-                        (let* ((collapse-ind (if has-kids (if is-collapsed "▸" "▾") " "))
+                        (let* ((collapse-ind (if has-kids (if is-collapsed "▶" "▼") " "))
                                (status-text (if (todo-enriching-p todo)
                                                 (tui.spinner:spinner-view
                                                  (model-enrichment-spinner model))
@@ -323,9 +341,12 @@
                                                              (subseq title-text 0 (max 0 (- avail 2)))
                                                              "..")
                                                 title-text))
-                               ;; Dim title for completed/cancelled items (before resort)
+                               ;; Dim and strikethrough title for completed/cancelled items
                                (styled-title (if (member (todo-status todo) '(:completed :cancelled))
-                                                 (tui:colored trunc-title :fg tui:*fg-bright-black*)
+                                                 (tui:render-styled
+                                                  (tui:make-style :strikethrough t
+                                                                  :foreground tui:*fg-bright-black*)
+                                                  trunc-title)
                                                  trunc-title))
                                (base (format nil "~A~A" prefix styled-title))
                                (base-len (tui:visible-length base))
@@ -485,8 +506,11 @@
                   (org-priority-colored (todo-priority todo)))
 
           ;; Title (wrapped if needed)
-          (let ((title-text (if (eq (todo-status todo) :completed)
-                                (tui:colored (todo-title todo) :fg tui:*fg-bright-black*)
+          (let ((title-text (if (member (todo-status todo) '(:completed :cancelled))
+                                (tui:render-styled
+                                 (tui:make-style :strikethrough t
+                                                 :foreground tui:*fg-bright-black*)
+                                 (todo-title todo))
                                 (tui:bold (todo-title todo)))))
             (format s "~A~%" (tui:wrap-text title-text content-width)))
 
@@ -580,7 +604,7 @@
                      :fg tui:*fg-bright-black*)))
 
           ;; Help bar
-          (let ((help " RET/q:back  e:edit  s:schedule  d:deadline  SPC:toggle "))
+          (let ((help " RET/q:back  e:edit  s:schedule  d:deadline  SPC:toggle  o:open-url "))
             (format s "~%~A"
                     (render-help-line help term-width :fg tui:*fg-yellow* :bg tui:*bg-blue*))))))
     (error (e)
@@ -620,141 +644,140 @@
                (string-downcase (symbol-name unit)) interval))))
 
 (defun render-add-edit-view (model)
-  "Render the add/edit TODO form."
+  "Render the add/edit TODO form as an overlay dialog on the list view."
   (llog:info "render-add-edit-view called" :is-edit (model-edit-todo-id model))
-  (let* ((term-width (model-term-width model))
+  (let* ((background (render-list-view model))
+         (term-width (model-term-width model))
+         (dialog-width (calculate-dialog-width term-width))
          (is-edit (model-edit-todo-id model))
-         (title (if is-edit " EDIT ITEM " " NEW ITEM ")))
-    (with-output-to-string (s)
-      ;; Title bar - using green background to make it obvious
-      (let ((pad (max 0 (- term-width (length title)))))
-        (format s "~A~%"
-                (tui:bold (tui:colored
-                          (format nil "~A~A" title (make-string pad :initial-element #\─))
-                          :fg tui:*fg-white* :bg tui:*bg-green*))))
+         ;; Check if this is a child task (labels not editable)
+         (is-child (or (model-pending-parent-id model)
+                       (and is-edit
+                            (let ((todo (find is-edit (model-todos model)
+                                              :key #'todo-id :test #'equal)))
+                              (and todo (todo-parent-id todo))))))
+         (title (if is-edit "EDIT ITEM" "NEW ITEM"))
+         (content
+           (with-output-to-string (c)
+             ;; Title input
+             (format c "~A ~A"
+                     (if (eq (model-active-field model) :title)
+                         (tui:colored ">" :fg tui:*fg-cyan*)
+                         " ")
+                     (tui.textinput:textinput-view (model-title-input model)))
 
-      ;; Build content
-      (let ((content
-              (with-output-to-string (c)
-                ;; Title input
-                (format c "~A ~A"
-                        (if (eq (model-active-field model) :title)
-                            (tui:colored ">" :fg tui:*fg-cyan*)
-                            " ")
-                        (tui.textinput:textinput-view (model-title-input model)))
+             ;; Notes input
+             (format c "~%~A ~A"
+                     (if (eq (model-active-field model) :description)
+                         (tui:colored ">" :fg tui:*fg-cyan*)
+                         " ")
+                     (tui.textinput:textinput-view (model-description-input model)))
 
-                ;; Notes input
-                (format c "~%~A ~A"
-                        (if (eq (model-active-field model) :description)
-                            (tui:colored ">" :fg tui:*fg-cyan*)
-                            " ")
-                        (tui.textinput:textinput-view (model-description-input model)))
+             ;; Priority
+             (format c "~%~%~A Priority: ~A ~A ~A"
+                     (if (eq (model-active-field model) :priority)
+                         (tui:colored ">" :fg tui:*fg-cyan*)
+                         " ")
+                     (if (eq (model-edit-priority model) :high)
+                         (tui:bold (tui:colored "[#A]" :fg tui:*fg-red*))
+                         (tui:colored " #A " :fg tui:*fg-bright-black*))
+                     (if (eq (model-edit-priority model) :medium)
+                         (tui:bold (tui:colored "[#B]" :fg tui:*fg-yellow*))
+                         (tui:colored " #B " :fg tui:*fg-bright-black*))
+                     (if (eq (model-edit-priority model) :low)
+                         (tui:bold (tui:colored "[#C]" :fg tui:*fg-green*))
+                         (tui:colored " #C " :fg tui:*fg-bright-black*)))
 
-                ;; Priority
-                (format c "~%~%~A Priority: ~A ~A ~A"
-                        (if (eq (model-active-field model) :priority)
-                            (tui:colored ">" :fg tui:*fg-cyan*)
-                            " ")
-                        (if (eq (model-edit-priority model) :high)
-                            (tui:bold (tui:colored "[#A]" :fg tui:*fg-red*))
-                            (tui:colored " #A " :fg tui:*fg-bright-black*))
-                        (if (eq (model-edit-priority model) :medium)
-                            (tui:bold (tui:colored "[#B]" :fg tui:*fg-yellow*))
-                            (tui:colored " #B " :fg tui:*fg-bright-black*))
-                        (if (eq (model-edit-priority model) :low)
-                            (tui:bold (tui:colored "[#C]" :fg tui:*fg-green*))
-                            (tui:colored " #C " :fg tui:*fg-bright-black*)))
+             ;; Scheduled date
+             (let* ((sched-date (model-edit-scheduled-date model))
+                    (sched-str (if sched-date
+                                   (lt:format-timestring nil sched-date
+                                                         :format '(:short-month " " :day ", " :year))
+                                   "Not set")))
+               (format c "~%~A Scheduled: ~A~A"
+                       (if (eq (model-active-field model) :scheduled)
+                           (tui:colored ">" :fg tui:*fg-cyan*)
+                           " ")
+                       (if sched-date
+                           (tui:colored (format nil "[~A]" sched-str) :fg tui:*fg-cyan*)
+                           (tui:colored (format nil "[~A]" sched-str) :fg tui:*fg-bright-black*))
+                       (if (eq (model-active-field model) :scheduled)
+                           (tui:colored "  (Space)" :fg tui:*fg-bright-black*)
+                           "")))
 
-                ;; Scheduled date
-                (let* ((sched-date (model-edit-scheduled-date model))
-                       (sched-str (if sched-date
-                                      (lt:format-timestring nil sched-date
-                                                          :format '(:short-month " " :day ", " :year))
-                                      "Not set")))
-                  (format c "~%~A Scheduled: ~A~A"
-                          (if (eq (model-active-field model) :scheduled)
-                              (tui:colored ">" :fg tui:*fg-cyan*)
-                              " ")
-                          (if sched-date
-                              (tui:colored (format nil "[~A]" sched-str) :fg tui:*fg-cyan*)
-                              (tui:colored (format nil "[~A]" sched-str) :fg tui:*fg-bright-black*))
-                          (if (eq (model-active-field model) :scheduled)
-                              (tui:colored "  (Space to pick)" :fg tui:*fg-bright-black*)
-                              "")))
+             ;; Due date
+             (let* ((due-date (model-edit-due-date model))
+                    (due-str (if due-date
+                                 (lt:format-timestring nil due-date
+                                                       :format '(:short-month " " :day ", " :year))
+                                 "Not set")))
+               (format c "~%~A Due:       ~A~A"
+                       (if (eq (model-active-field model) :due)
+                           (tui:colored ">" :fg tui:*fg-cyan*)
+                           " ")
+                       (if due-date
+                           (tui:colored (format nil "[~A]" due-str) :fg tui:*fg-red*)
+                           (tui:colored (format nil "[~A]" due-str) :fg tui:*fg-bright-black*))
+                       (if (eq (model-active-field model) :due)
+                           (tui:colored "  (Space)" :fg tui:*fg-bright-black*)
+                           "")))
 
-                ;; Due date
-                (let* ((due-date (model-edit-due-date model))
-                       (due-str (if due-date
-                                    (lt:format-timestring nil due-date
-                                                        :format '(:short-month " " :day ", " :year))
-                                    "Not set")))
-                  (format c "~%~A Due:       ~A~A"
-                          (if (eq (model-active-field model) :due)
-                              (tui:colored ">" :fg tui:*fg-cyan*)
-                              " ")
-                          (if due-date
-                              (tui:colored (format nil "[~A]" due-str) :fg tui:*fg-red*)
-                              (tui:colored (format nil "[~A]" due-str) :fg tui:*fg-bright-black*))
-                          (if (eq (model-active-field model) :due)
-                              (tui:colored "  (Space to pick)" :fg tui:*fg-bright-black*)
-                              "")))
+             ;; Repeat
+             (let ((repeat-str (format-repeat-preset
+                                (model-edit-repeat-interval model)
+                                (model-edit-repeat-unit model))))
+               (format c "~%~A Repeat:    ~A~A"
+                       (if (eq (model-active-field model) :repeat)
+                           (tui:colored ">" :fg tui:*fg-cyan*)
+                           " ")
+                       (if (model-edit-repeat-interval model)
+                           (tui:colored (format nil "[~A]" repeat-str) :fg tui:*fg-magenta*)
+                           (tui:colored (format nil "[~A]" repeat-str) :fg tui:*fg-bright-black*))
+                       (if (eq (model-active-field model) :repeat)
+                           (tui:colored "  (←/→)" :fg tui:*fg-bright-black*)
+                           "")))
 
-                ;; Repeat
-                (let ((repeat-str (format-repeat-preset
-                                   (model-edit-repeat-interval model)
-                                   (model-edit-repeat-unit model))))
-                  (format c "~%~A Repeat:    ~A~A"
-                          (if (eq (model-active-field model) :repeat)
-                              (tui:colored ">" :fg tui:*fg-cyan*)
-                              " ")
-                          (if (model-edit-repeat-interval model)
-                              (tui:colored (format nil "[~A]" repeat-str) :fg tui:*fg-magenta*)
-                              (tui:colored (format nil "[~A]" repeat-str) :fg tui:*fg-bright-black*))
-                          (if (eq (model-active-field model) :repeat)
-                              (tui:colored "  (←/→ to change)" :fg tui:*fg-bright-black*)
-                              "")))
+             ;; Labels/Tags - not editable for child tasks (they inherit from parent)
+             (if is-child
+                 ;; Child tasks: show inherited label (read-only)
+                 (format c "~%  Labels:    ~A"
+                         (tui:colored "(inherited from parent)" :fg tui:*fg-bright-black*))
+                 ;; Non-child tasks: editable labels
+                 (let* ((edit-tags (model-edit-tags model))
+                        (tags-focused (eq (model-active-field model) :tags)))
+                   (format c "~%~A Labels:    "
+                           (if tags-focused
+                               (tui:colored ">" :fg tui:*fg-cyan*)
+                               " "))
+                   ;; Show current tags as chips
+                   (if edit-tags
+                       (format c "~{~A~^ ~}"
+                               (mapcar (lambda (tag)
+                                         (tui:colored (format nil "[~A]" tag) :fg tui:*fg-magenta*))
+                                       (reverse edit-tags)))
+                       (format c "~A" (tui:colored "(none)" :fg tui:*fg-bright-black*)))
+                   ;; Show input when field is active
+                   (when tags-focused
+                     (format c " ~A" (tui.textinput:textinput-view (model-tags-input model)))
+                     ;; Show dropdown if visible
+                     (when (model-tag-dropdown-visible model)
+                       (let* ((filtered (model-tag-dropdown-filtered model))
+                              (cursor (model-tag-dropdown-cursor model))
+                              (max-items 5)
+                              (display-items (subseq filtered 0 (min max-items (length filtered)))))
+                         (format c "~%             ")  ; Indent to align with input
+                         (loop for tag in display-items
+                               for idx from 0
+                               do (format c "~%             ~A"
+                                          (if (= idx cursor)
+                                              (tui:colored (format nil "> ~A" tag) :bg tui:*bg-cyan* :fg tui:*fg-black*)
+                                              (format nil "  ~A" tag)))))))))
 
-                ;; Labels/Tags
-                (let* ((edit-tags (model-edit-tags model))
-                       (tags-focused (eq (model-active-field model) :tags)))
-                  (format c "~%~A Labels:    "
-                          (if tags-focused
-                              (tui:colored ">" :fg tui:*fg-cyan*)
-                              " "))
-                  ;; Show current tags as chips
-                  (if edit-tags
-                      (format c "~{~A~^ ~}"
-                              (mapcar (lambda (tag)
-                                        (tui:colored (format nil "[~A]" tag) :fg tui:*fg-magenta*))
-                                      (reverse edit-tags)))
-                      (format c "~A" (tui:colored "(none)" :fg tui:*fg-bright-black*)))
-                  ;; Show input when field is active
-                  (when tags-focused
-                    (format c " ~A" (tui.textinput:textinput-view (model-tags-input model)))
-                    ;; Show dropdown if visible
-                    (when (model-tag-dropdown-visible model)
-                      (let* ((filtered (model-tag-dropdown-filtered model))
-                             (cursor (model-tag-dropdown-cursor model))
-                             (max-items 5)
-                             (display-items (subseq filtered 0 (min max-items (length filtered)))))
-                        (format c "~%             ")  ; Indent to align with input
-                        (loop for tag in display-items
-                              for idx from 0
-                              do (format c "~%             ~A"
-                                         (if (= idx cursor)
-                                             (tui:colored (format nil "> ~A" tag) :bg tui:*bg-cyan* :fg tui:*fg-black*)
-                                             (format nil "  ~A" tag)))))))))))
-
-        ;; Pad to full width and render with border
-        (let ((inner-width (- term-width 2)))
-          (format s "~A~%"
-                  (tui:render-border (pad-content-to-width content inner-width)
-                                     tui:*border-double*))))
-
-      ;; Help bar
-      (let ((help " TAB:next  S-TAB:prev  SPC:pick date  RET:save  ESC:cancel "))
-        (format s "~A"
-                (render-help-line help term-width :fg tui:*fg-yellow* :bg tui:*bg-blue*))))))
+             ;; Help line at bottom
+             (format c "~%~%~A"
+                     (tui:colored "Tab:next  Enter:save  Esc:cancel" :fg tui:*fg-bright-black*))))
+         (modal (render-box-with-title title content :min-width dialog-width)))
+    (tui:overlay-centered modal background)))
 
 (defun render-search-view (model)
   "Render the search view."
@@ -1024,7 +1047,50 @@
                     (tui:colored (format nil "~vA" key-width key) :fg tui:*fg-yellow*)
                     desc))))))
 
-(defun render-help-modal-content ()
+(defun valid-preset-p (p)
+  "Check if preset P is a valid non-empty list of string tags."
+  (and p
+       (listp p)
+       (not (eq p 'null))
+       (not (eq p :null))
+       (> (length p) 0)
+       (stringp (first p))))
+
+(defun format-preset-tags (preset)
+  "Format preset tags for display, or return placeholder if empty."
+  (if (valid-preset-p preset)
+      (let ((tags (format nil "~{~A~^,~}" preset)))
+        (if (> (length tags) 20)
+            (concatenate 'string (subseq tags 0 18) "..")
+            tags))
+      (tui:colored "_______" :fg tui:*fg-bright-black*)))
+
+(defun render-presets-row (presets)
+  "Render presets in two columns below the keyboard shortcuts."
+  (let ((col-width 28))
+    (with-output-to-string (s)
+      ;; Header spanning both columns
+      (format s "~A~%" (tui:bold (tui:colored "LABEL PRESETS (1-0 to apply, !@# to save)" :fg tui:*fg-cyan*)))
+      ;; Two columns: 1-5 on left, 6-0 on right
+      (loop for row from 0 below 5
+            for left-idx = row
+            for right-idx = (+ row 5)
+            for left-key = (format nil "~D" (1+ left-idx))
+            for right-key = (if (= right-idx 9) "0" (format nil "~D" (1+ right-idx)))
+            for left-preset = (when (and presets (arrayp presets) (< left-idx (length presets)))
+                                (aref presets left-idx))
+            for right-preset = (when (and presets (arrayp presets) (< right-idx (length presets)))
+                                 (aref presets right-idx))
+            for left-str = (format-preset-tags left-preset)
+            for right-str = (format-preset-tags right-preset)
+            do (format s "~A ~A~A~A ~A~%"
+                       (tui:colored left-key :fg tui:*fg-yellow*)
+                       left-str
+                       (make-string (max 1 (- col-width 2 (tui:visible-length left-str))) :initial-element #\Space)
+                       (tui:colored right-key :fg tui:*fg-yellow*)
+                       right-str)))))
+
+(defun render-help-modal-content (model)
   "Render the help modal content with multiple columns using join-horizontal."
   (let* ((col1 (render-help-column "NAVIGATION"
                 '(("j/k ↑↓" . "Navigate")
@@ -1034,7 +1100,7 @@
                   ("Space" . "Cycle status")
                   ("a/A" . "Add/Add child")
                   ("e" . "Edit item")
-                  ("d/D" . "Delete item/done")
+                  ("DEL/D" . "Delete item/done")
                   ("B/C" . "Priority B/C")
                   ("S-↑/↓" . "Priority +/-"))))
          (col2 (render-help-column "ORGANIZE"
@@ -1051,13 +1117,13 @@
          (col3 (render-help-column "SIDEBAR"
                 '(("l" . "Toggle sidebar")
                   ("Tab" . "Focus sidebar")
-                  ("1-0" . "Apply preset")
                   ("" . "When focused:")
                   ("j/k" . "Navigate tags")
                   ("Space" . "Toggle tag")
                   ("a" . "Select all")
-                  ("!@#..." . "Save preset")
                   ("Esc" . "Return to list")
+                  ("" . "")
+                  ("" . "")
                   ("" . ""))))
          (col4 (render-help-column "OTHER"
                 '(("i" . "Import org")
@@ -1069,22 +1135,29 @@
                   ("[/]" . "Month +/-")
                   ("{/}" . "Year +/-")
                   ("Home" . "Today")
-                  ("Del" . "Clear date")))))
+                  ("Del" . "Clear date"))))
+         (presets (model-tag-presets model)))
     ;; Create vertical separator spanning all rows
     (let* ((num-rows 11)  ; title + 10 entries
            (sep-line (tui:colored " │ " :fg tui:*fg-bright-black*))
-           (sep (format nil "~{~A~^~%~}" (loop repeat num-rows collect sep-line))))
-      (tui:join-horizontal :top col1 sep col2 sep col3 sep col4))))
+           (sep (format nil "~{~A~^~%~}" (loop repeat num-rows collect sep-line)))
+           (keys-section (tui:join-horizontal :top col1 sep col2 sep col3 sep col4))
+           (presets-section (render-presets-row presets)))
+      (format nil "~A~%~%~A" keys-section presets-section))))
 
-(defun render-box-with-title (title content)
+(defun render-box-with-title (title content &key min-width)
   "Render a box with a title label on the top border line.
    ╭──┤ TITLE ├─────────────────────────╮
    │ content                            │
-   ╰────────────────────────────────────╯"
+   ╰────────────────────────────────────╯
+   If MIN-WIDTH is specified, the box will be at least that wide (inner content area)."
   (let* ((content-lines (tui:split-string-by-newline content))
-         (content-width (if content-lines
+         (natural-width (if content-lines
                             (apply #'max (mapcar #'tui:visible-length content-lines))
                             40))
+         (content-width (if min-width
+                            (max natural-width (- min-width 4))  ; -4 for border and padding
+                            natural-width))
          (indent 2)  ; Title starts 2 chars from left
          (padded-title (format nil " ~A " title))
          (title-len (length padded-title))
@@ -1102,7 +1175,7 @@
               (make-string right-width :initial-element #\─))
       ;; Content rows
       (dolist (line content-lines)
-        (let ((padding (- content-width (tui:visible-length line))))
+        (let ((padding (max 0 (- content-width (tui:visible-length line)))))
           (format s "~A│ ~A~A │~%"
                   reset
                   line
@@ -1115,7 +1188,7 @@
 (defun render-help-view (model)
   "Render the help view as an overlay dialog on the list view."
   (let* ((background (render-list-view model))
-         (content (render-help-modal-content))
+         (content (render-help-modal-content model))
          (footer (tui:colored "Press any key to close" :fg tui:*fg-bright-black*))
          (inner (format nil "~%~A~%~A" content footer))
          (modal (render-box-with-title "KEYBOARD SHORTCUTS" inner)))
@@ -1334,6 +1407,9 @@
 (defmethod tui:view ((model app-model))
   "Main view dispatcher based on current view state."
   (llog:debug "Rendering view" :view-state (model-view-state model))
+  ;; Check minimum terminal width
+  (when (< (model-term-width model) *min-terminal-width*)
+    (return-from tui:view (render-terminal-too-narrow model)))
   (case (model-view-state model)
     (:list (render-list-view model))
     (:detail (render-detail-view model))

@@ -35,6 +35,7 @@
     (:pending "○")
     (:waiting "W")
     (:cancelled "✗")
+    (:deleted "D")
     (otherwise " ")))
 
 (defun status-colored (status)
@@ -46,6 +47,7 @@
       (:pending (tui:colored ch :fg tui:*fg-white*))
       (:waiting (tui:colored ch :fg tui:*fg-yellow*))
       (:cancelled (tui:colored ch :fg tui:*fg-bright-black*))
+      (:deleted (tui:colored ch :fg tui:*fg-bright-black*))
       (otherwise ch))))
 
 ;;; Tags formatting
@@ -99,19 +101,34 @@
 (defun categorize-by-date (todo)
   "Categorize a TODO by its scheduled date and due date.
    Uses scheduled date for grouping when to work on it,
-   but checks due date for overdue status."
+   but checks due date for overdue status.
+   Completed/cancelled items are never shown as overdue.
+   Completed/cancelled items from before today return NIL (excluded from view).
+   Deleted items always return NIL (never shown)."
   (let ((scheduled (todo-scheduled-date todo))
-        (due (todo-due-date todo)))
-    ;; Completed and cancelled items go to completed section
-    (when (member (todo-status todo) '(:completed :cancelled))
-      (return-from categorize-by-date :completed))
-
+        (due (todo-due-date todo))
+        (status (todo-status todo))
+        (completed-at (todo-completed-at todo)))
     (let* ((today (local-today))
            (tomorrow (lt:timestamp+ today 1 :day))
            (week-end (lt:timestamp+ today 7 :day)))
-      ;; Check if overdue (due date passed)
-      (when (and due (lt:timestamp< due today))
+      ;; Deleted items are never shown
+      (when (eq status :deleted)
+        (return-from categorize-by-date nil))
+
+      ;; Check if overdue (due date passed) - but not for completed/cancelled items
+      (when (and due
+                 (lt:timestamp< due today)
+                 (not (member status '(:completed :cancelled))))
         (return-from categorize-by-date :overdue))
+
+      ;; For completed/cancelled items, only show if completed today
+      ;; Items completed before today should not appear in any date group
+      (when (member status '(:completed :cancelled))
+        (return-from categorize-by-date
+          (if (and completed-at (lt:timestamp>= completed-at today))
+              :today  ; Completed today - show in TODAY
+              nil)))  ; Completed before today - exclude from view
 
       ;; Use scheduled date for grouping, fall back to due date
       (let ((primary-date (or scheduled due)))
@@ -132,8 +149,7 @@
     (:this-week 3)
     (:later 4)
     (:no-date 5)
-    (:completed 6)
-    (otherwise 7)))
+    (otherwise 6)))
 
 (defun date-category-label (category)
   "Return display label for date category."
@@ -145,7 +161,6 @@
     (:this-week "THIS WEEK")
     (:later "LATER")
     (:no-date "UNSCHEDULED")
-    (:completed "DONE")
     (otherwise "OTHER")))
 
 (defun date-category-border (category)
@@ -154,9 +169,6 @@
     (:overdue (tui:make-border :top "─" :bottom "─" :left "│" :right "├"
                                :top-left "╭" :top-right "╮"
                                :bottom-left "╰" :bottom-right "╯"))
-    (:completed (tui:make-border :top "─" :bottom "─" :left "│" :right "├"
-                                 :top-left "╭" :top-right "╮"
-                                 :bottom-left "╰" :bottom-right "╯"))
     (otherwise *border-header-title*)))
 
 (defun date-category-colored (category width)
@@ -173,15 +185,16 @@
       (:this-week (tui:colored header :fg tui:*fg-blue*))
       (:later (tui:colored header :fg tui:*fg-magenta*))
       (:no-date (tui:colored header :fg tui:*fg-bright-black*))
-      (:completed (tui:colored header :fg tui:*fg-green*))
       (otherwise header))))
 
 (defun group-todos-by-date (todos)
-  "Group TODOs by date category."
+  "Group TODOs by date category (each todo by its own dates).
+   TODOs with NIL category (e.g., completed before today) are excluded."
   (let ((groups (make-hash-table)))
     (dolist (todo todos)
       (let ((cat (categorize-by-date todo)))
-        (push todo (gethash cat groups nil))))
+        (when cat  ; Skip todos with nil category
+          (push todo (gethash cat groups nil)))))
     (let ((alist nil))
       (maphash (lambda (k v)
                  (push (cons k (nreverse v)) alist))
@@ -244,7 +257,7 @@
 ;;; Help bar at bottom
 (defun render-help-bar (&optional width)
   "Render the bottom help bar."
-  (let* ((help "F1:Help │ ↑↓:Navigate │ Enter:View │ Space:Done │ A:Add │ E:Edit │ D:Del │ /:Search │ Q:Quit")
+  (let* ((help "F1:Help │ ↑↓:Navigate │ Enter:View │ Space:Done │ A:Add │ E:Edit │ DEL:Del │ /:Search │ Q:Quit")
          (w (or width (length help))))
     (tui:colored
      (format nil "~A~A"
@@ -262,6 +275,7 @@
     (:pending (tui:bold (tui:colored "TODO" :fg tui:*fg-magenta*)))
     (:waiting (tui:bold (tui:colored "WAIT" :fg tui:*fg-yellow*)))
     (:cancelled (tui:colored "CNCL" :fg tui:*fg-bright-black*))
+    (:deleted (tui:colored "DELE" :fg tui:*fg-bright-black*))
     (otherwise "    ")))
 
 (defun org-priority-colored (priority)
@@ -401,8 +415,8 @@
    Returns nil if todo has no children."
   (when has-children-p
     (if collapsed-p
-        (tui:colored "▸" :fg tui:*fg-cyan*)
-        (tui:colored "▾" :fg tui:*fg-cyan*))))
+        (tui:colored "▶" :fg tui:*fg-cyan*)
+        (tui:colored "▼" :fg tui:*fg-cyan*))))
 
 ;;── Pager-style Header (like Charm's bubbletea) ────────────────────────────────
 

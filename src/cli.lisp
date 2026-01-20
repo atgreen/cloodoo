@@ -153,7 +153,7 @@
                                              :priority (intern (string-upcase priority) :keyword)
                                              :due-date due-date
                                              :description note
-                                             :tags tags))
+                                             :tags (parse-tags tags)))
                              (todos (load-todos)))
                         (push todo todos)
                         (save-todos todos)
@@ -336,6 +336,46 @@
                      (format t "~%Shutting down...~%")
                      (stop-server))))))))
 
+(defun make-enrich-pending-command ()
+  "Create the 'enrich-pending' subcommand for background enrichment."
+  (clingon:make-command
+   :name "enrich-pending"
+   :description "Enrich TODOs that are pending enrichment (internal use)"
+   :handler (lambda (cmd)
+              (declare (ignore cmd))
+              (let* ((todos (load-todos))
+                     (pending (remove-if-not #'todo-enriching-p todos)))
+                (when pending
+                  (init-enrichment)
+                  (dolist (todo pending)
+                    (handler-case
+                        (let ((enriched (enrich-todo-input (todo-title todo)
+                                                          (todo-description todo))))
+                          (when enriched
+                            (when (getf enriched :title)
+                              (setf (todo-title todo) (getf enriched :title)))
+                            (when (getf enriched :description)
+                              (setf (todo-description todo) (getf enriched :description)))
+                            (when (getf enriched :priority)
+                              (setf (todo-priority todo) (getf enriched :priority)))
+                            (when (getf enriched :category)
+                              (let ((tag (category-to-tag (getf enriched :category))))
+                                (when tag
+                                  (setf (todo-tags todo) (list tag)))))
+                            (when (getf enriched :estimated-minutes)
+                              (setf (todo-estimated-minutes todo) (getf enriched :estimated-minutes)))
+                            (when (getf enriched :scheduled-date)
+                              (setf (todo-scheduled-date todo) (getf enriched :scheduled-date)))
+                            (when (getf enriched :due-date)
+                              (setf (todo-due-date todo) (getf enriched :due-date)))
+                            (when (getf enriched :location-info)
+                              (setf (todo-location-info todo) (getf enriched :location-info)))))
+                      (error (e)
+                        (declare (ignore e))))
+                    ;; Clear enriching flag regardless of success/failure
+                    (setf (todo-enriching-p todo) nil))
+                  (save-todos todos))))))
+
 ;;── Native Messaging for Browser Extension ────────────────────────────────────
 
 (defun native-host-log (format-string &rest args)
@@ -390,7 +430,8 @@
     (force-output output-stream)))
 
 (defun handle-native-create-todo (message)
-  "Handle a createTodo message from the browser extension."
+  "Handle a createTodo message from the browser extension.
+   Creates the TODO immediately and returns, then spawns background enrichment."
   (let* ((todo-data (gethash "todo" message))
          (title (gethash "title" todo-data))
          (description (let ((d (gethash "description" todo-data)))
@@ -402,47 +443,36 @@
                      (handler-case (lt:parse-timestring due-date-str)
                        (error () nil))))
          (tags-raw (gethash "tags" todo-data))
-         (tags (when (and tags-raw (not (eq tags-raw 'null)) (typep tags-raw 'sequence))
-                 (coerce tags-raw 'list)))
+         (tags (when (and tags-raw (not (eq tags-raw 'null)))
+                 (parse-tags (if (stringp tags-raw)
+                                 tags-raw
+                                 (coerce tags-raw 'list)))))
          (url (let ((u (gethash "url" todo-data)))
                 (unless (or (null u) (eq u 'null)) u))))
     (if title
-        (let* (;; Try to enrich the TODO
-               (enriched (handler-case
-                             (progn
-                               (native-host-log "Attempting enrichment...")
-                               (init-enrichment)
-                               (enrich-todo-input title description))
-                           (error (e)
-                             (native-host-log "Enrichment failed: ~A" e)
-                             nil)))
-               ;; Use enriched values if available, otherwise use originals
-               (final-title (or (getf enriched :title) title))
-               (final-description (or (getf enriched :description) description))
-               (final-priority (or (getf enriched :priority) priority))
-               (final-tags (or (getf enriched :tags) tags))
-               (final-due-date (or (getf enriched :due-date) due-date))
-               (final-scheduled-date (getf enriched :scheduled-date))
-               (final-estimated (getf enriched :estimated-minutes))
-               (final-location (getf enriched :location-info))
-               ;; Create the TODO with enriched data
-               (todo (make-todo final-title
-                               :description final-description
-                               :priority final-priority
-                               :due-date final-due-date
-                               :scheduled-date final-scheduled-date
-                               :tags final-tags
-                               :url url
-                               :estimated-minutes final-estimated
-                               :location-info final-location))
+        ;; Create TODO immediately with raw data, mark for async enrichment
+        (let* ((todo (make-todo title
+                               :description description
+                               :priority priority
+                               :due-date due-date
+                               :tags tags
+                               :url url))
                (todos (load-todos)))
-          (native-host-log "Created TODO: ~A (enriched: ~A)" final-title (if enriched "yes" "no"))
+          ;; Mark as needing enrichment
+          (setf (todo-enriching-p todo) t)
           (push todo todos)
           (save-todos todos)
-          ;; Return success response
+          (native-host-log "Created TODO: ~A (pending enrichment)" title)
+          ;; Spawn background enrichment process
+          (let ((exe-path (get-cloodoo-executable)))
+            (native-host-log "Spawning enrichment: ~A enrich-pending" exe-path)
+            (uiop:launch-program (list exe-path "enrich-pending")
+                                 :output nil
+                                 :error-output nil))
+          ;; Return success immediately
           (let ((response (make-hash-table :test #'equal)))
             (setf (gethash "success" response) t)
-            (setf (gethash "enriched" response) (if enriched t nil))
+            (setf (gethash "enriching" response) t)
             (setf (gethash "todo" response) (todo-to-hash-table todo))
             response))
         ;; Return error if no title
@@ -678,5 +708,6 @@
                        (make-done-command)
                        (make-stats-command)
                        (make-server-command)
+                       (make-enrich-pending-command)
                        (make-native-host-command)
                        (make-install-native-host-command))))

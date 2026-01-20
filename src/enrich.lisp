@@ -11,11 +11,100 @@
 (defvar *enrichment-enabled* t
   "Whether to use LLM enrichment for new TODO items.")
 
-(defvar *gemini-api-key* nil
-  "Google Gemini API key. Set from GEMINI_API_KEY environment variable.")
+;;── LLM Provider Configuration ────────────────────────────────────────────────
 
-(defvar *gemini-model* "gemini-3-flash-preview"
-  "Gemini model to use for enrichment.")
+(defvar *llm-provider* nil
+  "Current LLM provider: :gemini, :ollama, :openai, or :anthropic.")
+
+(defvar *llm-model* nil
+  "Model name for the current provider.")
+
+(defvar *llm-endpoint* nil
+  "Custom endpoint URL (optional, uses default if nil).")
+
+(defvar *llm-api-key* nil
+  "API key for providers that require authentication.")
+
+(defun default-config ()
+  "Return default configuration plist."
+  '(:provider :gemini
+    :model "gemini-2.0-flash"
+    :endpoint nil
+    :api-key-env "GEMINI_API_KEY"))
+
+(defun config-file-path ()
+  "Return path to the config file."
+  (merge-pathnames "config.lisp" (data-directory)))
+
+(defun load-config ()
+  "Load configuration from config file or return defaults."
+  (let ((config-file (config-file-path)))
+    (if (probe-file config-file)
+        (handler-case
+            (with-open-file (in config-file :direction :input)
+              (let ((config (read in nil nil)))
+                (llog:info "Loaded config from file" :path (namestring config-file))
+                config))
+          (error (e)
+            (llog:warn "Failed to read config file, using defaults" :error (format nil "~A" e))
+            (default-config)))
+        (progn
+          (llog:info "No config file found, creating default" :path (namestring config-file))
+          (save-config (default-config))
+          (default-config)))))
+
+(defun save-config (config)
+  "Save configuration to config file."
+  (ensure-data-directory)
+  (let ((config-file (config-file-path)))
+    (with-open-file (out config-file :direction :output :if-exists :supersede)
+      (format out ";;; Cloodoo LLM Configuration~%")
+      (format out ";;; Provider options: :gemini, :ollama, :openai, :anthropic~%")
+      (format out ";;;~%")
+      (format out ";;; For Ollama (local):~%")
+      (format out ";;;   :provider :ollama~%")
+      (format out ";;;   :model \"llama3.2:latest\"~%")
+      (format out ";;;   :endpoint \"http://localhost:11434\"  ; optional, this is the default~%")
+      (format out ";;;~%")
+      (format out ";;; For Gemini:~%")
+      (format out ";;;   :provider :gemini~%")
+      (format out ";;;   :model \"gemini-2.0-flash\"~%")
+      (format out ";;;   :api-key-env \"GEMINI_API_KEY\"  ; env var name containing API key~%")
+      (format out ";;;~%")
+      (format out ";;; For OpenAI:~%")
+      (format out ";;;   :provider :openai~%")
+      (format out ";;;   :model \"gpt-4o-mini\"~%")
+      (format out ";;;   :api-key-env \"OPENAI_API_KEY\"~%")
+      (format out ";;;~%")
+      (format out ";;; For Anthropic:~%")
+      (format out ";;;   :provider :anthropic~%")
+      (format out ";;;   :model \"claude-sonnet-4-20250514\"~%")
+      (format out ";;;   :api-key-env \"ANTHROPIC_API_KEY\"~%")
+      (format out "~%")
+      (write config :stream out :pretty t :case :downcase))
+    (llog:info "Saved config" :path (namestring config-file))))
+
+(defun apply-config (config)
+  "Apply configuration to global variables."
+  (setf *llm-provider* (getf config :provider)
+        *llm-model* (getf config :model)
+        *llm-endpoint* (getf config :endpoint))
+  ;; Load API key from environment variable if specified
+  (let ((api-key-env (getf config :api-key-env)))
+    (when api-key-env
+      ;; Try loading .env files first
+      (let ((env-file (merge-pathnames ".env" (data-directory))))
+        (when (probe-file env-file)
+          (dotenv:load-env env-file)))
+      (when (probe-file ".env")
+        (dotenv:load-env ".env"))
+      ;; Now get the key
+      (setf *llm-api-key* (uiop:getenv api-key-env))))
+  (llog:info "Applied LLM config"
+             :provider *llm-provider*
+             :model *llm-model*
+             :endpoint *llm-endpoint*
+             :has-api-key (if *llm-api-key* "yes" "no")))
 
 ;;── Debug Logging ─────────────────────────────────────────────────────────────
 
@@ -32,41 +121,40 @@
                :timestamp (lt:format-rfc3339-timestring nil (lt:now)))))
 
 (defun init-enrichment ()
-  "Initialize enrichment by loading API key from .env file or environment."
+  "Initialize enrichment by loading config and setting up the LLM provider."
   ;; Initialize debug logging first
   (ensure-data-directory)
   (init-debug-logging)
 
   (llog:info "Initializing enrichment system")
 
-  ;; Try to load from .env file in data directory or current directory
-  (let ((env-file (merge-pathnames ".env" (data-directory))))
-    (llog:debug "Checking for .env file"
-                :path (namestring env-file)
-                :exists (if (probe-file env-file) "yes" "no"))
-    (when (probe-file env-file)
-      (llog:info "Loading .env file from data directory"
-                 :path (namestring env-file))
-      (dotenv:load-env env-file)))
+  ;; Load and apply configuration
+  (let ((config (load-config)))
+    (apply-config config))
 
-  (when (probe-file ".env")
-    (llog:info "Loading .env file from current directory")
-    (dotenv:load-env ".env"))
-
-  ;; Get the API key
-  (setf *gemini-api-key* (uiop:getenv "GEMINI_API_KEY"))
-
-  (if *gemini-api-key*
-      (llog:info "Gemini API key loaded successfully"
-                 :key-length (length *gemini-api-key*)
-                 :key-prefix (subseq *gemini-api-key* 0 (min 8 (length *gemini-api-key*)))
-                 :model *gemini-model*)
-      (progn
-        (llog:warn "No Gemini API key found - enrichment disabled")
-        (setf *enrichment-enabled* nil)))
+  ;; Check if we have what we need for the selected provider
+  (cond
+    ;; Ollama doesn't need an API key
+    ((eq *llm-provider* :ollama)
+     (llog:info "Using Ollama provider (no API key required)"
+                :model *llm-model*
+                :endpoint (or *llm-endpoint* "http://localhost:11434")))
+    ;; Other providers need an API key
+    (*llm-api-key*
+     (llog:info "LLM provider configured"
+                :provider *llm-provider*
+                :model *llm-model*
+                :key-length (length *llm-api-key*)
+                :key-prefix (subseq *llm-api-key* 0 (min 8 (length *llm-api-key*)))))
+    (t
+     (llog:warn "No API key found for provider - enrichment disabled"
+                :provider *llm-provider*)
+     (setf *enrichment-enabled* nil)))
 
   (llog:info "Enrichment initialization complete"
-             :enabled *enrichment-enabled*))
+             :enabled *enrichment-enabled*
+             :provider *llm-provider*
+             :model *llm-model*))
 
 (defparameter *enrichment-system-prompt-template*
   "Role: You are a Task Optimization Assistant. Your goal is to transform rough, fragmented user input into structured, actionable, and categorized TODO items.
@@ -126,18 +214,56 @@ Respond with ONLY the JSON object, no markdown formatting or additional text.")
           (lt:format-timestring nil (lt:now)
                                :format '(:long-weekday ", " :long-month " " :day ", " :year))))
 
-(defun make-gemini-completer ()
-  "Create a Gemini completer using OpenAI-compatible API."
-  (llog:debug "Creating Gemini completer"
-              :model *gemini-model*
-              :endpoint "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions")
-  (when *gemini-api-key*
-    (let ((completer (make-instance 'completions:openai-completer
-                                    :endpoint "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
-                                    :api-key *gemini-api-key*
-                                    :model *gemini-model*)))
-      (llog:debug "Gemini completer created successfully")
-      completer)))
+(defun make-completer ()
+  "Create an LLM completer based on the configured provider."
+  (llog:debug "Creating completer"
+              :provider *llm-provider*
+              :model *llm-model*
+              :endpoint *llm-endpoint*)
+  (case *llm-provider*
+    (:ollama
+     ;; Ollama endpoint should include /api/chat
+     (let* ((base-endpoint (or *llm-endpoint* "http://localhost:11434"))
+            (endpoint (if (str:ends-with-p "/api/chat" base-endpoint)
+                          base-endpoint
+                          (str:concat base-endpoint "/api/chat")))
+            (completer (make-instance 'completions:ollama-completer
+                                      :model *llm-model*
+                                      :endpoint endpoint)))
+       (llog:debug "Ollama completer created successfully" :endpoint endpoint)
+       completer))
+    (:gemini
+     (when *llm-api-key*
+       (let ((completer (make-instance 'completions:openai-completer
+                                       :endpoint "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
+                                       :api-key *llm-api-key*
+                                       :model *llm-model*)))
+         (llog:debug "Gemini completer created successfully")
+         completer)))
+    (:openai
+     (when *llm-api-key*
+       (let ((completer (make-instance 'completions:openai-completer
+                                       :api-key *llm-api-key*
+                                       :model *llm-model*)))
+         (llog:debug "OpenAI completer created successfully")
+         completer)))
+    (:anthropic
+     (when *llm-api-key*
+       (let ((completer (make-instance 'completions:anthropic-completer
+                                       :api-key *llm-api-key*
+                                       :model *llm-model*)))
+         (llog:debug "Anthropic completer created successfully")
+         completer)))
+    (otherwise
+     (llog:error "Unknown LLM provider" :provider *llm-provider*)
+     nil)))
+
+(defun get-json-response-format ()
+  "Return the appropriate JSON response format parameter for the current provider.
+   Ollama uses 'json', OpenAI-compatible APIs use 'json_object'."
+  (case *llm-provider*
+    (:ollama "json")
+    (otherwise "json_object")))
 
 (defun extract-json-from-response (response)
   "Extract JSON object from a response that may contain markdown code blocks."
@@ -264,19 +390,23 @@ Respond with ONLY the JSON object, no markdown formatting or additional text.")
              :raw-notes raw-notes
              :title-length (length raw-title)
              :enrichment-enabled *enrichment-enabled*
-             :api-key-present (if *gemini-api-key* "yes" "no"))
+             :provider *llm-provider*)
 
-  (unless (and *enrichment-enabled* *gemini-api-key* (> (length raw-title) 0))
+  ;; Check preconditions - Ollama doesn't need API key, others do
+  (unless (and *enrichment-enabled*
+               (or (eq *llm-provider* :ollama) *llm-api-key*)
+               (> (length raw-title) 0))
     (llog:debug "Enrichment skipped - preconditions not met"
                 :enabled *enrichment-enabled*
-                :has-key (if *gemini-api-key* "yes" "no")
+                :provider *llm-provider*
+                :has-key (if *llm-api-key* "yes" "no")
                 :title-length (length raw-title))
     (return-from enrich-todo-input nil))
 
   (handler-case
-      (let ((completer (make-gemini-completer)))
+      (let ((completer (make-completer)))
         (unless completer
-          (llog:warn "Failed to create Gemini completer")
+          (llog:warn "Failed to create LLM completer" :provider *llm-provider*)
           (return-from enrich-todo-input nil))
 
         (let* ((user-context (load-user-context))
@@ -296,17 +426,19 @@ Respond with ONLY the JSON object, no markdown formatting or additional text.")
           (llog:debug "Sending API request"
                       :prompt-length (length prompt)
                       :max-tokens 2048
-                      :response-format "json_object"
-                      :model *gemini-model*)
+                      :response-format (get-json-response-format)
+                      :provider *llm-provider*
+                      :model *llm-model*)
 
-          (llog:info "Calling Gemini API..."
-                     :endpoint "generativelanguage.googleapis.com"
+          (llog:info "Calling LLM API..."
+                     :provider *llm-provider*
+                     :model *llm-model*
                      :user-input user-input)
 
           (let* ((start-time (get-internal-real-time))
                  (response (completions:get-completion completer prompt
                                                        :max-tokens 2048
-                                                       :response-format "json_object"))
+                                                       :response-format (get-json-response-format)))
                  (end-time (get-internal-real-time))
                  (elapsed-ms (/ (* 1000 (- end-time start-time)) internal-time-units-per-second)))
 
@@ -471,8 +603,10 @@ Respond with ONLY the JSON object, no markdown formatting or additional text.")
    Returns NIL if import fails."
   (llog:info "Starting org-mode import" :filename filename)
 
-  (unless (and *enrichment-enabled* *gemini-api-key*)
-    (llog:warn "Import requires enrichment to be enabled with API key")
+  ;; Check preconditions - Ollama doesn't need API key, others do
+  (unless (and *enrichment-enabled*
+               (or (eq *llm-provider* :ollama) *llm-api-key*))
+    (llog:warn "Import requires enrichment to be enabled with valid provider config")
     (return-from import-org-file nil))
 
   (handler-case
@@ -485,9 +619,9 @@ Respond with ONLY the JSON object, no markdown formatting or additional text.")
           (llog:warn "Org file is empty" :filename filename)
           (return-from import-org-file nil))
 
-        (let ((completer (make-gemini-completer)))
+        (let ((completer (make-completer)))
           (unless completer
-            (llog:warn "Failed to create Gemini completer for import")
+            (llog:warn "Failed to create LLM completer for import" :provider *llm-provider*)
             (return-from import-org-file nil))
 
           (let* ((user-context (load-user-context))
@@ -506,7 +640,7 @@ Respond with ONLY the JSON object, no markdown formatting or additional text.")
                    ;; Each TODO item needs ~300-500 tokens in the response
                    (response (completions:get-completion completer prompt
                                                          :max-tokens 32768
-                                                         :response-format "json_object"))
+                                                         :response-format (get-json-response-format)))
                    (end-time (get-internal-real-time))
                    (elapsed-ms (/ (* 1000 (- end-time start-time)) internal-time-units-per-second)))
 
