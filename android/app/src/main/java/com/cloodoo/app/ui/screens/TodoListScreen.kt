@@ -1,30 +1,113 @@
 package com.cloodoo.app.ui.screens
 
+import android.app.Application
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Clear
+import androidx.compose.material.icons.filled.Cloud
+import androidx.compose.material.icons.filled.CloudOff
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material3.*
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
-import com.cloodoo.app.ui.components.TodoItem
+import com.cloodoo.app.data.local.TodoEntity
+import com.cloodoo.app.data.remote.ConnectionState
+import com.cloodoo.app.data.security.CertificateManager
+import com.cloodoo.app.ui.components.CollapsibleTodoSection
+import nl.dionsegijn.konfetti.compose.KonfettiView
+import nl.dionsegijn.konfetti.core.Party
+import nl.dionsegijn.konfetti.core.Position
+import nl.dionsegijn.konfetti.core.emitter.Emitter
+import java.util.concurrent.TimeUnit
 
-@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 fun TodoListScreen(
-    viewModel: TodoListViewModel = viewModel()
+    certificateManager: CertificateManager,
+    passphrase: String?
 ) {
+    val context = LocalContext.current
+    val application = context.applicationContext as Application
+
+    // If no passphrase, we can't sync (user needs to re-enter after app restart)
+    if (passphrase == null) {
+        PassphraseRequiredScreen()
+        return
+    }
+
+    val viewModel: TodoListViewModel = viewModel(
+        factory = TodoListViewModel.Factory(application, certificateManager, passphrase)
+    )
+
     val uiState by viewModel.uiState.collectAsState()
-    val serverUrl by viewModel.serverUrl.collectAsState()
+    val connectionState by viewModel.connectionState.collectAsState()
 
     var showAddDialog by remember { mutableStateOf(false) }
     var showSettingsDialog by remember { mutableStateOf(false) }
+    var searchQuery by remember { mutableStateOf("") }
+    var selectedTag by remember { mutableStateOf<String?>(null) }
+    var selectedTodo by remember { mutableStateOf<TodoEntity?>(null) }
+    var todoToConfirmComplete by remember { mutableStateOf<TodoEntity?>(null) }
+
+    // Get all unique tags from todos - handle both JSON arrays and comma-separated
+    val allTags = remember(uiState.todos) {
+        uiState.todos
+            .flatMap { todo ->
+                todo.tags?.let { tagsStr ->
+                    try {
+                        if (tagsStr.startsWith("[")) {
+                            com.google.gson.Gson().fromJson<List<String>>(
+                                tagsStr,
+                                object : com.google.gson.reflect.TypeToken<List<String>>() {}.type
+                            ) ?: emptyList()
+                        } else {
+                            tagsStr.split(",").map { it.trim() }.filter { it.isNotEmpty() }
+                        }
+                    } catch (e: Exception) {
+                        tagsStr.split(",").map { it.trim() }.filter { it.isNotEmpty() }
+                    }
+                } ?: emptyList()
+            }
+            .distinct()
+            .sorted()
+    }
+
+    // Filter todos based on search and tag
+    val filteredGroupedTodos = remember(uiState.groupedTodos, searchQuery, selectedTag) {
+        val currentTag = selectedTag
+        if (searchQuery.isBlank() && currentTag == null) {
+            uiState.groupedTodos
+        } else {
+            uiState.groupedTodos.mapNotNull { group ->
+                val filteredTodos = group.todos.filter { todo ->
+                    val matchesSearch = searchQuery.isBlank() ||
+                        todo.title.contains(searchQuery, ignoreCase = true) ||
+                        (todo.description?.contains(searchQuery, ignoreCase = true) == true)
+                    val matchesTag = currentTag == null ||
+                        (todo.tags?.contains(currentTag) == true)
+                    matchesSearch && matchesTag
+                }
+                if (filteredTodos.isNotEmpty()) {
+                    group.copy(todos = filteredTodos)
+                } else null
+            }
+        }
+    }
 
     // Show snackbar for sync results
     val snackbarHostState = remember { SnackbarHostState() }
@@ -48,26 +131,44 @@ fun TodoListScreen(
                     titleContentColor = MaterialTheme.colorScheme.onPrimaryContainer
                 ),
                 actions = {
-                    // Sync button
-                    IconButton(
-                        onClick = { viewModel.sync() },
-                        enabled = !uiState.isSyncing && serverUrl.isNotBlank()
-                    ) {
-                        if (uiState.isSyncing) {
-                            CircularProgressIndicator(
-                                modifier = Modifier.size(24.dp),
-                                strokeWidth = 2.dp
-                            )
-                        } else {
-                            Icon(
-                                Icons.Default.Sync,
-                                contentDescription = "Sync"
-                            )
-                        }
-                    }
                     // Settings button
                     IconButton(onClick = { showSettingsDialog = true }) {
-                        Icon(Icons.Default.Settings, contentDescription = "Settings")
+                        Icon(
+                            Icons.Default.Settings,
+                            contentDescription = "Settings"
+                        )
+                    }
+                    // Connection status indicator - always show something
+                    IconButton(onClick = { viewModel.connect() }) {
+                        when (connectionState) {
+                            ConnectionState.CONNECTED -> {
+                                Icon(
+                                    Icons.Default.Cloud,
+                                    contentDescription = "Connected",
+                                    tint = MaterialTheme.colorScheme.primary
+                                )
+                            }
+                            ConnectionState.CONNECTING -> {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(24.dp),
+                                    strokeWidth = 2.dp
+                                )
+                            }
+                            ConnectionState.ERROR -> {
+                                Icon(
+                                    Icons.Default.CloudOff,
+                                    contentDescription = "Error - tap to reconnect",
+                                    tint = MaterialTheme.colorScheme.error
+                                )
+                            }
+                            ConnectionState.DISCONNECTED -> {
+                                Icon(
+                                    Icons.Default.CloudOff,
+                                    contentDescription = "Disconnected - tap to reconnect",
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
                     }
                 }
             )
@@ -82,50 +183,160 @@ fun TodoListScreen(
         },
         snackbarHost = { SnackbarHost(snackbarHostState) }
     ) { padding ->
-        Box(
+        Column(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
         ) {
-            if (uiState.isLoading) {
-                CircularProgressIndicator(
-                    modifier = Modifier.align(Alignment.Center)
-                )
-            } else if (uiState.todos.isEmpty()) {
-                Column(
-                    modifier = Modifier.align(Alignment.Center),
-                    horizontalAlignment = Alignment.CenterHorizontally
+            // Search bar
+            OutlinedTextField(
+                value = searchQuery,
+                onValueChange = { searchQuery = it },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                placeholder = { Text("Search todos...") },
+                leadingIcon = { Icon(Icons.Default.Search, contentDescription = "Search") },
+                trailingIcon = {
+                    if (searchQuery.isNotEmpty()) {
+                        IconButton(onClick = { searchQuery = "" }) {
+                            Icon(Icons.Default.Clear, contentDescription = "Clear")
+                        }
+                    }
+                },
+                singleLine = true
+            )
+
+            // Tag filter chips
+            if (allTags.isNotEmpty()) {
+                Row(
+                    modifier = Modifier
+                        .horizontalScroll(rememberScrollState())
+                        .padding(horizontal = 12.dp, vertical = 4.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    Text(
-                        text = "No TODOs yet",
-                        style = MaterialTheme.typography.titleMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    FilterChip(
+                        selected = selectedTag == null,
+                        onClick = { selectedTag = null },
+                        label = { Text("All") }
                     )
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Text(
-                        text = "Tap + to add one",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-            } else {
-                LazyColumn(
-                    modifier = Modifier.fillMaxSize(),
-                    contentPadding = PaddingValues(vertical = 8.dp)
-                ) {
-                    items(
-                        items = uiState.todos,
-                        key = { it.rowId }
-                    ) { todo ->
-                        TodoItem(
-                            todo = todo,
-                            onToggleComplete = { viewModel.toggleComplete(it) },
-                            onClick = { /* TODO: Navigate to detail */ }
+                    allTags.forEach { tag ->
+                        FilterChip(
+                            selected = selectedTag == tag,
+                            onClick = { selectedTag = if (selectedTag == tag) null else tag },
+                            label = { Text(tag) }
                         )
                     }
                 }
             }
+
+            // Content
+            Box(modifier = Modifier.weight(1f)) {
+                if (uiState.isLoading) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.align(Alignment.Center)
+                    )
+                } else if (uiState.todos.isEmpty()) {
+                    Column(
+                        modifier = Modifier.align(Alignment.Center),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Text(
+                            text = "No TODOs yet",
+                            style = MaterialTheme.typography.titleMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            text = "Tap + to add one",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                } else if (filteredGroupedTodos.isEmpty()) {
+                    Column(
+                        modifier = Modifier.align(Alignment.Center),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Text(
+                            text = "No matching TODOs",
+                            style = MaterialTheme.typography.titleMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                } else {
+                    LazyColumn(
+                        modifier = Modifier.fillMaxSize(),
+                        contentPadding = PaddingValues(vertical = 8.dp)
+                    ) {
+                        filteredGroupedTodos.forEach { groupData ->
+                            stickyHeader(key = "header_${groupData.group.name}") {
+                                com.cloodoo.app.ui.components.SectionHeader(
+                                    group = groupData.group,
+                                    count = groupData.todos.size,
+                                    isExpanded = groupData.isExpanded,
+                                    onToggle = { viewModel.toggleSectionExpanded(groupData.group) }
+                                )
+                            }
+                            if (groupData.isExpanded) {
+                                items(
+                                    items = groupData.todos,
+                                    key = { it.rowId }
+                                ) { todo ->
+                                    com.cloodoo.app.ui.components.SwipeableTodoItem(
+                                        todo = todo,
+                                        onToggleComplete = { todoId ->
+                                            // Show confirmation dialog instead of directly toggling
+                                            todoToConfirmComplete = uiState.todos.find { t -> t.id == todoId }
+                                        },
+                                        onClick = { selectedTodo = uiState.todos.find { t -> t.id == it } },
+                                        onDelete = { viewModel.deleteTodo(it) }
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         }
+    }
+
+    // Confetti celebration when completing a task
+    if (uiState.showConfetti) {
+        KonfettiView(
+            modifier = Modifier.fillMaxSize(),
+            parties = listOf(
+                Party(
+                    speed = 0f,
+                    maxSpeed = 30f,
+                    damping = 0.9f,
+                    spread = 360,
+                    colors = listOf(
+                        Color(0xFFE91E63).hashCode(),  // Pink
+                        Color(0xFF9C27B0).hashCode(),  // Purple
+                        Color(0xFF2196F3).hashCode(),  // Blue
+                        Color(0xFF4CAF50).hashCode(),  // Green
+                        Color(0xFFFFEB3B).hashCode(),  // Yellow
+                        Color(0xFFFF9800).hashCode()   // Orange
+                    ),
+                    position = Position.Relative(0.5, 0.3),
+                    emitter = Emitter(duration = 100, TimeUnit.MILLISECONDS).max(50)
+                )
+            )
+        )
+        // Clear confetti after animation
+        LaunchedEffect(Unit) {
+            kotlinx.coroutines.delay(2000)
+            viewModel.clearConfetti()
+        }
+    }
+
+    // Detail Bottom Sheet
+    if (selectedTodo != null) {
+        TodoDetailSheet(
+            todo = selectedTodo!!,
+            onDismiss = { selectedTodo = null }
+        )
     }
 
     // Add TODO Dialog
@@ -141,14 +352,83 @@ fun TodoListScreen(
 
     // Settings Dialog
     if (showSettingsDialog) {
-        SettingsDialog(
-            serverUrl = serverUrl,
+        ServerSettingsDialog(
+            certificateManager = certificateManager,
             onDismiss = { showSettingsDialog = false },
-            onSave = { url ->
-                viewModel.setServerUrl(url)
+            onSave = { address, port ->
+                certificateManager.updateServerConfig(address, port)
+                viewModel.disconnect()
+                viewModel.connect()
                 showSettingsDialog = false
             }
         )
+    }
+
+    // Completion Confirmation Dialog
+    todoToConfirmComplete?.let { todo ->
+        val isCurrentlyCompleted = todo.status == "completed"
+        AlertDialog(
+            onDismissRequest = { todoToConfirmComplete = null },
+            title = {
+                Text(if (isCurrentlyCompleted) "Reopen Task?" else "Complete Task?")
+            },
+            text = {
+                Text(
+                    if (isCurrentlyCompleted)
+                        "Mark \"${todo.title}\" as not completed?"
+                    else
+                        "Mark \"${todo.title}\" as completed?"
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        viewModel.toggleComplete(todo.id)
+                        todoToConfirmComplete = null
+                    }
+                ) {
+                    Text(if (isCurrentlyCompleted) "Reopen" else "Complete")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { todoToConfirmComplete = null }) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
+}
+
+@Composable
+private fun PassphraseRequiredScreen() {
+    // This shouldn't happen anymore since we save the passphrase
+    // But keeping as fallback
+    Box(
+        modifier = Modifier.fillMaxSize(),
+        contentAlignment = Alignment.Center
+    ) {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            modifier = Modifier.padding(32.dp)
+        ) {
+            Icon(
+                Icons.Default.CloudOff,
+                contentDescription = null,
+                modifier = Modifier.size(64.dp),
+                tint = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Spacer(modifier = Modifier.height(16.dp))
+            Text(
+                "Session Expired",
+                style = MaterialTheme.typography.titleLarge
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+                "Please clear app data and pair again",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
     }
 }
 
@@ -205,42 +485,46 @@ fun AddTodoDialog(
     )
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun SettingsDialog(
-    serverUrl: String,
+fun ServerSettingsDialog(
+    certificateManager: CertificateManager,
     onDismiss: () -> Unit,
-    onSave: (String) -> Unit
+    onSave: (String, Int) -> Unit
 ) {
-    var url by remember { mutableStateOf(serverUrl) }
+    var serverAddress by remember { mutableStateOf(certificateManager.getServerAddress() ?: "") }
+    var serverPort by remember { mutableStateOf(certificateManager.getServerPort().toString()) }
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Sync Settings") },
+        title = { Text("Server Settings") },
         text = {
             Column {
-                Text(
-                    "Enter your laptop's Tailscale hostname and port:",
-                    style = MaterialTheme.typography.bodyMedium
-                )
-                Spacer(modifier = Modifier.height(8.dp))
                 OutlinedTextField(
-                    value = url,
-                    onValueChange = { url = it },
-                    label = { Text("Server URL") },
-                    placeholder = { Text("http://laptop.tailnet.ts.net:9876") },
+                    value = serverAddress,
+                    onValueChange = { serverAddress = it },
+                    label = { Text("Server Address") },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
                 )
-                Spacer(modifier = Modifier.height(8.dp))
-                Text(
-                    "Example: http://my-laptop.tailnet.ts.net:9876",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                Spacer(modifier = Modifier.height(16.dp))
+                OutlinedTextField(
+                    value = serverPort,
+                    onValueChange = { serverPort = it.filter { c -> c.isDigit() } },
+                    label = { Text("Port") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
                 )
             }
         },
         confirmButton = {
-            TextButton(onClick = { onSave(url) }) {
+            TextButton(
+                onClick = {
+                    val port = serverPort.toIntOrNull() ?: 50051
+                    onSave(serverAddress, port)
+                },
+                enabled = serverAddress.isNotBlank() && serverPort.isNotBlank()
+            ) {
                 Text("Save")
             }
         },
@@ -250,4 +534,258 @@ fun SettingsDialog(
             }
         }
     )
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun TodoDetailSheet(
+    todo: TodoEntity,
+    onDismiss: () -> Unit
+) {
+    val context = LocalContext.current
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+
+    // Parse tags - handle both JSON arrays and comma-separated strings
+    val tags = remember(todo.tags) {
+        todo.tags?.let { tagsStr ->
+            try {
+                // Try JSON array first
+                if (tagsStr.startsWith("[")) {
+                    com.google.gson.Gson().fromJson<List<String>>(
+                        tagsStr,
+                        object : com.google.gson.reflect.TypeToken<List<String>>() {}.type
+                    ) ?: emptyList()
+                } else {
+                    // Comma-separated or single tag
+                    tagsStr.split(",").map { it.trim() }.filter { it.isNotEmpty() }
+                }
+            } catch (e: Exception) {
+                // Fallback: treat as single tag or comma-separated
+                tagsStr.split(",").map { it.trim() }.filter { it.isNotEmpty() }
+            }
+        } ?: emptyList()
+    }
+
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 20.dp, vertical = 16.dp)
+                .padding(bottom = 32.dp)
+        ) {
+            // Title
+            Text(
+                text = todo.title,
+                style = MaterialTheme.typography.headlineSmall,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            // Status and Priority row
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                // Status chip
+                AssistChip(
+                    onClick = { },
+                    label = { Text(todo.status.replaceFirstChar { it.uppercase() }) },
+                    colors = AssistChipDefaults.assistChipColors(
+                        containerColor = when (todo.status) {
+                            "completed" -> MaterialTheme.colorScheme.primaryContainer
+                            "cancelled" -> MaterialTheme.colorScheme.errorContainer
+                            else -> MaterialTheme.colorScheme.surfaceVariant
+                        }
+                    )
+                )
+
+                // Priority chip
+                AssistChip(
+                    onClick = { },
+                    label = { Text(todo.priority.replaceFirstChar { it.uppercase() }) },
+                    colors = AssistChipDefaults.assistChipColors(
+                        containerColor = when (todo.priority) {
+                            "high" -> MaterialTheme.colorScheme.errorContainer
+                            "medium" -> MaterialTheme.colorScheme.tertiaryContainer
+                            else -> MaterialTheme.colorScheme.surfaceVariant
+                        }
+                    )
+                )
+            }
+
+            // Dates section
+            if (todo.dueDate != null || todo.scheduledDate != null) {
+                Spacer(modifier = Modifier.height(16.dp))
+                HorizontalDivider()
+                Spacer(modifier = Modifier.height(16.dp))
+
+                todo.dueDate?.let { dueDate ->
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            text = "Due: ",
+                            style = MaterialTheme.typography.labelLarge,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Text(
+                            text = formatDate(dueDate),
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(8.dp))
+                }
+
+                todo.scheduledDate?.let { scheduledDate ->
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            text = "Scheduled: ",
+                            style = MaterialTheme.typography.labelLarge,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Text(
+                            text = formatDate(scheduledDate),
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                    }
+                }
+            }
+
+            // Tags section
+            if (tags.isNotEmpty()) {
+                Spacer(modifier = Modifier.height(16.dp))
+                HorizontalDivider()
+                Spacer(modifier = Modifier.height(16.dp))
+
+                Text(
+                    text = "Tags",
+                    style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier.horizontalScroll(rememberScrollState())
+                ) {
+                    tags.forEach { tag ->
+                        SuggestionChip(
+                            onClick = { },
+                            label = { Text(tag) }
+                        )
+                    }
+                }
+            }
+
+            // URL section
+            if (!todo.url.isNullOrBlank()) {
+                Spacer(modifier = Modifier.height(16.dp))
+                HorizontalDivider()
+                Spacer(modifier = Modifier.height(16.dp))
+
+                Text(
+                    text = "Link",
+                    style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    text = todo.url,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.primary,
+                    maxLines = 2,
+                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                    modifier = Modifier.clickable {
+                        try {
+                            val intent = android.content.Intent(
+                                android.content.Intent.ACTION_VIEW,
+                                android.net.Uri.parse(todo.url)
+                            )
+                            context.startActivity(intent)
+                        } catch (e: Exception) { /* ignore */ }
+                    }
+                )
+            }
+
+            // Description section
+            if (!todo.description.isNullOrBlank()) {
+                Spacer(modifier = Modifier.height(16.dp))
+                HorizontalDivider()
+                Spacer(modifier = Modifier.height(16.dp))
+
+                Text(
+                    text = "Description",
+                    style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                ClickableTextWithLinks(
+                    text = todo.description,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+            }
+        }
+    }
+}
+
+@Composable
+fun ClickableTextWithLinks(
+    text: String,
+    style: androidx.compose.ui.text.TextStyle,
+    color: androidx.compose.ui.graphics.Color
+) {
+    val context = LocalContext.current
+    val urlPattern = android.util.Patterns.WEB_URL
+    val matcher = urlPattern.matcher(text)
+
+    val annotatedString = androidx.compose.ui.text.buildAnnotatedString {
+        var lastEnd = 0
+        while (matcher.find()) {
+            // Add text before the URL
+            append(text.substring(lastEnd, matcher.start()))
+            // Add the URL with annotation
+            val url = matcher.group()
+            pushStringAnnotation(tag = "URL", annotation = url)
+            withStyle(
+                style = androidx.compose.ui.text.SpanStyle(
+                    color = MaterialTheme.colorScheme.primary,
+                    textDecoration = androidx.compose.ui.text.style.TextDecoration.Underline
+                )
+            ) {
+                append(url)
+            }
+            pop()
+            lastEnd = matcher.end()
+        }
+        // Add remaining text
+        append(text.substring(lastEnd))
+    }
+
+    androidx.compose.foundation.text.ClickableText(
+        text = annotatedString,
+        style = style.copy(color = color),
+        onClick = { offset ->
+            annotatedString.getStringAnnotations(tag = "URL", start = offset, end = offset)
+                .firstOrNull()?.let { annotation ->
+                    try {
+                        val intent = android.content.Intent(
+                            android.content.Intent.ACTION_VIEW,
+                            android.net.Uri.parse(annotation.item)
+                        )
+                        context.startActivity(intent)
+                    } catch (e: Exception) { /* ignore */ }
+                }
+        }
+    )
+}
+
+private fun formatDate(dateStr: String): String {
+    return try {
+        val zdt = java.time.ZonedDateTime.parse(dateStr)
+        val formatter = java.time.format.DateTimeFormatter.ofPattern("EEE, MMM d, yyyy")
+        zdt.format(formatter)
+    } catch (e: Exception) {
+        dateStr
+    }
 }

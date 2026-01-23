@@ -208,7 +208,24 @@
    (deleting-tag
     :initform nil
     :accessor model-deleting-tag
-    :documentation "Tag name being deleted (for confirmation dialog)."))
+    :documentation "Tag name being deleted (for confirmation dialog).")
+   ;; Sync client state
+   (sync-status
+    :initform :disconnected
+    :accessor model-sync-status
+    :documentation "Sync connection status: :disconnected, :connecting, :connected, :error.")
+   (sync-server-address
+    :initform nil
+    :accessor model-sync-server-address
+    :documentation "Address of the sync server (host:port) if connected as client.")
+   (sync-pending-count
+    :initform 0
+    :accessor model-sync-pending-count
+    :documentation "Number of pending changes from server during initial sync.")
+   (sync-error-message
+    :initform nil
+    :accessor model-sync-error-message
+    :documentation "Error message if sync failed."))
   (:documentation "The application model following TEA pattern."))
 
 (defun make-initial-model ()
@@ -293,6 +310,19 @@
             nil))
       ;; Top-level task - return its own tags
       (todo-tags todo)))
+
+(defun build-parent-context (parent-id all-todos)
+  "Build a list of (title . description) pairs for the parent chain.
+   Returns list from immediate parent to root, or NIL if no parent."
+  (when parent-id
+    (let ((result nil)
+          (current-id parent-id))
+      (loop while current-id
+            for parent = (find current-id all-todos :key #'todo-id :test #'equal)
+            while parent
+            do (push (cons (todo-title parent) (todo-description parent)) result)
+               (setf current-id (todo-parent-id parent)))
+      (nreverse result))))
 
 ;;── Tag Autocomplete Helpers ──────────────────────────────────────────────────
 
@@ -634,6 +664,7 @@
 
 (defmethod tui:init ((model app-model))
   "Initialize the application model."
+  (tui:set-terminal-title "cloodoo")
   (let ((size (tui:get-terminal-size)))
     (when size
       (setf (model-term-width model) (car size))
@@ -648,9 +679,9 @@
   (setf (model-description-input model)
         (tui.textinput:make-textinput
          :prompt "Notes: "
-         :placeholder "Optional description"
+         :placeholder "(press N to edit in $EDITOR)"
          :width 50
-         :char-limit 500))
+         :char-limit 0))
   (setf (model-search-input model)
         (tui.textinput:make-textinput
          :prompt "Search: "
@@ -1231,33 +1262,30 @@
        (llog:info "Opening user context editor")
        (let ((file (ensure-user-context-file))
              (editor (get-editor)))
-         ;; Suspend terminal, run editor, resume
-         (let ((restore-fn (tui::suspend-terminal :alt-screen t)))
-           (unwind-protect
-               (uiop:run-program (list editor (namestring file))
-                                 :input :interactive
-                                 :output :interactive
-                                 :error-output :interactive)
-             (when restore-fn
-               (tui::resume-terminal restore-fn)))))
-       (values model nil))
+         ;; Use exec-cmd for proper TUI suspension
+         (values model
+                 (tui:make-exec-cmd editor
+                                    :args (list (namestring file))))))
 
       ;; Re-enrich selected TODO (&)
       ((and (characterp key) (char= key #\&))
        (when (< (model-cursor model) (length todos))
          (let ((todo (nth (model-cursor model) todos)))
            (unless (todo-enriching-p todo)
-             (llog:info "Re-triggering enrichment"
-                        :todo-id (todo-id todo)
-                        :title (todo-title todo))
-             (setf (todo-enriching-p todo) t)
-             (save-todo todo)
-             (return-from handle-list-keys
-               (values model (list (make-enrichment-cmd (todo-id todo)
-                                                        (todo-title todo)
-                                                        (todo-description todo))
-                                   (make-spinner-start-cmd
-                                    (model-enrichment-spinner model))))))))
+             (let ((parent-context (build-parent-context (todo-parent-id todo) (model-todos model))))
+               (llog:info "Re-triggering enrichment"
+                          :todo-id (todo-id todo)
+                          :title (todo-title todo)
+                          :has-parent-context (if parent-context "yes" "no"))
+               (setf (todo-enriching-p todo) t)
+               (save-todo todo)
+               (return-from handle-list-keys
+                 (values model (list (make-enrichment-cmd (todo-id todo)
+                                                          (todo-title todo)
+                                                          (todo-description todo)
+                                                          parent-context)
+                                     (make-spinner-start-cmd
+                                      (model-enrichment-spinner model)))))))))
        (values model nil))
 
       ;; Import org-mode file (i)
@@ -1286,6 +1314,11 @@
       ((and ctrl (characterp key) (char= key #\c))
        (setf (model-view-state model) :list)
        (values model nil))
+
+      ;; Ctrl+E to edit notes in external editor
+      ((and ctrl (characterp key) (char= key #\e))
+       (let ((current-text (tui.textinput:textinput-value (model-description-input model))))
+         (values model (make-editor-cmd current-text))))
 
       ;; Tab to next field: title → description → priority → scheduled → due → repeat → tags → title
       ((eq key :tab)
@@ -1563,17 +1596,21 @@
                  ;; Clear pending parent-id
                  (setf (model-pending-parent-id model) nil)
                  (setf (model-view-state model) :list)
-                 (llog:info "Created todo, starting async enrichment"
-                            :todo-id (todo-id new-todo)
-                            :title title
-                            :parent-id parent-id)
-                 ;; Return command for async enrichment
-                 (return-from handle-add-edit-keys
-                   (values model (list (make-enrichment-cmd (todo-id new-todo)
-                                                            title
-                                                            desc-input)
-                                       (make-spinner-start-cmd
-                                        (model-enrichment-spinner model)))))))))
+                 ;; Build parent context for enrichment
+                 (let ((parent-context (build-parent-context parent-id (model-todos model))))
+                   (llog:info "Created todo, starting async enrichment"
+                              :todo-id (todo-id new-todo)
+                              :title title
+                              :parent-id parent-id
+                              :has-parent-context (if parent-context "yes" "no"))
+                   ;; Return command for async enrichment
+                   (return-from handle-add-edit-keys
+                     (values model (list (make-enrichment-cmd (todo-id new-todo)
+                                                              title
+                                                              desc-input
+                                                              parent-context)
+                                         (make-spinner-start-cmd
+                                          (model-enrichment-spinner model))))))))))
        (values model nil))
 
       ;; Pass key to active text input
@@ -1920,6 +1957,16 @@
              (open-url (first urls)))))
        (values model nil))
 
+      ;; Edit notes with 'n' - opens external editor
+      ((and (characterp key) (char= key #\n))
+       (when (< (model-cursor model) (length todos))
+         (let* ((todo (nth (model-cursor model) todos))
+                (current-notes (or (todo-description todo) "")))
+           ;; Store the todo id so we know which todo to update
+           (setf (model-edit-todo-id model) (todo-id todo))
+           (values model (make-detail-notes-editor-cmd (todo-id todo) current-notes))))
+       (values model nil))
+
       (t (values model nil)))))
 
 ;;── List Date Modal Key Handling ───────────────────────────────────────────────
@@ -2129,17 +2176,37 @@
   (values model nil))
 
 (defmethod tui:update-message ((model app-model) (msg tui:mouse-scroll-event))
-  "Handle mouse scroll by moving selection up/down."
+  "Handle mouse scroll by scrolling the viewport."
   (when (eq (model-view-state model) :list)
-    (let ((direction (tui:mouse-scroll-direction msg))
-          (count (tui:mouse-scroll-count msg))
-          (todos (get-visible-todos model)))
-      (case direction
-        (:up (setf (model-cursor model)
-                   (max 0 (- (model-cursor model) count))))
-        (:down (setf (model-cursor model)
-                     (min (1- (length todos))
-                          (+ (model-cursor model) count)))))))
+    (let* ((direction (tui:mouse-scroll-direction msg))
+           (count (tui:mouse-scroll-count msg))
+           (todos (get-visible-todos model))
+           (groups (group-todos-by-date todos))
+           (num-lines (max 1 (+ (length todos) (* (length groups) +header-lines+))))
+           (viewport-height (max 5 (- (model-term-height model) 3)))
+           (max-offset (max 0 (- num-lines viewport-height)))
+           (offset (model-scroll-offset model))
+           (new-offset (case direction
+                         (:up (max 0 (- offset count)))
+                         (:down (min max-offset (+ offset count)))
+                         (t offset))))
+      (setf (model-scroll-offset model) new-offset)
+      ;; Move cursor into visible viewport so adjust-scroll won't override
+      (let* ((cursor (model-cursor model))
+             (cursor-line (list-line-index-for-cursor groups cursor)))
+        (cond
+          ;; Cursor is above viewport - move to first visible todo
+          ((< cursor-line new-offset)
+           (loop for line from new-offset below (+ new-offset viewport-height)
+                 for idx = (cursor-index-for-line groups line)
+                 when idx do (setf (model-cursor model) idx)
+                             (return)))
+          ;; Cursor is below viewport - move to last visible todo
+          ((>= cursor-line (+ new-offset viewport-height))
+           (loop for line from (+ new-offset viewport-height -1) downto new-offset
+                 for idx = (cursor-index-for-line groups line)
+                 when idx do (setf (model-cursor model) idx)
+                             (return)))))))
   (values model nil))
 
 (defmethod tui:update-message ((model app-model) (msg tui:mouse-press-event))
@@ -2154,30 +2221,63 @@
               (list-line (- screen-line +list-top-lines+))
               (available-height (max 5 (- (model-term-height model) 3)))
               (term-width (model-term-width model))
-              (scrollbar-col (1- term-width)))  ; Rightmost column
-         (when (and (>= list-line 0) (< list-line available-height))
-           (cond
-             ;; Left-click on scrollbar: start dragging
-             ((and (eq button :left) (= screen-x scrollbar-col))
-              (setf (model-scrollbar-dragging model) t)
-              (scroll-to-y-position model list-line available-height))
-             ;; Left-click on list: select item
-             ((eq button :left)
-              (let* ((line-idx (+ (model-scroll-offset model) list-line))
-                     (groups (get-visible-todos-grouped model))
-                     (cursor (cursor-index-for-line groups line-idx)))
-                (when cursor
-                  (setf (model-cursor model) cursor
-                        (model-sidebar-focused model) nil))))
-             ;; Right-click on list: select item and show details
-             ((eq button :right)
-              (let* ((line-idx (+ (model-scroll-offset model) list-line))
-                     (groups (get-visible-todos-grouped model))
-                     (cursor (cursor-index-for-line groups line-idx)))
-                (when cursor
-                  (setf (model-cursor model) cursor
-                        (model-sidebar-focused model) nil
-                        (model-view-state model) :detail))))))))
+              (scrollbar-col (1- term-width))  ; Rightmost column
+              ;; Calculate sidebar width (same logic as render-list-view)
+              (sidebar-visible (model-sidebar-visible model))
+              (min-list-width 20)
+              (raw-sidebar-width (if sidebar-visible 14 0))
+              (sidebar-width (if sidebar-visible
+                                 (max 0 (min raw-sidebar-width (- term-width min-list-width 2)))
+                                 0))
+              (sidebar-visible-effective (> sidebar-width 0)))
+         (cond
+           ;; Click in sidebar area
+           ((and sidebar-visible-effective (< screen-x sidebar-width)
+                 (eq button :left))
+            ;; Sidebar rows: 0=header, 1=separator, 2="All", 3+=tags
+            (let* ((sidebar-item (- screen-line 2))
+                   (tags (model-all-tags-cache model))
+                   (max-cursor (length tags)))
+              (when (and (>= sidebar-item 0) (<= sidebar-item max-cursor))
+                ;; Focus sidebar, set cursor, and toggle the tag
+                (setf (model-sidebar-focused model) t
+                      (model-sidebar-cursor model) sidebar-item)
+                (let ((selected (model-selected-tags model)))
+                  (if (= sidebar-item 0)
+                      ;; "All" - clear all filters
+                      (clrhash selected)
+                      ;; Toggle specific tag
+                      (let ((tag (nth (1- sidebar-item) tags)))
+                        (when tag
+                          (if (gethash tag selected)
+                              (remhash tag selected)
+                              (setf (gethash tag selected) t))))))
+                (invalidate-visible-todos-cache model)
+                (setf (model-cursor model) 0))))
+           ;; Left-click on scrollbar: start dragging
+           ((and (>= list-line 0) (< list-line available-height)
+                 (eq button :left) (= screen-x scrollbar-col))
+            (setf (model-scrollbar-dragging model) t)
+            (scroll-to-y-position model list-line available-height))
+           ;; Left-click on list: select item
+           ((and (>= list-line 0) (< list-line available-height)
+                 (eq button :left))
+            (let* ((line-idx (+ (model-scroll-offset model) list-line))
+                   (groups (get-visible-todos-grouped model))
+                   (cursor (cursor-index-for-line groups line-idx)))
+              (when cursor
+                (setf (model-cursor model) cursor
+                      (model-sidebar-focused model) nil))))
+           ;; Right-click on list: select item and show details
+           ((and (>= list-line 0) (< list-line available-height)
+                 (eq button :right))
+            (let* ((line-idx (+ (model-scroll-offset model) list-line))
+                   (groups (get-visible-todos-grouped model))
+                   (cursor (cursor-index-for-line groups line-idx)))
+              (when cursor
+                (setf (model-cursor model) cursor
+                      (model-sidebar-focused model) nil
+                      (model-view-state model) :detail)))))))
       ;; Detail view: click on URL to open it
       ;; URLs appear in the lower section; we check Y position and URL presence
       ((eq view-state :detail)
@@ -2272,15 +2372,17 @@
       (refresh-tags-cache model))
     (values model nil)))
 
-(defun make-enrichment-cmd (todo-id raw-title raw-notes)
+(defun make-enrichment-cmd (todo-id raw-title raw-notes &optional parent-context)
   "Create a command that performs async enrichment and returns completion message.
+   PARENT-CONTEXT is an optional list of (title . description) pairs for parent tasks.
    Tuition runs this in a separate thread."
   (lambda ()
     (llog:info "Starting async enrichment"
                :todo-id todo-id
-               :raw-title raw-title)
+               :raw-title raw-title
+               :has-parent-context (if parent-context "yes" "no"))
     (let ((result (handler-case
-                      (enrich-todo-input raw-title raw-notes)
+                      (enrich-todo-input raw-title raw-notes parent-context)
                     (error (e)
                       (llog:error "Enrichment failed"
                                   :todo-id todo-id
@@ -2368,3 +2470,125 @@
       (make-instance 'import-complete-msg
                      :filename filename
                      :imported-todos result))))
+
+;;── External Editor ───────────────────────────────────────────────────────────
+
+(defclass editor-complete-msg ()
+  ((new-text
+    :initarg :new-text
+    :accessor editor-msg-new-text
+    :documentation "The edited text, or NIL if unchanged/cancelled."))
+  (:documentation "Message sent when external editor completes."))
+
+(defmethod tui:update-message ((model app-model) (msg editor-complete-msg))
+  "Handle editor completion by updating the description field."
+  (let ((new-text (editor-msg-new-text msg)))
+    (when new-text
+      (tui.textinput:textinput-set-value (model-description-input model) new-text))
+    ;; Force a redraw by sending window size
+    (values model nil)))
+
+(defun make-editor-cmd (current-text)
+  "Create an exec-cmd that opens an external editor for text editing.
+   Uses exec-cmd for proper TUI suspension."
+  (llog:info "Creating external editor command")
+  ;; Create temp file before returning the command
+  (ensure-cache-directory)
+  (let* ((editor (get-editor))
+         (temp-file (merge-pathnames
+                     (format nil "cloodoo-edit-~A.md" (get-universal-time))
+                     (cache-directory))))
+    ;; Write current text to temp file
+    (with-open-file (stream temp-file
+                            :direction :output
+                            :if-exists :supersede
+                            :if-does-not-exist :create)
+      (when current-text
+        (write-string current-text stream)))
+    ;; Return exec-cmd with callback to read result
+    (tui:make-exec-cmd editor
+                       :args (list (namestring temp-file))
+                       :callback (lambda ()
+                                   (llog:info "Editor callback - reading result")
+                                   (handler-case
+                                       (let ((result (uiop:read-file-string temp-file)))
+                                         ;; Clean up temp file
+                                         (when (probe-file temp-file)
+                                           (delete-file temp-file))
+                                         ;; Return trimmed result
+                                         (let ((trimmed (string-trim '(#\Space #\Newline #\Tab #\Return) result)))
+                                           (make-instance 'editor-complete-msg
+                                                          :new-text (if (> (length trimmed) 0)
+                                                                        trimmed
+                                                                        nil))))
+                                     (error (e)
+                                       (llog:warn "Error reading editor result" :error (princ-to-string e))
+                                       (when (probe-file temp-file)
+                                         (delete-file temp-file))
+                                       nil))))))
+
+;;── Direct Notes Editing (from detail view) ───────────────────────────────────
+
+(defclass notes-editor-complete-msg ()
+  ((todo-id
+    :initarg :todo-id
+    :accessor notes-editor-msg-todo-id
+    :documentation "ID of the todo being edited.")
+   (new-text
+    :initarg :new-text
+    :accessor notes-editor-msg-new-text
+    :documentation "The edited notes text, or NIL if unchanged/cancelled."))
+  (:documentation "Message sent when external notes editor completes for a specific todo."))
+
+(defmethod tui:update-message ((model app-model) (msg notes-editor-complete-msg))
+  "Handle notes editor completion by updating the todo's description directly."
+  (let ((todo-id (notes-editor-msg-todo-id msg))
+        (new-text (notes-editor-msg-new-text msg)))
+    (when new-text
+      ;; Find and update the todo
+      (let ((todo (find todo-id (model-todos model) :key #'todo-id :test #'string=)))
+        (when todo
+          (setf (todo-description todo) (if (string= new-text "") nil new-text))
+          (save-todo todo)
+          (llog:info "Updated todo notes" :todo-id todo-id))))
+    (values model nil)))
+
+(defun make-detail-notes-editor-cmd (todo-id current-text)
+  "Create an exec-cmd that opens an external editor for editing a todo's notes directly.
+   Uses exec-cmd for proper TUI suspension."
+  (llog:info "Creating notes editor command" :todo-id todo-id)
+  ;; Create temp file before returning the command
+  (ensure-cache-directory)
+  (let* ((editor (get-editor))
+         (temp-file (merge-pathnames
+                     (format nil "cloodoo-notes-~A.md" (get-universal-time))
+                     (cache-directory))))
+    ;; Write current text to temp file
+    (with-open-file (stream temp-file
+                            :direction :output
+                            :if-exists :supersede
+                            :if-does-not-exist :create)
+      (when current-text
+        (write-string current-text stream)))
+    ;; Return exec-cmd with callback to read result
+    (tui:make-exec-cmd editor
+                       :args (list (namestring temp-file))
+                       :callback (lambda ()
+                                   (llog:info "Notes editor callback - reading result" :todo-id todo-id)
+                                   (handler-case
+                                       (let ((result (uiop:read-file-string temp-file)))
+                                         ;; Clean up temp file
+                                         (when (probe-file temp-file)
+                                           (delete-file temp-file))
+                                         ;; Return trimmed result
+                                         (let ((trimmed (string-trim '(#\Space #\Newline #\Tab #\Return) result)))
+                                           (make-instance 'notes-editor-complete-msg
+                                                          :todo-id todo-id
+                                                          :new-text (if (> (length trimmed) 0)
+                                                                        trimmed
+                                                                        nil))))
+                                     (error (e)
+                                       (llog:warn "Error reading notes editor result" :error (princ-to-string e))
+                                       (when (probe-file temp-file)
+                                         (delete-file temp-file))
+                                       nil))))))

@@ -104,6 +104,83 @@
           (setf (gethash "error" response) "Missing device_id or rows")
           (jzon:stringify response)))))
 
+;;── Pairing API Routes ─────────────────────────────────────────────────────────
+
+(easy-routes:defroute api-pair-info ("/pair/:token" :method :get) ()
+  "Return pairing info (device name, expiry) for a token.
+   Does NOT consume the token - use POST to download the certificate."
+  (setf (hunchentoot:content-type*) "application/json")
+  (let ((request (get-pairing-request token))
+        (response (make-hash-table :test #'equal)))
+    (if request
+        (progn
+          (setf (gethash "device_name" response) (pairing-request-device-name request))
+          (setf (gethash "expires_in" response)
+                (- (pairing-request-expires-at request) (get-universal-time)))
+          (jzon:stringify response))
+        (progn
+          (setf (hunchentoot:return-code*) 404)
+          (setf (gethash "error" response) "Invalid or expired pairing token")
+          (jzon:stringify response)))))
+
+(easy-routes:defroute api-pair-download ("/pair/:token" :method :post) ()
+  "Download the .p12 certificate bundle for a pairing token.
+   This consumes the token (single-use).
+   Returns the .p12 file as application/x-pkcs12."
+  (let ((request (consume-pairing-request token)))
+    (if request
+        (let ((p12-path (pairing-request-p12-path request)))
+          (if (probe-file p12-path)
+              (progn
+                (setf (hunchentoot:content-type*) "application/x-pkcs12")
+                (setf (hunchentoot:header-out "Content-Disposition")
+                      (format nil "attachment; filename=\"~A.p12\""
+                              (pairing-request-device-name request)))
+                ;; Read and return the file contents
+                (with-open-file (stream p12-path
+                                        :direction :input
+                                        :element-type '(unsigned-byte 8))
+                  (let ((data (make-array (file-length stream)
+                                          :element-type '(unsigned-byte 8))))
+                    (read-sequence data stream)
+                    data)))
+              (progn
+                (setf (hunchentoot:content-type*) "application/json")
+                (setf (hunchentoot:return-code*) 500)
+                (jzon:stringify (alexandria:plist-hash-table
+                                 '("error" "Certificate file not found")
+                                 :test #'equal)))))
+        (progn
+          (setf (hunchentoot:content-type*) "application/json")
+          (setf (hunchentoot:return-code*) 404)
+          (jzon:stringify (alexandria:plist-hash-table
+                           '("error" "Invalid or expired pairing token")
+                           :test #'equal))))))
+
+(easy-routes:defroute api-pair-status ("/api/pair/status" :method :get) ()
+  "Check if CA is initialized and return server info for pairing."
+  (setf (hunchentoot:content-type*) "application/json")
+  (let ((response (make-hash-table :test #'equal)))
+    (setf (gethash "ca_initialized" response) (ca-initialized-p))
+    (setf (gethash "server_cert_initialized" response) (server-cert-initialized-p))
+    (setf (gethash "device_id" response) (get-device-id))
+    (setf (gethash "local_ips" response) (coerce (detect-local-ips) 'vector))
+    (jzon:stringify response)))
+
+(easy-routes:defroute api-pair-debug ("/api/pair/debug" :method :get) ()
+  "Debug: list all pending pairing tokens."
+  (setf (hunchentoot:content-type*) "application/json")
+  (let ((tokens nil))
+    (bt:with-lock-held (*pairing-lock*)
+      (maphash (lambda (token request)
+                 (push (list :token token
+                             :device (pairing-request-device-name request)
+                             :expires-in (- (pairing-request-expires-at request)
+                                           (get-universal-time)))
+                       tokens))
+               *pending-pairings*))
+    (jzon:stringify (or tokens #()))))
+
 ;;── Server Control ─────────────────────────────────────────────────────────────
 
 (defun start-server (&key (port *default-port*) (address *default-address*))

@@ -22,18 +22,23 @@
                :cl-dotenv
                :llog
                :bordeaux-threads
-               :sqlite)
+               :sqlite
+               :ag-grpc
+               :ag-proto)
   :serial t
   :components ((:module "src"
                 :components ((:file "package")
                              (:file "model")
+                             (:file "grpc-proto")
                              (:file "storage")
                              (:file "db")
+                             (:file "certs")
                              (:file "enrich")
                              (:file "update")
                              (:file "components")
                              (:file "view")
                              (:file "server")
+                             (:file "sync")
                              (:file "cli")
                              (:file "main"))))
   :build-operation "program-op"

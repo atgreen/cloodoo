@@ -93,16 +93,62 @@
                       (padding (max 0 (- target-width visible-len))))
                  (format s "~A~A" (or line "") (make-string padding :initial-element #\Space)))))))
 
+(defun format-sync-status (model)
+  "Format the sync status for display in the header."
+  (let ((status (model-sync-status model)))
+    (case status
+      (:disconnected "")
+      (:connecting
+       (tui:colored "⟳ Connecting" :fg tui:*fg-yellow*))
+      (:connected
+       (tui:colored "● Synced" :fg tui:*fg-green*))
+      (:error
+       (tui:colored "✗ Sync Error" :fg tui:*fg-red*))
+      (otherwise ""))))
+
+(defun count-active-todos (model)
+  "Count the number of non-completed, non-cancelled todos."
+  (count-if (lambda (todo)
+              (not (member (todo-status todo) '(:completed :cancelled))))
+            (model-todos model)))
+
 (defun render-app-title-bar (model)
-  "Render the application title bar."
+  "Render the application title bar with version, date, sync status, and task count."
   (let* ((width (model-term-width model))
-         (title "Week-agenda:")
-         (right "")
-         (padding (max 0 (- width (length title)))))
-    (tui:bold
-     (tui:colored
-      (format nil "~A~A~A" title (make-string padding :initial-element #\Space) right)
-      :fg tui:*fg-blue*))))
+         ;; Left: version
+         (version-str (format nil "cloodoo ~A" +version+))
+         ;; Middle: date - use (lt:now) for correct weekday calculation
+         (date-str (lt:format-timestring nil (lt:now)
+                                         :format '(:short-weekday " " :short-month " " :day ", " :year)))
+         ;; Right: sync status + task count
+         (sync-str (format-sync-status model))
+         (sync-visible-len (tui:visible-length sync-str))
+         (task-count (count-active-todos model))
+         (task-str (format nil "~D task~:P" task-count))
+         ;; Build the right side with sync status and task count
+         (right-str (if (plusp sync-visible-len)
+                        (format nil "~A │ ~A" sync-str task-str)
+                        task-str))
+         (right-visible-len (tui:visible-length right-str))
+         ;; Calculate spacing
+         (left-len (length version-str))
+         (date-len (length date-str))
+         ;; We want: [version] ... [date] ... [right]
+         ;; Total width = left-len + gap1 + date-len + gap2 + right-len
+         ;; Center the date: gap1 = gap2 ideally
+         (total-content (+ left-len date-len right-visible-len))
+         (total-gaps (max 0 (- width total-content)))
+         (gap1 (max 1 (floor total-gaps 2)))
+         (gap2 (max 1 (- total-gaps gap1))))
+    ;; Dark background with light text for header bar
+    (tui:colored
+     (format nil "~A~A~A~A~A"
+             version-str
+             (make-string gap1 :initial-element #\Space)
+             date-str
+             (make-string gap2 :initial-element #\Space)
+             right-str)
+     :fg tui:*fg-white* :bg tui:*bg-blue*)))
 
 (defun render-help-bar-line (width)
   "Render the help bar."
@@ -387,14 +433,8 @@
     (adjust-scroll model available-height)
 
     (with-output-to-string (s)
-      ;; Title + date header (org-agenda style)
+      ;; Header bar with version, date, sync status, task count
       (format s "~A~%" (render-app-title-bar model))
-      (format s "~A~%"
-              (tui:bold
-               (tui:colored
-                (lt:format-timestring nil (local-today)
-                                      :format '(:long-weekday " " :day " " :long-month " " :year))
-                :fg tui:*fg-blue*)))
 
       ;; Main content area with optional sidebar
       (if sidebar-visible-effective
@@ -472,13 +512,13 @@
                 (render-help-line help term-width :fg tui:*fg-bright-black*))))))
 
 (defun render-detail-view (model)
-  "Render the detail view for a single TODO."
+  "Render the detail view for a single TODO as an overlay dialog."
   (handler-case
       (let* ((term-width (model-term-width model))
-             (content-width (- term-width 2))  ; Small margin
              (todos (get-visible-todos model))
              (todo (when (< (model-cursor model) (length todos))
-                    (nth (model-cursor model) todos))))
+                    (nth (model-cursor model) todos)))
+             (background (render-list-view model)))
         (llog:debug "Rendering detail view"
                     :cursor (model-cursor model)
                     :num-todos (length todos)
@@ -490,146 +530,126 @@
                     :has-tags (when todo (if (todo-tags todo) "yes" "no"))
                     :has-location (when todo (if (todo-location-info todo) "yes" "no")))
         (if (null todo)
-            "No item selected."
-        (with-output-to-string (s)
-          ;; Title bar
-          (let* ((title " ITEM DETAILS ")
-                 (pad (max 0 (- term-width (length title)))))
-            (format s "~A~%"
-                    (tui:bold (tui:colored
-                              (format nil "~A~A" title (make-string pad :initial-element #\─))
-                              :fg tui:*fg-white* :bg tui:*bg-blue*))))
+            background  ; Just show list if no item selected
+            (let* ((modal-width (min 70 (max 50 (- term-width 10))))
+                   (content-width (- modal-width 6))  ; Account for border and padding
+                   (content
+                     (with-output-to-string (s)
+                       ;; Status and Priority line
+                       (format s "~A ~A~%"
+                               (org-status-colored (todo-status todo))
+                               (org-priority-colored (todo-priority todo)))
 
-          ;; Status and Priority line
-          (format s "~%~A ~A~%"
-                  (org-status-colored (todo-status todo))
-                  (org-priority-colored (todo-priority todo)))
+                       ;; Title (wrapped if needed)
+                       (let ((title-text (if (member (todo-status todo) '(:completed :cancelled))
+                                             (tui:render-styled
+                                              (tui:make-style :strikethrough t
+                                                              :foreground tui:*fg-bright-black*)
+                                              (todo-title todo))
+                                             (tui:bold (todo-title todo)))))
+                         (format s "~A" (tui:wrap-text title-text content-width)))
 
-          ;; Title (wrapped if needed)
-          (let ((title-text (if (member (todo-status todo) '(:completed :cancelled))
-                                (tui:render-styled
-                                 (tui:make-style :strikethrough t
-                                                 :foreground tui:*fg-bright-black*)
-                                 (todo-title todo))
-                                (tui:bold (todo-title todo)))))
-            (format s "~A~%" (tui:wrap-text title-text content-width)))
+                       ;; Scheduled date
+                       (when (todo-scheduled-date todo)
+                         (format s "~%~%~A <~A>"
+                                 (tui:bold "SCHEDULED:")
+                                 (tui:colored
+                                  (lt:format-timestring nil (todo-scheduled-date todo)
+                                                       :format '(:long-weekday " " :short-month " " :day " " :year))
+                                  :fg tui:*fg-cyan*)))
 
-          ;; Scheduled date
-          (when (todo-scheduled-date todo)
-            (format s "~%~A <~A>~%"
-                    (tui:bold "SCHEDULED:")
-                    (tui:colored
-                     (lt:format-timestring nil (todo-scheduled-date todo)
-                                          :format '(:long-weekday " " :short-month " " :day " " :year))
-                     :fg tui:*fg-cyan*)))
+                       ;; Deadline
+                       (when (todo-due-date todo)
+                         (format s "~%~A <~A>"
+                                 (tui:bold (tui:colored "DEADLINE:" :fg tui:*fg-red*))
+                                 (tui:colored
+                                  (lt:format-timestring nil (todo-due-date todo)
+                                                       :format '(:long-weekday " " :short-month " " :day " " :year))
+                                  :fg tui:*fg-red*)))
 
-          ;; Deadline
-          (when (todo-due-date todo)
-            (format s "~A <~A>~%"
-                    (tui:bold (tui:colored "DEADLINE:" :fg tui:*fg-red*))
-                    (tui:colored
-                     (lt:format-timestring nil (todo-due-date todo)
-                                          :format '(:long-weekday " " :short-month " " :day " " :year))
-                     :fg tui:*fg-red*)))
+                       ;; Repeat info
+                       (when (and (todo-repeat-interval todo) (todo-repeat-unit todo))
+                         (format s "~%~A ~A"
+                                 (tui:bold (tui:colored "REPEAT:" :fg tui:*fg-magenta*))
+                                 (tui:colored
+                                  (format-repeat-preset (todo-repeat-interval todo)
+                                                        (todo-repeat-unit todo))
+                                  :fg tui:*fg-magenta*)))
 
-          ;; Repeat info
-          (when (and (todo-repeat-interval todo) (todo-repeat-unit todo))
-            (format s "~A ~A~%"
-                    (tui:bold (tui:colored "REPEAT:" :fg tui:*fg-magenta*))
-                    (tui:colored
-                     (format-repeat-preset (todo-repeat-interval todo)
-                                           (todo-repeat-unit todo))
-                     :fg tui:*fg-magenta*)))
+                       ;; Description (wrapped)
+                       (when (todo-description todo)
+                         (format s "~%~%~A"
+                                 (tui:wrap-text (todo-description todo) content-width)))
 
-          ;; Description (wrapped)
-          (when (todo-description todo)
-            (format s "~%~A~%"
-                    (tui:wrap-text (todo-description todo) content-width)))
+                       ;; Tags
+                       (when (todo-tags todo)
+                         (format s "~%~%~A"
+                                 (tui:colored (org-tags-string (todo-tags todo)) :fg tui:*fg-magenta*)))
 
-          ;; Tags
-          (when (todo-tags todo)
-            (format s "~%~A~%"
-                    (tui:colored (org-tags-string (todo-tags todo)) :fg tui:*fg-magenta*)))
+                       ;; Estimated time
+                       (when (todo-estimated-minutes todo)
+                         (format s "~%~%~A"
+                                 (tui:colored
+                                  (format nil "Estimated: ~A min" (todo-estimated-minutes todo))
+                                  :fg tui:*fg-yellow*)))
 
-          ;; Estimated time
-          (when (todo-estimated-minutes todo)
-            (format s "~%~A~%"
-                    (tui:colored
-                     (format nil "Estimated: ~A min" (todo-estimated-minutes todo))
-                     :fg tui:*fg-yellow*)))
+                       ;; Location info
+                       (when (todo-location-info todo)
+                         (let ((loc (todo-location-info todo)))
+                           (format s "~%~%~A"
+                                   (tui:bold (tui:colored "Location" :fg tui:*fg-cyan*)))
+                           (when (getf loc :name)
+                             (format s "~%  ~A" (getf loc :name)))
+                           (when (getf loc :address)
+                             (format s "~%  ~A"
+                                     (tui:colored (getf loc :address) :fg tui:*fg-bright-black*)))
+                           (when (getf loc :phone)
+                             (format s "~%  Tel: ~A"
+                                     (tui:colored (getf loc :phone) :fg tui:*fg-green*)))
+                           (when (getf loc :map-url)
+                             (format s "~%  ~A"
+                                     (tui:wrap-text (tui:colored (getf loc :map-url) :fg tui:*fg-blue*)
+                                                    content-width :indent 2 :continuation-indent 4)))
+                           (when (getf loc :website)
+                             (format s "~%  ~A"
+                                     (tui:wrap-text (tui:colored (getf loc :website) :fg tui:*fg-blue*)
+                                                    content-width :indent 2 :continuation-indent 4)))))
 
-          ;; Location info
-          (when (todo-location-info todo)
-            (let ((loc (todo-location-info todo)))
-              (format s "~%~A~%"
-                      (tui:bold (tui:colored "📍 Location" :fg tui:*fg-cyan*)))
-              (when (getf loc :name)
-                (format s "  ~A~%" (getf loc :name)))
-              (when (getf loc :address)
-                (format s "  ~A~%"
-                        (tui:colored (getf loc :address) :fg tui:*fg-bright-black*)))
-              (when (getf loc :phone)
-                (format s "  Tel: ~A~%"
-                        (tui:colored (getf loc :phone) :fg tui:*fg-green*)))
-              (when (getf loc :map-url)
-                (format s "  ~A~%"
-                        (tui:wrap-text (tui:colored (getf loc :map-url) :fg tui:*fg-blue*)
-                                       content-width :indent 2 :continuation-indent 4)))
-              (when (getf loc :website)
-                (format s "  ~A~%"
-                        (tui:wrap-text (tui:colored (getf loc :website) :fg tui:*fg-blue*)
-                                       content-width :indent 2 :continuation-indent 4)))))
+                       ;; URL (wrapped)
+                       (when (todo-url todo)
+                         (format s "~%~%~A~%  ~A"
+                                 (tui:bold (tui:colored "Link:" :fg tui:*fg-cyan*))
+                                 (tui:wrap-text (tui:colored (todo-url todo) :fg tui:*fg-blue*)
+                                                content-width :indent 2 :continuation-indent 4)))
 
-          ;; URL (wrapped)
-          (when (todo-url todo)
-            (format s "~%~A~%~A~%"
-                    (tui:bold (tui:colored "Link:" :fg tui:*fg-cyan*))
-                    (tui:wrap-text (tui:colored (todo-url todo) :fg tui:*fg-blue*)
-                                   content-width :indent 2 :continuation-indent 2)))
+                       ;; Metadata
+                       (format s "~%~%~A"
+                               (tui:colored
+                                (format nil "Created: ~A"
+                                       (lt:format-timestring nil (todo-created-at todo)
+                                                            :format '(:short-month " " :day ", " :year)))
+                                :fg tui:*fg-bright-black*))
 
-          ;; Metadata
-          (format s "~%~A~%"
-                  (tui:colored
-                   (format nil "Created: ~A"
-                          (lt:format-timestring nil (todo-created-at todo)
-                                               :format '(:short-month " " :day ", " :year)))
-                   :fg tui:*fg-bright-black*))
+                       (when (todo-completed-at todo)
+                         (format s "~%~A"
+                                 (tui:colored
+                                  (format nil "Closed:  ~A"
+                                         (lt:format-timestring nil (todo-completed-at todo)
+                                                              :format '(:short-month " " :day ", " :year)))
+                                  :fg tui:*fg-bright-black*)))
 
-          (when (todo-completed-at todo)
-            (format s "~A~%"
-                    (tui:colored
-                     (format nil "Closed:  ~A"
-                            (lt:format-timestring nil (todo-completed-at todo)
-                                                 :format '(:short-month " " :day ", " :year)))
-                     :fg tui:*fg-bright-black*)))
-
-          ;; Help bar
-          (let ((help " RET/q:back  e:edit  s:schedule  d:deadline  SPC:toggle  o:open-url "))
-            (format s "~%~A"
-                    (render-help-line help term-width :fg tui:*fg-yellow* :bg tui:*bg-blue*))))))
+                       ;; Help line at bottom
+                       (format s "~%~%~A"
+                               (tui:colored "RET/q:back  e:edit  n:notes  s:sched  d:deadline  o:url"
+                                           :fg tui:*fg-bright-black*))))
+                   (modal (render-box-with-title "ITEM DETAILS" content :min-width modal-width)))
+              (tui:overlay-centered modal background))))
     (error (e)
       (llog:error "Error rendering detail view"
                   :error-type (type-of e)
                   :error-message (format nil "~A" e))
       (format nil "Error: ~A" e))))
 
-(defun render-modal-dialog (title content help-text modal-width &key (title-bg tui:*bg-blue*))
-  "Render a modal dialog box with title bar, content, and help bar."
-  (let ((inner-width (- modal-width 2)))
-    (with-output-to-string (s)
-      ;; Title bar
-      (let ((title-pad (max 0 (- modal-width (length title)))))
-        (format s "~A~%"
-                (tui:bold (tui:colored
-                          (format nil "~A~A" title (make-string title-pad :initial-element #\─))
-                          :fg tui:*fg-white* :bg title-bg))))
-      ;; Content with border
-      (format s "~A~%"
-              (tui:render-border (pad-content-to-width content inner-width)
-                                 tui:*border-double*))
-      ;; Help bar
-      (format s "~A"
-              (render-help-line help-text modal-width :fg tui:*fg-yellow* :bg title-bg)))))
 
 (defun format-repeat-preset (interval unit)
   "Format repeat interval and unit as a display string."
@@ -775,7 +795,7 @@
 
              ;; Help line at bottom
              (format c "~%~%~A"
-                     (tui:colored "Tab:next  Enter:save  Esc:cancel" :fg tui:*fg-bright-black*))))
+                     (tui:colored "Tab:next  ^E:edit notes  Enter:save  Esc:cancel" :fg tui:*fg-bright-black*))))
          (modal (render-box-with-title title content :min-width dialog-width)))
     (tui:overlay-centered modal background)))
 
@@ -829,18 +849,19 @@
          (todo (when (< (model-cursor model) (length todos))
                  (nth (model-cursor model) todos)))
          (background (render-list-view model))
+         (max-width (max 20 (- term-width 2)))
+         (modal-width (min 50 max-width))
          (content (if todo
                       (with-output-to-string (c)
                         (format c "~A~%~%"
                                 (tui:bold "Delete this item?"))
-                        (format c "~A" (todo-title todo)))
+                        (format c "~A~%~%"
+                                (todo-title todo))
+                        (format c "~A"
+                                (tui:colored "y:confirm  any other key:cancel"
+                                            :fg tui:*fg-bright-black*)))
                       "No item selected"))
-         (max-width (max 20 (- term-width 2)))
-         (modal-width (min 50 max-width))
-         (modal (render-modal-dialog " DELETE ITEM " content
-                                     " y:confirm  any other key:cancel "
-                                     modal-width
-                                     :title-bg tui:*bg-red*)))
+         (modal (render-box-with-title "DELETE ITEM" content :min-width modal-width)))
     (tui:overlay-centered modal background)))
 
 (defun render-delete-done-confirm-view (model)
@@ -849,16 +870,16 @@
          (done-count (count-if (lambda (todo) (eq (todo-status todo) +status-completed+))
                                (model-todos model)))
          (background (render-list-view model))
+         (max-width (max 20 (- term-width 2)))
+         (modal-width (min 60 max-width))
          (content (with-output-to-string (c)
                     (format c "~A~%~%"
                             (tui:bold (format nil "Delete ~D DONE item~:P?" done-count)))
-                    (format c "This will remove completed items from the list.")))
-         (max-width (max 20 (- term-width 2)))
-         (modal-width (min 60 max-width))
-         (modal (render-modal-dialog " DELETE DONE ITEMS " content
-                                     " y:confirm  any other key:cancel "
-                                     modal-width
-                                     :title-bg tui:*bg-red*)))
+                    (format c "This will remove completed items from the list.~%~%")
+                    (format c "~A"
+                            (tui:colored "y:confirm  any other key:cancel"
+                                        :fg tui:*fg-bright-black*))))
+         (modal (render-box-with-title "DELETE DONE ITEMS" content :min-width modal-width)))
     (tui:overlay-centered modal background)))
 
 (defun render-delete-tag-confirm-view (model)
@@ -870,16 +891,17 @@
          (count (count-if (lambda (todo)
                             (member tag (todo-tags todo) :test #'string=))
                           (model-todos model)))
+         (max-width (max 20 (- term-width 2)))
+         (modal-width (min 55 max-width))
          (content (with-output-to-string (c)
                     (format c "~A~%~%"
                             (tui:bold (format nil "Delete label \"~A\"?" tag)))
-                    (format c "This will remove the label from ~D item~:P." count)))
-         (max-width (max 20 (- term-width 2)))
-         (modal-width (min 55 max-width))
-         (modal (render-modal-dialog " DELETE LABEL " content
-                                     " y:confirm  any other key:cancel "
-                                     modal-width
-                                     :title-bg tui:*bg-red*)))
+                    (format c "This will remove the label from ~D item~:P.~%~%"
+                            count)
+                    (format c "~A"
+                            (tui:colored "y:confirm  any other key:cancel"
+                                        :fg tui:*fg-bright-black*))))
+         (modal (render-box-with-title "DELETE LABEL" content :min-width modal-width)))
     (tui:overlay-centered modal background)))
 
 (defun render-context-info-view (model)

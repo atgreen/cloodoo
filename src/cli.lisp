@@ -475,6 +475,282 @@
                      (format t "~%Shutting down...~%")
                      (stop-server))))))))
 
+(defun make-sync-server-command ()
+  "Create the 'sync-server' subcommand for gRPC streaming sync."
+  (let ((port-opt (clingon:make-option
+                   :integer
+                   :short-name #\p
+                   :long-name "port"
+                   :key :port
+                   :initial-value 50051
+                   :description "gRPC port to listen on"))
+        (bind-opt (clingon:make-option
+                   :string
+                   :short-name #\b
+                   :long-name "bind"
+                   :key :bind
+                   :initial-value "0.0.0.0"
+                   :description "Address to bind to"))
+        (no-tls-opt (clingon:make-option
+                     :flag
+                     :long-name "no-tls"
+                     :key :no-tls
+                     :description "Disable TLS (for testing)")))
+    (clingon:make-command
+     :name "sync-server"
+     :description "Start gRPC streaming sync server for real-time sync"
+     :options (list port-opt bind-opt no-tls-opt)
+     :handler (lambda (cmd)
+                (let ((port (clingon:getopt cmd :port))
+                      (address (clingon:getopt cmd :bind))
+                      (no-tls (clingon:getopt cmd :no-tls)))
+                  (start-grpc-sync-server :port port :host address :require-tls (not no-tls))
+                  ;; Keep running until interrupted
+                  (handler-case
+                      (loop (sleep 1))
+                    (#+sbcl sb-sys:interactive-interrupt
+                     #+ccl ccl:interrupt-signal-condition
+                     #-(or sbcl ccl) error ()
+                     (format t "~%Shutting down gRPC sync server...~%")
+                     (stop-grpc-sync-server))))))))
+
+(defun make-sync-connect-command ()
+  "Create the 'sync-connect' subcommand to connect TUI to a remote sync server."
+  (let ((host-opt (clingon:make-option
+                   :string
+                   :short-name #\h
+                   :long-name "host"
+                   :key :host
+                   :initial-value "localhost"
+                   :description "Sync server host address"))
+        (port-opt (clingon:make-option
+                   :integer
+                   :short-name #\p
+                   :long-name "port"
+                   :key :port
+                   :initial-value 50051
+                   :description "Sync server gRPC port")))
+    (clingon:make-command
+     :name "sync-connect"
+     :description "Start TUI and connect to a remote sync server"
+     :options (list host-opt port-opt)
+     :handler (lambda (cmd)
+                (let ((host (clingon:getopt cmd :host))
+                      (port (clingon:getopt cmd :port)))
+                  ;; Initialize enrichment
+                  (init-enrichment)
+                  ;; Run with error handling that logs backtraces
+                  (handler-bind ((error (lambda (e)
+                                          (log-error-with-backtrace e)
+                                          (signal e))))
+                    #+sbcl
+                    (handler-bind ((warning #'muffle-warning))
+                      (let* ((model (make-initial-model)))
+                        ;; Start sync client connection
+                        (start-sync-client host port :model model)
+                        ;; Start TUI
+                        (unwind-protect
+                             (let ((program (tui:make-program model :alt-screen t :mouse :cell-motion)))
+                               (tui:run program))
+                          ;; Cleanup sync client on exit
+                          (stop-sync-client))))
+                    #-sbcl
+                    (let* ((model (make-initial-model)))
+                      (start-sync-client host port :model model)
+                      (unwind-protect
+                           (let ((program (tui:make-program model :alt-screen t :mouse :cell-motion)))
+                             (tui:run program))
+                        (stop-sync-client)))))))))
+
+;;── Certificate Management Commands ────────────────────────────────────────────
+
+(defun make-cert-init-command ()
+  "Create the 'cert init' subcommand."
+  (let ((force-opt (clingon:make-option
+                    :flag
+                    :short-name #\f
+                    :long-name "force"
+                    :key :force
+                    :description "Force re-initialization (WARNING: invalidates all existing certificates)"))
+        (days-opt (clingon:make-option
+                   :integer
+                   :short-name #\d
+                   :long-name "days"
+                   :key :days
+                   :initial-value 3650
+                   :description "CA certificate validity in days (default: 10 years)")))
+    (clingon:make-command
+     :name "init"
+     :description "Initialize the Certificate Authority for mTLS"
+     :options (list force-opt days-opt)
+     :handler (lambda (cmd)
+                (let ((force (clingon:getopt cmd :force))
+                      (days (clingon:getopt cmd :days)))
+                  (handler-case
+                      (progn
+                        (init-ca :force force :days days)
+                        (init-server-cert :days (min days 365))
+                        (format t "~%~A mTLS certificates initialized!~%"
+                                (tui:colored "✓" :fg tui:*fg-green*))
+                        (format t "~%You can now issue client certificates with:~%")
+                        (format t "  cloodoo cert issue DEVICE_NAME~%~%"))
+                    (error (e)
+                      (format t "~A Error: ~A~%"
+                              (tui:colored "✗" :fg tui:*fg-red*) e))))))))
+
+(defun make-cert-issue-command ()
+  "Create the 'cert issue' subcommand."
+  (let ((days-opt (clingon:make-option
+                   :integer
+                   :short-name #\d
+                   :long-name "days"
+                   :key :days
+                   :initial-value 365
+                   :description "Certificate validity in days"))
+        (port-opt (clingon:make-option
+                   :integer
+                   :short-name #\p
+                   :long-name "port"
+                   :key :port
+                   :initial-value 9876
+                   :description "HTTP server port for pairing URL"))
+        (no-server-opt (clingon:make-option
+                        :flag
+                        :long-name "no-server"
+                        :key :no-server
+                        :description "Don't start pairing server, just create certificate")))
+    (clingon:make-command
+     :name "issue"
+     :description "Issue a client certificate for a device"
+     :usage "DEVICE_NAME"
+     :options (list days-opt port-opt no-server-opt)
+     :handler (lambda (cmd)
+                (let ((args (clingon:command-arguments cmd))
+                      (days (clingon:getopt cmd :days))
+                      (port (clingon:getopt cmd :port))
+                      (no-server (clingon:getopt cmd :no-server)))
+                  (if args
+                      (let ((device-name (first args)))
+                        (handler-case
+                            (if no-server
+                                ;; Just create the cert, no pairing server
+                                (let ((passphrase (issue-client-cert device-name :days days)))
+                                  (format t "~%~A Certificate created for '~A'~%"
+                                          (tui:colored "✓" :fg tui:*fg-green*) device-name)
+                                  (format t "~%P12 file: ~A~%" (client-p12-file device-name))
+                                  (format t "Passphrase: ~A~%~%" passphrase))
+                                ;; Create cert and start pairing server
+                                (let* ((request (create-pairing-request device-name))
+                                       (token (pairing-request-token request))
+                                       (passphrase (pairing-request-passphrase request))
+                                       (ips (detect-local-ips))
+                                       (primary-ip (or (first ips) "localhost"))
+                                       (url (format nil "http://~A:~A/pair/~A" primary-ip port token)))
+                                  (format t "~%~A Certificate created for '~A'~%"
+                                          (tui:colored "✓" :fg tui:*fg-green*) device-name)
+                                  (format t "~%Scan this QR code in the Cloodoo app, or visit:~%")
+                                  (format t "  ~A~%~%" (tui:colored url :fg tui:*fg-cyan*))
+                                  ;; Try to generate QR code
+                                  (let ((qr (generate-qr-ascii url)))
+                                    (when qr
+                                      (format t "~A~%" qr)))
+                                  (format t "~A Link expires in 10 minutes.~%"
+                                          (tui:colored "!" :fg tui:*fg-yellow*))
+                                  (format t "~%Passphrase: ~A~%~%"
+                                          (tui:bold (tui:colored passphrase :fg tui:*fg-green*)))
+                                  ;; Start HTTP server for pairing
+                                  (start-server :port port :address "0.0.0.0")
+                                  (format t "Waiting for device to connect...~%")
+                                  (format t "(Press Ctrl+C when done)~%~%")
+                                  ;; Wait until interrupted or token consumed
+                                  (handler-case
+                                      (loop
+                                        (sleep 2)
+                                        (cleanup-expired-pairings)
+                                        ;; Check if token was consumed (p12 downloaded)
+                                        (unless (probe-file (client-p12-file device-name))
+                                          (format t "~%~A Device '~A' has downloaded its certificate.~%"
+                                                  (tui:colored "✓" :fg tui:*fg-green*) device-name)
+                                          (return)))
+                                    (#+sbcl sb-sys:interactive-interrupt
+                                     #+ccl ccl:interrupt-signal-condition
+                                     #-(or sbcl ccl) error ()
+                                     (format t "~%")))
+                                  (stop-server)))
+                          (error (e)
+                            (format t "~A Error: ~A~%"
+                                    (tui:colored "✗" :fg tui:*fg-red*) e))))
+                      (format t "Usage: cloodoo cert issue DEVICE_NAME~%")))))))
+
+(defun make-cert-list-command ()
+  "Create the 'cert list' subcommand."
+  (clingon:make-command
+   :name "list"
+   :description "List all issued client certificates"
+   :handler (lambda (cmd)
+              (declare (ignore cmd))
+              (if (ca-initialized-p)
+                  (let ((certs (list-client-certs)))
+                    (if certs
+                        (progn
+                          (format t "~%~A~%~%"
+                                  (tui:bold "Issued Certificates"))
+                          (format t "  ~30A ~12A ~A~%"
+                                  "DEVICE" "STATUS" "ISSUED")
+                          (format t "  ~30A ~12A ~A~%"
+                                  "------" "------" "------")
+                          (dolist (cert certs)
+                            (let ((name (getf cert :name))
+                                  (revoked (getf cert :revoked-p))
+                                  (issued (getf cert :issued-at)))
+                              (format t "  ~30A ~12A ~A~%"
+                                      name
+                                      (if revoked
+                                          (tui:colored "REVOKED" :fg tui:*fg-red*)
+                                          (tui:colored "active" :fg tui:*fg-green*))
+                                      (lt:format-timestring
+                                       nil (lt:universal-to-timestamp issued)
+                                       :format '(:year "-" (:month 2) "-" (:day 2))))))
+                          (format t "~%"))
+                        (format t "~%No certificates issued yet.~%~%")))
+                  (format t "~%CA not initialized. Run 'cloodoo cert init' first.~%~%")))))
+
+(defun make-cert-revoke-command ()
+  "Create the 'cert revoke' subcommand."
+  (clingon:make-command
+   :name "revoke"
+   :description "Revoke a client certificate"
+   :usage "DEVICE_NAME"
+   :handler (lambda (cmd)
+              (let ((args (clingon:command-arguments cmd)))
+                (if args
+                    (let ((device-name (first args)))
+                      (handler-case
+                          (progn
+                            (revoke-client-cert device-name)
+                            (format t "~%~A Certificate for '~A' has been revoked.~%~%"
+                                    (tui:colored "✓" :fg tui:*fg-green*) device-name))
+                        (error (e)
+                          (format t "~A Error: ~A~%"
+                                  (tui:colored "✗" :fg tui:*fg-red*) e))))
+                    (format t "Usage: cloodoo cert revoke DEVICE_NAME~%"))))))
+
+(defun make-cert-command ()
+  "Create the 'cert' command group."
+  (clingon:make-command
+   :name "cert"
+   :description "Manage mTLS certificates for secure sync"
+   :usage "[command]"
+   :handler (lambda (cmd)
+              ;; Default: show help
+              (clingon:print-usage cmd t))
+   :sub-commands (list (make-cert-init-command)
+                       (make-cert-issue-command)
+                       (make-cert-list-command)
+                       (make-cert-revoke-command))))
+
+;;── Enrichment Command ─────────────────────────────────────────────────────────
+
 (defun make-enrich-pending-command ()
   "Create the 'enrich-pending' subcommand for background enrichment."
   (clingon:make-command
@@ -488,8 +764,10 @@
                   (init-enrichment)
                   (dolist (todo pending)
                     (handler-case
-                        (let ((enriched (enrich-todo-input (todo-title todo)
-                                                          (todo-description todo))))
+                        (let* ((parent-context (build-parent-context (todo-parent-id todo) todos))
+                               (enriched (enrich-todo-input (todo-title todo)
+                                                            (todo-description todo)
+                                                            parent-context)))
                           (when enriched
                             (when (getf enriched :title)
                               (setf (todo-title todo) (getf enriched :title)))
@@ -945,6 +1223,9 @@
                        (make-dump-command)
                        (make-compact-command)
                        (make-server-command)
+                       (make-sync-server-command)
+                       (make-sync-connect-command)
+                       (make-cert-command)
                        (make-enrich-pending-command)
                        (make-native-host-command)
                        (make-install-native-host-command))))

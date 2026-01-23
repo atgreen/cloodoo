@@ -382,13 +382,15 @@ Respond with ONLY the JSON object, no markdown formatting or additional text.")
                   :response response)
       nil)))
 
-(defun enrich-todo-input (raw-title &optional raw-notes)
+(defun enrich-todo-input (raw-title &optional raw-notes parent-context)
   "Enrich a raw TODO input string using the LLM.
    RAW-TITLE is the task title, RAW-NOTES is optional description/notes.
+   PARENT-CONTEXT is an optional plist with :title and :description of parent task(s).
    Returns a plist with enriched fields, or NIL if enrichment fails or is disabled."
   (llog:info "Enrichment request received"
              :raw-title raw-title
              :raw-notes raw-notes
+             :has-parent-context (if parent-context "yes" "no")
              :title-length (length raw-title)
              :enrichment-enabled *enrichment-enabled*
              :provider *llm-provider*)
@@ -415,14 +417,22 @@ Respond with ONLY the JSON object, no markdown formatting or additional text.")
                (user-input (if (and raw-notes (> (length raw-notes) 0))
                                (format nil "title=\"~A\" notes=\"~A\"" raw-title raw-notes)
                                (format nil "title=\"~A\" notes=\"\"" raw-title)))
-               (prompt (if user-context
-                           (format nil "~A~%~%User Context (use this to better understand the user):~%~A~%~%User input: ~A"
-                                   system-prompt user-context user-input)
-                           (format nil "~A~%~%User input: ~A" system-prompt user-input))))
+               ;; Build parent context string if available
+               (parent-context-str
+                 (when parent-context
+                   (format nil "~%~%Parent Task Context (this is a subtask):~%~{~A~^~%~}"
+                           (loop for (title . desc) in parent-context
+                                 collect (if desc
+                                             (format nil "- ~A: ~A" title desc)
+                                             (format nil "- ~A" title))))))
+               (prompt (format nil "~A~@[~%~%User Context (use this to better understand the user):~%~A~]~@[~A~]~%~%User input: ~A"
+                               system-prompt user-context parent-context-str user-input)))
 
-          (llog:debug "User context status"
-                      :has-context (if user-context "yes" "no")
-                      :context-length (if user-context (length user-context) 0))
+          (llog:debug "Context status"
+                      :has-user-context (if user-context "yes" "no")
+                      :user-context-length (if user-context (length user-context) 0)
+                      :has-parent-context (if parent-context "yes" "no")
+                      :parent-depth (if parent-context (length parent-context) 0))
 
           (llog:debug "Sending API request"
                       :prompt-length (length prompt)

@@ -503,10 +503,29 @@
   (when presets
     (db-save-presets presets)))
 
+;;── Change Notification Hooks ─────────────────────────────────────────────────
+
+(defvar *todo-change-hook* nil
+  "Function to call when a todo is saved. Called with (todo).
+   Used by sync server to broadcast changes to connected clients.")
+
+(defvar *todo-delete-hook* nil
+  "Function to call when a todo is deleted. Called with (todo-id).
+   Used by sync server to broadcast deletions to connected clients.")
+
+(defvar *suppress-change-notifications* nil
+  "When T, don't call change hooks. Used when processing incoming sync changes.")
+
 (defun save-todo (todo)
   "Save a single TODO (more efficient for single updates)."
   (ensure-db-initialized)
-  (db-save-todo todo))
+  (db-save-todo todo)
+  ;; Notify sync clients unless suppressed
+  (when (and *todo-change-hook* (not *suppress-change-notifications*))
+    (handler-case
+        (funcall *todo-change-hook* todo)
+      (error (e)
+        (llog:warn "Change notification failed: ~A" e)))))
 
 (defun load-presets ()
   "Load tag presets from SQLite database."
@@ -581,6 +600,27 @@
                enriching_p
         FROM todos
         WHERE valid_from > ?
+        ORDER BY valid_from ASC" ts)))
+        (mapcar #'row-to-sync-hash-table rows)))))
+
+(defun db-load-current-rows-since (timestamp)
+  "Load only CURRENT (non-superseded) rows where valid_from > timestamp.
+   This is the correct function for sync - it sends the latest state of each todo
+   without replaying historical versions that could overwrite newer data.
+   Returns raw hash tables suitable for JSON serialization."
+  (ensure-db-initialized)
+  (let ((ts (if (stringp timestamp)
+                timestamp
+                (lt:format-rfc3339-timestring nil timestamp))))
+    (with-db (db)
+      (let ((rows (sqlite:execute-to-list db "
+        SELECT row_id, id, title, description, priority, status,
+               scheduled_date, due_date, tags, estimated_minutes,
+               location_info, url, parent_id, created_at, completed_at,
+               valid_from, valid_to, device_id, repeat_interval, repeat_unit,
+               enriching_p
+        FROM todos
+        WHERE valid_from > ? AND valid_to IS NULL
         ORDER BY valid_from ASC" ts)))
         (mapcar #'row-to-sync-hash-table rows)))))
 

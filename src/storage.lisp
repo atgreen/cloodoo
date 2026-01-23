@@ -313,18 +313,3 @@
         ((uiop:run-program "which vi" :ignore-error-status t :output nil) "vi")
         (t "nano"))))
 
-(defun edit-user-context ()
-  "Open the user context file in the user's preferred editor.
-   Returns T if editor was launched successfully."
-  (let ((file (ensure-user-context-file))
-        (editor (get-editor)))
-    (handler-case
-        (progn
-          (uiop:run-program (list editor (namestring file))
-                           :input :interactive
-                           :output :interactive
-                           :error-output :interactive)
-          t)
-      (error (e)
-        (declare (ignore e))
-        nil))))

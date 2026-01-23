@@ -1,53 +1,142 @@
 package com.cloodoo.app.ui.screens
 
 import android.app.Application
+import android.util.Log
 import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.cloodoo.app.data.local.CloodooDatabase
 import com.cloodoo.app.data.local.TodoEntity
-import com.cloodoo.app.data.repository.SyncResult
+import com.cloodoo.app.data.remote.ConnectionState
+import com.cloodoo.app.data.remote.SyncEvent
+import com.cloodoo.app.data.remote.SyncManager
 import com.cloodoo.app.data.repository.TodoRepository
+import com.cloodoo.app.data.security.CertificateManager
+import com.cloodoo.app.ui.components.DateGroup
+import com.cloodoo.app.ui.components.TodoGroupData
+import com.cloodoo.app.ui.components.groupTodosByDate
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
-import java.util.UUID
 
-class TodoListViewModel(application: Application) : AndroidViewModel(application) {
+class TodoListViewModel(
+    application: Application,
+    private val certificateManager: CertificateManager,
+    private val passphrase: String
+) : AndroidViewModel(application) {
 
-    private val deviceId = loadOrCreateDeviceId(application)
+    companion object {
+        private const val TAG = "TodoListViewModel"
+    }
+
+    private val deviceId = certificateManager.getDeviceName() ?: "unknown"
     private val database = CloodooDatabase.getDatabase(application)
     private val repository = TodoRepository(database, deviceId)
+    private val syncManager = SyncManager(database, certificateManager, deviceId, passphrase)
 
     // UI State
     private val _uiState = MutableStateFlow(TodoListUiState())
     val uiState: StateFlow<TodoListUiState> = _uiState.asStateFlow()
 
-    // Settings
-    private val _serverUrl = MutableStateFlow("")
-    val serverUrl: StateFlow<String> = _serverUrl.asStateFlow()
+    // Track which sections are collapsed (Completed starts collapsed)
+    private val _collapsedSections = MutableStateFlow(setOf(DateGroup.COMPLETED))
+
+    // Connection state from SyncManager
+    val connectionState: StateFlow<ConnectionState> = syncManager.connectionState
 
     private val _lastSyncTime = MutableStateFlow<String?>(null)
 
     init {
-        // Load server URL from preferences
-        loadSettings(application)
+        // Load last sync time from preferences
+        loadLastSyncTime(application)
 
-        // Observe current TODOs
+        // Observe current TODOs and compute grouped data
         viewModelScope.launch {
-            repository.getCurrentTodos().collect { todos ->
-                _uiState.update { it.copy(todos = todos, isLoading = false) }
+            combine(
+                repository.getCurrentTodos(),
+                _collapsedSections
+            ) { todos, collapsed ->
+                val grouped = groupTodosByDate(todos).map { groupData ->
+                    groupData.copy(isExpanded = groupData.group !in collapsed)
+                }
+                Pair(todos, grouped)
+            }.collect { (todos, grouped) ->
+                _uiState.update { it.copy(todos = todos, groupedTodos = grouped, isLoading = false) }
             }
         }
+
+        // Observe connection state
+        viewModelScope.launch {
+            syncManager.connectionState.collect { state ->
+                when (state) {
+                    ConnectionState.CONNECTED -> {
+                        _uiState.update { it.copy(isSyncing = false, lastSyncResult = "Connected") }
+                    }
+                    ConnectionState.CONNECTING -> {
+                        _uiState.update { it.copy(isSyncing = true, syncError = null) }
+                    }
+                    ConnectionState.ERROR -> {
+                        _uiState.update { it.copy(isSyncing = false, syncError = "Connection error") }
+                    }
+                    ConnectionState.DISCONNECTED -> {
+                        _uiState.update { it.copy(isSyncing = false) }
+                    }
+                }
+            }
+        }
+
+        // Observe sync events
+        viewModelScope.launch {
+            syncManager.syncEvents.collect { event ->
+                when (event) {
+                    is SyncEvent.Connected -> {
+                        _lastSyncTime.value = event.serverTime
+                        saveLastSyncTime(getApplication())
+                        _uiState.update {
+                            it.copy(
+                                isSyncing = false,
+                                lastSyncResult = if (event.pendingChanges > 0)
+                                    "Receiving ${event.pendingChanges} changes..."
+                                else
+                                    "Connected - up to date"
+                            )
+                        }
+                    }
+                    is SyncEvent.Received -> {
+                        Log.d(TAG, "Received ${event.type} for ${event.todoId}")
+                    }
+                    is SyncEvent.Sent -> {
+                        Log.d(TAG, "Sent change for ${event.todoId}")
+                    }
+                    is SyncEvent.Error -> {
+                        _uiState.update { it.copy(syncError = event.message) }
+                    }
+                }
+            }
+        }
+
+        // Auto-connect on startup
+        connect()
+    }
+
+    fun connect() {
+        syncManager.connect(_lastSyncTime.value, viewModelScope)
+    }
+
+    fun disconnect() {
+        syncManager.disconnect()
     }
 
     fun createTodo(title: String, priority: String = "medium", dueDate: String? = null) {
         if (title.isBlank()) return
 
         viewModelScope.launch {
-            repository.createTodo(
+            val todo = repository.createTodo(
                 title = title.trim(),
                 priority = priority,
                 dueDate = dueDate
             )
+            syncManager.sendTodoUpsert(todo)
         }
     }
 
@@ -55,54 +144,40 @@ class TodoListViewModel(application: Application) : AndroidViewModel(application
         viewModelScope.launch {
             val todo = _uiState.value.todos.find { it.id == todoId }
             if (todo != null) {
-                if (todo.status == "completed") {
+                val wasCompleted = todo.status == "completed"
+                if (wasCompleted) {
                     repository.updateTodo(todoId, status = "pending")
                 } else {
                     repository.completeTodo(todoId)
+                    // Trigger confetti when completing a task
+                    _uiState.update { it.copy(showConfetti = true) }
+                }
+                // Get updated entity and send to server
+                val updated = database.todoDao().getCurrentById(todoId)
+                if (updated != null) {
+                    syncManager.sendTodoUpsert(updated)
                 }
             }
         }
     }
 
+    fun clearConfetti() {
+        _uiState.update { it.copy(showConfetti = false) }
+    }
+
     fun deleteTodo(todoId: String) {
         viewModelScope.launch {
             repository.deleteTodo(todoId)
+            syncManager.sendTodoDelete(todoId)
         }
     }
 
-    fun setServerUrl(url: String) {
-        _serverUrl.value = url
-        saveSettings(getApplication())
-    }
-
-    fun sync() {
-        val url = _serverUrl.value
-        if (url.isBlank()) {
-            _uiState.update { it.copy(syncError = "Server URL not configured") }
-            return
-        }
-
-        viewModelScope.launch {
-            _uiState.update { it.copy(isSyncing = true, syncError = null) }
-
-            val result = repository.sync(url, _lastSyncTime.value)
-
-            if (result.success) {
-                result.serverTime?.let { _lastSyncTime.value = it }
-                saveSettings(getApplication())
-                _uiState.update {
-                    it.copy(
-                        isSyncing = false,
-                        lastSyncResult = "Synced: ${result.receivedRows} received, ${result.sentRows} sent"
-                    )
-                }
+    fun toggleSectionExpanded(group: DateGroup) {
+        _collapsedSections.update { collapsed ->
+            if (group in collapsed) {
+                collapsed - group
             } else {
-                _uiState.update {
-                    it.copy(
-                        isSyncing = false,
-                        syncError = result.error ?: "Sync failed"
-                    )
-                }
+                collapsed + group
             }
         }
     }
@@ -111,35 +186,44 @@ class TodoListViewModel(application: Application) : AndroidViewModel(application
         _uiState.update { it.copy(lastSyncResult = null, syncError = null) }
     }
 
-    private fun loadOrCreateDeviceId(application: Application): String {
-        val prefs = application.getSharedPreferences("cloodoo_prefs", 0)
-        var id = prefs.getString("device_id", null)
-        if (id == null) {
-            id = UUID.randomUUID().toString()
-            prefs.edit().putString("device_id", id).apply()
-        }
-        return id
+    override fun onCleared() {
+        super.onCleared()
+        disconnect()
     }
 
-    private fun loadSettings(application: Application) {
+    private fun loadLastSyncTime(application: Application) {
         val prefs = application.getSharedPreferences("cloodoo_prefs", 0)
-        _serverUrl.value = prefs.getString("server_url", "") ?: ""
         _lastSyncTime.value = prefs.getString("last_sync_time", null)
     }
 
-    private fun saveSettings(application: Application) {
+    private fun saveLastSyncTime(application: Application) {
         val prefs = application.getSharedPreferences("cloodoo_prefs", 0)
         prefs.edit()
-            .putString("server_url", _serverUrl.value)
             .putString("last_sync_time", _lastSyncTime.value)
             .apply()
+    }
+
+    class Factory(
+        private val application: Application,
+        private val certificateManager: CertificateManager,
+        private val passphrase: String
+    ) : ViewModelProvider.Factory {
+        @Suppress("UNCHECKED_CAST")
+        override fun <T : ViewModel> create(modelClass: Class<T>): T {
+            if (modelClass.isAssignableFrom(TodoListViewModel::class.java)) {
+                return TodoListViewModel(application, certificateManager, passphrase) as T
+            }
+            throw IllegalArgumentException("Unknown ViewModel class")
+        }
     }
 }
 
 data class TodoListUiState(
     val todos: List<TodoEntity> = emptyList(),
+    val groupedTodos: List<TodoGroupData> = emptyList(),
     val isLoading: Boolean = true,
     val isSyncing: Boolean = false,
     val lastSyncResult: String? = null,
-    val syncError: String? = null
+    val syncError: String? = null,
+    val showConfetti: Boolean = false
 )
