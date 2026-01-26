@@ -187,6 +187,11 @@
   (when (client-cert-exists-p name)
     (error "Certificate for '~A' already exists. Revoke it first or choose a different name." name))
 
+  ;; Clear any prior revocation so re-issued certs aren't born revoked
+  (when (cert-revoked-p name)
+    (let ((revoked (remove name (load-revoked-list) :test #'string=)))
+      (save-revoked-list revoked)))
+
   (ensure-directories-exist (clients-directory))
 
   (let ((client-key-path (namestring (client-key-file name)))

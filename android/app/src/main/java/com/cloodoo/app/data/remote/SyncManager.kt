@@ -30,6 +30,9 @@ class SyncManager(
     private var reconnectJob: Job? = null
     private var autoReconnect = true
     private var currentReconnectDelay = INITIAL_RECONNECT_DELAY_MS
+    private var lastServerTime: String? = null
+    private var pendingAckServerTime: String? = null
+    private var pendingChangesRemaining: Int = 0
 
     private val _connectionState = MutableStateFlow(ConnectionState.DISCONNECTED)
     val connectionState: StateFlow<ConnectionState> = _connectionState.asStateFlow()
@@ -100,8 +103,8 @@ class SyncManager(
                 .toLong()
                 .coerceAtMost(MAX_RECONNECT_DELAY_MS)
 
-            Log.d(TAG, "Attempting reconnect...")
-            startConnection(null, scope)
+            Log.d(TAG, "Attempting reconnect with since=$lastServerTime")
+            startConnection(lastServerTime, scope)
         }
     }
 
@@ -164,6 +167,13 @@ class SyncManager(
                 }
 
                 _connectionState.value = ConnectionState.CONNECTED
+                if (ack.pendingChanges > 0) {
+                    // Defer advancing lastServerTime until all pending changes are received
+                    pendingAckServerTime = ack.serverTime
+                    pendingChangesRemaining = ack.pendingChanges
+                } else {
+                    lastServerTime = ack.serverTime
+                }
                 _syncEvents.emit(SyncEvent.Connected(ack.serverTime, ack.pendingChanges))
             }
 
@@ -182,6 +192,16 @@ class SyncManager(
                     }
                     else -> {
                         Log.w(TAG, "Unknown change type: ${change.changeCase}")
+                    }
+                }
+
+                // Track receipt of pending changes from initial batch
+                if (pendingChangesRemaining > 0) {
+                    pendingChangesRemaining--
+                    if (pendingChangesRemaining == 0) {
+                        lastServerTime = pendingAckServerTime
+                        pendingAckServerTime = null
+                        Log.d(TAG, "All pending changes received, advancing lastServerTime to $lastServerTime")
                     }
                 }
             }

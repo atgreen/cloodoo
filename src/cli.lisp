@@ -930,7 +930,7 @@ URL format: http://HOST:PORT/pair/TOKEN"
                     (format t "~%Certificate stored in:~%")
                     (format t "  ~A~%" (namestring cert-path))
                     (format t "  ~A~%" (namestring key-path))
-                    (format t "~%Cloodoo will auto-connect to this server on next launch.~%~%"))))))))))))
+                    (format t "~%Cloodoo will auto-connect to this server on next launch.~%~%")))))))))))
 
 (defun make-cert-command ()
   "Create the 'cert' command group."
