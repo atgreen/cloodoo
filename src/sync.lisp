@@ -87,7 +87,7 @@
                      (let* ((client-time (lt:parse-timestring client-time-str))
                             (server-time (lt:now))
                             (skew-seconds (abs (lt:timestamp-difference server-time client-time))))
-                       (when (> skew-seconds 30)
+                       (when (> skew-seconds 60)
                          (llog:warn "Clock skew too large, rejecting connection"
                                     :device-id device-id
                                     :skew-seconds skew-seconds)
