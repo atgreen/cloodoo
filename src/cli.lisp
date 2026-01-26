@@ -671,7 +671,30 @@
                                        (token (pairing-request-token request))
                                        (passphrase (pairing-request-passphrase request))
                                        (ips (detect-local-ips))
-                                       (primary-ip (or (first ips) "localhost"))
+                                       (primary-ip
+                                         (cond
+                                           ;; No IPs found
+                                           ((null ips) "localhost")
+                                           ;; Only one IP - use it
+                                           ((null (cdr ips)) (first ips))
+                                           ;; Multiple IPs - let user choose
+                                           (t (format t "~%Available network addresses:~%")
+                                              (loop for ip in ips
+                                                    for i from 1
+                                                    do (format t "  ~A) ~A~A~%"
+                                                               i ip
+                                                               (if (str:starts-with-p "100." ip)
+                                                                   (tui:colored " (Tailscale)" :fg tui:*fg-cyan*)
+                                                                   "")))
+                                              (format t "~%Select address [1]: ")
+                                              (force-output)
+                                              (let* ((input (str:trim (read-line)))
+                                                     (choice (if (zerop (length input))
+                                                                 1
+                                                                 (parse-integer input :junk-allowed t))))
+                                                (if (and choice (>= choice 1) (<= choice (length ips)))
+                                                    (nth (1- choice) ips)
+                                                    (first ips))))))
                                        (url (format nil "http://~A:~A/pair/~A" primary-ip port token)))
                                   (format t "~%~A Certificate created for '~A'~%"
                                           (tui:colored "✓" :fg tui:*fg-green*) device-name)

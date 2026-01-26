@@ -27,7 +27,8 @@
                :dexador
                :ag-grpc
                :ag-proto
-               :cl-x509)
+               :cl-x509
+               :cl-qrencode)
   :serial t
   :components ((:module "src"
                 :components ((:file "package")

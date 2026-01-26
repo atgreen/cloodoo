@@ -323,12 +323,17 @@
           (when (zerop code)
             (setf ips (str:split #\Space (str:trim out)))))
       (error () nil))
-    ;; Filter out empty strings and link-local
-    (remove-if (lambda (ip)
-                 (or (zerop (length ip))
-                     (str:starts-with-p "fe80:" ip)
-                     (str:starts-with-p "169.254." ip)))
-               ips)))
+    ;; Filter out empty strings, link-local, and IPv6 (not supported in SAN encoding)
+    (let ((filtered (remove-if (lambda (ip)
+                                 (or (zerop (length ip))
+                                     (find #\: ip)
+                                     (str:starts-with-p "169.254." ip)))
+                               ips)))
+      ;; Prefer Tailscale IPs (100.x.x.x) first
+      (stable-sort (copy-list filtered)
+                    (lambda (a b)
+                      (declare (ignore b))
+                      (str:starts-with-p "100." a))))))
 
 ;;── Pairing System ────────────────────────────────────────────────────────────
 
@@ -421,16 +426,39 @@
 ;;── QR Code Generation (ASCII) ────────────────────────────────────────────────
 
 (defun generate-qr-ascii (data)
-  "Generate ASCII art QR code for DATA using qrencode if available.
-   Returns the QR code string or NIL if qrencode is not available."
+  "Generate Unicode QR code for DATA using cl-qrencode.
+   Uses half-block characters to render two rows per line.
+   Returns the QR code string or NIL on error."
   (handler-case
-      (multiple-value-bind (out err code)
-          (uiop:run-program (list "qrencode" "-t" "UTF8" "-m" "2" data)
-                            :output :string
-                            :error-output :string
-                            :ignore-error-status t)
-        (declare (ignore err))
-        (if (zerop code)
-            out
-            nil))
+      (let* ((qr (cl-qrencode:encode-symbol data :level :level-m))
+             (size (cl-qrencode:modules qr))
+             (mat (cl-qrencode:matrix qr))
+             (margin 2)
+             (total (+ size (* 2 margin)))
+             (lines nil))
+        ;; Process two rows at a time using Unicode half-block characters:
+        ;;   top=dark, bot=dark -> "█" (full block)
+        ;;   top=dark, bot=light -> "▀" (upper half)
+        ;;   top=light, bot=dark -> "▄" (lower half)
+        ;;   top=light, bot=light -> " " (space)
+        (loop for y from 0 below total by 2
+              do (let ((line (make-string-output-stream)))
+                   (write-string "  " line)  ; left indent
+                   (loop for x from 0 below total
+                         do (let ((top-dark (and (>= y margin) (< y (+ size margin))
+                                                 (>= x margin) (< x (+ size margin))
+                                                 (cl-qrencode:dark-module-p
+                                                  mat (- y margin) (- x margin))))
+                                  (bot-dark (and (>= (1+ y) margin) (< (1+ y) (+ size margin))
+                                                 (>= x margin) (< x (+ size margin))
+                                                 (cl-qrencode:dark-module-p
+                                                  mat (- (1+ y) margin) (- x margin)))))
+                              (write-string
+                               (cond ((and top-dark bot-dark) "█")
+                                     (top-dark "▀")
+                                     (bot-dark "▄")
+                                     (t " "))
+                               line)))
+                   (push (get-output-stream-string line) lines)))
+        (format nil "~{~A~%~}" (nreverse lines)))
     (error () nil)))
