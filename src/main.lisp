@@ -26,7 +26,8 @@
 ;;── TUI Application ────────────────────────────────────────────────────────────
 
 (defun start-tui ()
-  "Launch the TUI application."
+  "Launch the TUI application.
+   Auto-connects to a paired sync server if a sync config exists."
   ;; Initialize LLM enrichment
   (init-enrichment)
   ;; Run with error handling that logs backtraces
@@ -34,16 +35,43 @@
                           (log-error-with-backtrace e)
                           ;; Re-signal to let it propagate
                           (signal e))))
-    ;; Suppress poll warnings from SBCL when terminal resizes
-    #+sbcl
-    (handler-bind ((warning #'muffle-warning))
-      (let* ((model (make-initial-model))
-             (program (tui:make-program model :alt-screen t :mouse :cell-motion)))
-        (tui:run program)))
-    #-sbcl
-    (let* ((model (make-initial-model))
-           (program (tui:make-program model :alt-screen t :mouse :cell-motion)))
-      (tui:run program))))
+    ;; Check for paired sync config
+    (multiple-value-bind (sync-host sync-port sync-server-id)
+        (find-paired-sync-config)
+      ;; Suppress poll warnings from SBCL when terminal resizes
+      #+sbcl
+      (handler-bind ((warning #'muffle-warning))
+        (let* ((model (make-initial-model)))
+          (if sync-host
+              ;; Auto-connect to paired sync server
+              (let ((cert-path (namestring (paired-client-cert-file sync-server-id)))
+                    (key-path (namestring (paired-client-key-file sync-server-id))))
+                (start-sync-client sync-host sync-port
+                                   :model model
+                                   :client-certificate cert-path
+                                   :client-key key-path)
+                (unwind-protect
+                     (let ((program (tui:make-program model :alt-screen t :mouse :cell-motion)))
+                       (tui:run program))
+                  (stop-sync-client)))
+              ;; No sync config — run TUI without sync
+              (let ((program (tui:make-program model :alt-screen t :mouse :cell-motion)))
+                (tui:run program)))))
+      #-sbcl
+      (let* ((model (make-initial-model)))
+        (if sync-host
+            (let ((cert-path (namestring (paired-client-cert-file sync-server-id)))
+                  (key-path (namestring (paired-client-key-file sync-server-id))))
+              (start-sync-client sync-host sync-port
+                                 :model model
+                                 :client-certificate cert-path
+                                 :client-key key-path)
+              (unwind-protect
+                   (let ((program (tui:make-program model :alt-screen t :mouse :cell-motion)))
+                     (tui:run program))
+                (stop-sync-client)))
+            (let ((program (tui:make-program model :alt-screen t :mouse :cell-motion)))
+              (tui:run program)))))))
 
 ;;── Entry Point ────────────────────────────────────────────────────────────────
 

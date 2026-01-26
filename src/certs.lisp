@@ -422,6 +422,29 @@
   "Path to the client key received from a remote server."
   (merge-pathnames "client.key" (paired-server-directory server-id)))
 
+(defun paired-sync-config-file (server-id)
+  "Path to the sync config file for a paired remote server."
+  (merge-pathnames "sync.json" (paired-server-directory server-id)))
+
+(defun find-paired-sync-config ()
+  "Scan paired/*/sync.json for the first valid sync config.
+   Returns (values host port server-id) or NIL if none found."
+  (let ((paired-dir (paired-directory)))
+    (when (probe-file paired-dir)
+      (dolist (dir (uiop:subdirectories paired-dir))
+        (let* ((server-id (car (last (pathname-directory dir))))
+               (config-path (merge-pathnames "sync.json" dir)))
+          (when (probe-file config-path)
+            (handler-case
+                (let* ((content (uiop:read-file-string config-path))
+                       (config (jzon:parse content))
+                       (host (gethash "host" config))
+                       (port (gethash "port" config)))
+                  (when (and host port)
+                    (return-from find-paired-sync-config
+                      (values host port server-id))))
+              (error () nil))))))))
+
 
 ;;── QR Code Generation (ASCII) ────────────────────────────────────────────────
 

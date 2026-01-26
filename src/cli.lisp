@@ -698,8 +698,8 @@
                                        (url (format nil "http://~A:~A/pair/~A" primary-ip port token)))
                                   (format t "~%~A Certificate created for '~A'~%"
                                           (tui:colored "✓" :fg tui:*fg-green*) device-name)
-                                  (format t "~%Scan this QR code in the Cloodoo app, or visit:~%")
-                                  (format t "  ~A~%~%" (tui:colored url :fg tui:*fg-cyan*))
+                                  (format t "~%Scan this QR code in the Cloodoo app, or run on the client:~%")
+                                  (format t "  ~A~%~%" (tui:colored (format nil "cloodoo cert pair ~A" url) :fg tui:*fg-cyan*))
                                   ;; Try to generate QR code
                                   (let ((qr (generate-qr-ascii url)))
                                     (when qr
@@ -914,18 +914,23 @@ URL format: http://HOST:PORT/pair/TOKEN"
                     (uiop:run-program (list "chmod" "600" (namestring key-path))
                                       :ignore-error-status t)
 
+                    ;; Save sync config for auto-connect
+                    (let ((sync-config-path (paired-sync-config-file server-device-id)))
+                      (with-open-file (stream sync-config-path :direction :output
+                                                               :if-exists :supersede
+                                                               :if-does-not-exist :create)
+                        (let ((config (make-hash-table :test #'equal)))
+                          (setf (gethash "host" config) host)
+                          (setf (gethash "port" config) 50051)
+                          (jzon:stringify config :stream stream))))
+
                     ;; Success
                     (format t "~%~A Pairing complete!~%"
                             (tui:colored "✓" :fg tui:*fg-green*))
                     (format t "~%Certificate stored in:~%")
                     (format t "  ~A~%" (namestring cert-path))
                     (format t "  ~A~%" (namestring key-path))
-                    (format t "~%To connect to this server:~%")
-                    (format t "  ~A~%~%"
-                            (tui:colored
-                             (format nil "cloodoo sync-connect --host ~A --port 50051 --client-cert ~A --client-key ~A"
-                                     host (namestring cert-path) (namestring key-path))
-                             :fg tui:*fg-cyan*))))))))))))
+                    (format t "~%Cloodoo will auto-connect to this server on next launch.~%~%"))))))))))))
 
 (defun make-cert-command ()
   "Create the 'cert' command group."
