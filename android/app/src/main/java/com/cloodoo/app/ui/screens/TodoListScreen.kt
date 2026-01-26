@@ -38,20 +38,13 @@ import java.util.concurrent.TimeUnit
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 fun TodoListScreen(
-    certificateManager: CertificateManager,
-    passphrase: String?
+    certificateManager: CertificateManager
 ) {
     val context = LocalContext.current
     val application = context.applicationContext as Application
 
-    // If no passphrase, we can't sync (user needs to re-enter after app restart)
-    if (passphrase == null) {
-        PassphraseRequiredScreen()
-        return
-    }
-
     val viewModel: TodoListViewModel = viewModel(
-        factory = TodoListViewModel.Factory(application, certificateManager, passphrase)
+        factory = TodoListViewModel.Factory(application, certificateManager)
     )
 
     val uiState by viewModel.uiState.collectAsState()
@@ -396,39 +389,6 @@ fun TodoListScreen(
                 }
             }
         )
-    }
-}
-
-@Composable
-private fun PassphraseRequiredScreen() {
-    // This shouldn't happen anymore since we save the passphrase
-    // But keeping as fallback
-    Box(
-        modifier = Modifier.fillMaxSize(),
-        contentAlignment = Alignment.Center
-    ) {
-        Column(
-            horizontalAlignment = Alignment.CenterHorizontally,
-            modifier = Modifier.padding(32.dp)
-        ) {
-            Icon(
-                Icons.Default.CloudOff,
-                contentDescription = null,
-                modifier = Modifier.size(64.dp),
-                tint = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-            Spacer(modifier = Modifier.height(16.dp))
-            Text(
-                "Session Expired",
-                style = MaterialTheme.typography.titleLarge
-            )
-            Spacer(modifier = Modifier.height(8.dp))
-            Text(
-                "Please clear app data and pair again",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-        }
     }
 }
 

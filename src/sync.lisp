@@ -55,14 +55,18 @@
   "Handler for bidirectional TodoSync.SyncStream RPC.
    CTX is the call context, STREAM is for sending/receiving messages."
   (declare (ignore ctx))
+  (format t "~&[SYNC-DEBUG] handle-sync-stream entered~%")
   (let ((client-device-id nil))
     (unwind-protect
          (block sync-handler
            ;; Read the first message which should be SyncInit
+           (format t "~&[SYNC-DEBUG] Waiting for init message...~%")
            (let ((init-msg (ag-grpc:stream-recv stream)))
              (unless init-msg
                (llog:warn "Client disconnected before sending init")
                (return-from sync-handler))
+
+             (format t "~&[SYNC-DEBUG] Got message, msg-case=~A~%" (proto-msg-case init-msg))
 
              ;; Verify it's a SyncInit message
              (unless (eq (proto-msg-case init-msg) :init)
@@ -74,6 +78,8 @@
                     (since (proto-init-since sync-init))
                     (client-time-str (proto-init-client-time sync-init)))
                (setf client-device-id device-id)
+               (format t "~&[SYNC-DEBUG] Init: device-id=~A since=~A client-time=~A~%"
+                       device-id since client-time-str)
 
                ;; Check clock skew if client sent its time
                (when (and client-time-str (plusp (length client-time-str)))
@@ -81,7 +87,7 @@
                      (let* ((client-time (lt:parse-timestring client-time-str))
                             (server-time (lt:now))
                             (skew-seconds (abs (lt:timestamp-difference server-time client-time))))
-                       (when (> skew-seconds 1)
+                       (when (> skew-seconds 5)
                          (llog:warn "Clock skew too large, rejecting connection"
                                     :device-id device-id
                                     :skew-seconds skew-seconds)
@@ -99,10 +105,23 @@
                                                             since
                                                             "1970-01-01T00:00:00Z")))
                       (pending-count (length rows)))
+                 (format t "~&[SYNC-DEBUG] Pending changes to send: ~D~%" pending-count)
 
                  ;; Send SyncAck
                  (let ((ack-msg (make-sync-ack-message (now-iso) pending-count)))
-                   (ag-grpc:stream-send stream ack-msg))
+                   (format t "~&[SYNC-DEBUG] Sending ACK (server-time=~A, pending=~D)~%"
+                           (now-iso) pending-count)
+                   (let ((ack-bytes (ag-proto:serialize-to-bytes ack-msg)))
+                     (format t "~&[SYNC-DEBUG] ACK serialized: ~D bytes: ~{~2,'0X ~}~%"
+                             (length ack-bytes)
+                             (coerce ack-bytes 'list)))
+                   (handler-case
+                       (progn
+                         (ag-grpc:stream-send stream ack-msg)
+                         (format t "~&[SYNC-DEBUG] ACK sent successfully~%"))
+                     (error (e)
+                       (format t "~&[SYNC-DEBUG] ERROR sending ACK: ~A~%" e)
+                       (return-from sync-handler))))
 
                  ;; Send all pending changes (using the row's actual valid_from timestamp)
                  (dolist (row rows)
@@ -110,16 +129,32 @@
                           (valid-from (gethash "valid_from" row))
                           (change-msg (make-sync-upsert-message-with-timestamp
                                        (get-device-id) todo valid-from)))
-                     (ag-grpc:stream-send stream change-msg)))
+                     (handler-case
+                         (ag-grpc:stream-send stream change-msg)
+                       (error (e)
+                         (format t "~&[SYNC-DEBUG] ERROR sending change: ~A~%" e)
+                         (return-from sync-handler)))))
+                 (format t "~&[SYNC-DEBUG] All pending changes sent. Entering receive loop.~%")
+                 (force-output)
 
                  ;; Register this client for receiving broadcasts
                  (register-sync-client stream device-id)
 
                  ;; Main receive loop - process incoming changes from this client
                  (loop
-                   (let ((msg (ag-grpc:stream-recv stream)))
+                   (format t "~&[SYNC-DEBUG] Calling stream-recv...~%")
+                   (force-output)
+                   (let ((msg (handler-case
+                                  (ag-grpc:stream-recv stream)
+                                (error (e)
+                                  (format t "~&[SYNC-DEBUG] stream-recv ERROR: ~A (type: ~A)~%"
+                                          e (type-of e))
+                                  (force-output)
+                                  nil))))
                      (unless msg
                        ;; Client disconnected
+                       (format t "~&[SYNC-DEBUG] stream-recv returned nil (client disconnected)~%")
+                       (force-output)
                        (return-from sync-handler))
 
                      (when (eq (proto-msg-case msg) :change)
@@ -142,6 +177,8 @@
                               (broadcast-change msg device-id))))))))))))
 
       ;; Cleanup on exit
+      (format t "~&[SYNC-DEBUG] Handler exiting, cleanup. device-id=~A~%" client-device-id)
+      (force-output)
       (when client-device-id
         (unregister-sync-client client-device-id)))))
 
@@ -200,6 +237,12 @@
       (format t "~&WARNING: mTLS certificates not initialized.~%")
       (format t "Run 'cloodoo cert init' to set up secure sync.~%")
       (format t "Starting in INSECURE mode (no authentication).~%~%"))
+
+    ;; Disable ENABLE_PUSH (deprecated in RFC 9113, gRPC doesn't use server push)
+    (let ((push-setting (assoc ag-http2::+settings-enable-push+
+                               ag-http2::*default-settings*)))
+      (when push-setting
+        (setf (cdr push-setting) 0)))
 
     (setf *grpc-server*
           (if use-tls
@@ -318,10 +361,12 @@
 
 ;;── Sync Client Connection ────────────────────────────────────────────────────
 
-(defun start-sync-client (host port &key model)
+(defun start-sync-client (host port &key model client-certificate client-key)
   "Connect to a remote sync server as a client.
    HOST is the server address, PORT is the gRPC port.
-   MODEL is optional app-model to update with sync status."
+   MODEL is optional app-model to update with sync status.
+   CLIENT-CERTIFICATE - Path to client certificate for mTLS.
+   CLIENT-KEY - Path to client private key for mTLS."
   (when *sync-client-channel*
     (stop-sync-client))
 
@@ -331,43 +376,52 @@
   (when model
     (setf (model-sync-server-address model) (format nil "~A:~A" host port)))
 
-  (llog:info "Connecting to sync server" :host host :port port)
-  (format t "~&Connecting to sync server ~A:~A...~%" host port)
+  (let ((use-tls (and client-certificate client-key
+                      (probe-file client-certificate)
+                      (probe-file client-key))))
+    (llog:info "Connecting to sync server" :host host :port port :tls use-tls)
+    (format t "~&Connecting to sync server ~A:~A~A...~%" host port
+            (if use-tls " (mTLS)" " (plaintext)"))
 
-  (handler-case
-      (progn
-        ;; Create gRPC channel (plaintext for now)
-        (setf *sync-client-channel*
-              (ag-grpc:make-channel host port :tls nil))
+    (handler-case
+        (progn
+          ;; Create gRPC channel
+          (setf *sync-client-channel*
+                (if use-tls
+                    (ag-grpc:make-channel host port
+                                          :tls t
+                                          :tls-client-certificate (namestring client-certificate)
+                                          :tls-client-key (namestring client-key))
+                    (ag-grpc:make-channel host port :tls nil)))
 
-        ;; Create the stub and start bidirectional stream
-        (let ((stub (make-proto-todo-sync-stub *sync-client-channel*)))
-          (setf *sync-client-stream* (proto-todo-sync-stream stub)))
+          ;; Create the stub and start bidirectional stream
+          (let ((stub (make-proto-todo-sync-stub *sync-client-channel*)))
+            (setf *sync-client-stream* (proto-todo-sync-stream stub)))
 
-        ;; Send init message
-        (let* ((client-time (now-iso))
-               (init-msg (make-sync-init-message (get-device-id) "" client-time)))
-          (ag-grpc:stream-send *sync-client-stream* init-msg)
-          (llog:info "Sent sync init" :device-id (get-device-id) :client-time client-time))
+          ;; Send init message
+          (let* ((client-time (now-iso))
+                 (init-msg (make-sync-init-message (get-device-id) "" client-time)))
+            (ag-grpc:stream-send *sync-client-stream* init-msg)
+            (llog:info "Sent sync init" :device-id (get-device-id) :client-time client-time))
 
-        ;; Register hooks to send local changes to the server
-        (setf *todo-change-hook* #'notify-sync-todo-changed)
-        (setf *todo-delete-hook* #'notify-sync-todo-deleted)
+          ;; Register hooks to send local changes to the server
+          (setf *todo-change-hook* #'notify-sync-todo-changed)
+          (setf *todo-delete-hook* #'notify-sync-todo-deleted)
 
-        ;; Start background receive thread
-        (setf *sync-client-running* t)
-        (setf *sync-client-thread*
-              (bt:make-thread #'sync-client-receive-loop
-                              :name "sync-client-receiver"))
+          ;; Start background receive thread
+          (setf *sync-client-running* t)
+          (setf *sync-client-thread*
+                (bt:make-thread #'sync-client-receive-loop
+                                :name "sync-client-receiver"))
 
-        (format t "~&Sync client started.~%")
-        t)
-    (error (e)
-      (llog:error "Failed to connect to sync server" :error (princ-to-string e))
-      (format t "~&Failed to connect: ~A~%" e)
-      (update-sync-status :error (princ-to-string e))
-      (cleanup-sync-client)
-      nil)))
+          (format t "~&Sync client started.~%")
+          t)
+      (error (e)
+        (llog:error "Failed to connect to sync server" :error (princ-to-string e))
+        (format t "~&Failed to connect: ~A~%" e)
+        (update-sync-status :error (princ-to-string e))
+        (cleanup-sync-client)
+        nil))))
 
 (defun stop-sync-client ()
   "Disconnect from the sync server."

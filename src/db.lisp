@@ -135,6 +135,28 @@
           ALTER TABLE todos ADD COLUMN enriching_p INTEGER DEFAULT 0")
       (error () nil))  ; Column already exists
 
+    ;; Content-addressed blob storage for large text fields
+    (sqlite:execute-non-query db "
+      CREATE TABLE IF NOT EXISTS blobs (
+        hash TEXT PRIMARY KEY,
+        content TEXT NOT NULL
+      )")
+
+    ;; Migration: add description_hash column
+    (handler-case
+        (sqlite:execute-non-query db "
+          ALTER TABLE todos ADD COLUMN description_hash TEXT")
+      (error () nil))
+
+    ;; Migration: add location_info_hash column
+    (handler-case
+        (sqlite:execute-non-query db "
+          ALTER TABLE todos ADD COLUMN location_info_hash TEXT")
+      (error () nil))
+
+    ;; Migrate existing inline descriptions to blobs
+    (migrate-inline-to-blobs db)
+
     ;; Index for efficient current state queries
     (sqlite:execute-non-query db "
       CREATE INDEX IF NOT EXISTS idx_todos_current
@@ -176,6 +198,65 @@
   (when (and str (stringp str) (> (length str) 0))
     (handler-case (lt:parse-timestring str)
       (error () nil))))
+
+;;── Content-Addressed Blob Storage ────────────────────────────────────────────
+
+(defun content-hash (text)
+  "Compute MD5 hash of TEXT as a hex string."
+  (when (and text (stringp text) (> (length text) 0))
+    (let* ((bytes (md5:md5sum-string text :external-format :utf-8))
+           (hex (make-string 32)))
+      (loop for byte across bytes
+            for i from 0 by 2
+            do (let ((hi (ash byte -4))
+                     (lo (logand byte #xf)))
+                 (setf (char hex i) (char "0123456789abcdef" hi))
+                 (setf (char hex (1+ i)) (char "0123456789abcdef" lo))))
+      hex)))
+
+(defun store-blob (db text)
+  "Store TEXT in the blobs table, returning its hash. No-op if already stored."
+  (when text
+    (let ((hash (content-hash text)))
+      (when hash
+        (sqlite:execute-non-query db
+          "INSERT OR IGNORE INTO blobs (hash, content) VALUES (?, ?)"
+          hash text)
+        hash))))
+
+(defun resolve-blob (db hash)
+  "Look up a blob by hash, returning its content or NIL."
+  (when hash
+    (sqlite:execute-single db
+      "SELECT content FROM blobs WHERE hash = ?" hash)))
+
+(defun migrate-inline-to-blobs (db)
+  "Migrate existing inline descriptions and location_info to the blobs table.
+   Only runs if there are rows with inline content but no hash."
+  (let ((rows (sqlite:execute-to-list db "
+    SELECT row_id, description, location_info
+    FROM todos
+    WHERE (description IS NOT NULL AND description_hash IS NULL)
+       OR (location_info IS NOT NULL AND location_info_hash IS NULL)
+    LIMIT 1000")))
+    (when rows
+      (dolist (row rows)
+        (destructuring-bind (row-id description location-info) row
+          (when (and description (not (eq description :null)))
+            (let ((hash (store-blob db description)))
+              (when hash
+                (sqlite:execute-non-query db
+                  "UPDATE todos SET description = NULL, description_hash = ? WHERE row_id = ?"
+                  hash row-id))))
+          (when (and location-info (not (eq location-info :null)))
+            (let ((hash (store-blob db location-info)))
+              (when hash
+                (sqlite:execute-non-query db
+                  "UPDATE todos SET location_info = NULL, location_info_hash = ? WHERE row_id = ?"
+                  hash row-id))))))
+      ;; Recurse if there are more rows (batched to avoid huge transactions)
+      (when (= (length rows) 1000)
+        (migrate-inline-to-blobs db)))))
 
 ;;── Row to TODO Conversion ────────────────────────────────────────────────────
 
@@ -228,14 +309,19 @@
   "Load current (non-superseded) TODOs from the database."
   (with-db (db)
     (let ((rows (sqlite:execute-to-list db "
-      SELECT row_id, id, title, description, priority, status,
-             scheduled_date, due_date, tags, estimated_minutes,
-             location_info, url, parent_id, created_at, completed_at,
-             valid_from, valid_to, device_id, repeat_interval, repeat_unit,
-             enriching_p
-      FROM todos
-      WHERE valid_to IS NULL
-      ORDER BY created_at DESC")))
+      SELECT t.row_id, t.id, t.title,
+             COALESCE(b1.content, t.description) as description,
+             t.priority, t.status,
+             t.scheduled_date, t.due_date, t.tags, t.estimated_minutes,
+             COALESCE(b2.content, t.location_info) as location_info,
+             t.url, t.parent_id, t.created_at, t.completed_at,
+             t.valid_from, t.valid_to, t.device_id, t.repeat_interval,
+             t.repeat_unit, t.enriching_p
+      FROM todos t
+      LEFT JOIN blobs b1 ON t.description_hash = b1.hash
+      LEFT JOIN blobs b2 ON t.location_info_hash = b2.hash
+      WHERE t.valid_to IS NULL
+      ORDER BY t.created_at DESC")))
       (mapcar #'row-to-todo rows))))
 
 (defun db-load-todos-at (timestamp)
@@ -246,15 +332,20 @@
                 (lt:format-rfc3339-timestring nil timestamp))))
     (with-db (db)
       (let ((rows (sqlite:execute-to-list db "
-        SELECT row_id, id, title, description, priority, status,
-               scheduled_date, due_date, tags, estimated_minutes,
-               location_info, url, parent_id, created_at, completed_at,
-               valid_from, valid_to, device_id, repeat_interval, repeat_unit,
-               enriching_p
-        FROM todos
-        WHERE valid_from <= ?
-          AND (valid_to IS NULL OR valid_to > ?)
-        ORDER BY created_at DESC" ts ts)))
+        SELECT t.row_id, t.id, t.title,
+               COALESCE(b1.content, t.description) as description,
+               t.priority, t.status,
+               t.scheduled_date, t.due_date, t.tags, t.estimated_minutes,
+               COALESCE(b2.content, t.location_info) as location_info,
+               t.url, t.parent_id, t.created_at, t.completed_at,
+               t.valid_from, t.valid_to, t.device_id, t.repeat_interval,
+               t.repeat_unit, t.enriching_p
+        FROM todos t
+        LEFT JOIN blobs b1 ON t.description_hash = b1.hash
+        LEFT JOIN blobs b2 ON t.location_info_hash = b2.hash
+        WHERE t.valid_from <= ?
+          AND (t.valid_to IS NULL OR t.valid_to > ?)
+        ORDER BY t.created_at DESC" ts ts)))
         (mapcar #'row-to-todo rows)))))
 
 ;;── Save TODO (Insert or Update) ──────────────────────────────────────────────
@@ -299,37 +390,41 @@
 
 (defun db-save-todo (todo)
   "Save a TODO to the database using append-only semantics.
-   If the TODO already exists (by ID), the old version is marked as superseded."
+   If the TODO already exists (by ID), the old version is marked as superseded.
+   Large text fields (description, location_info) are stored in the blobs table."
   (with-db (db)
     (let ((now (now-iso))
           (values (todo-to-db-values todo))
           (committed nil))
-      ;; Start a transaction for atomicity
-      (sqlite:execute-non-query db "BEGIN IMMEDIATE")
-      (unwind-protect
-           (progn
-             ;; Mark any existing current version as superseded
-             (sqlite:execute-non-query db "
-               UPDATE todos SET valid_to = ?
-               WHERE id = ? AND valid_to IS NULL"
-               now (todo-id todo))
-             ;; Insert the new version
-             (sqlite:execute-non-query db "
-               INSERT INTO todos (id, title, description, priority, status,
-                                  scheduled_date, due_date, tags, estimated_minutes,
-                                  location_info, url, parent_id, created_at,
-                                  completed_at, valid_from, valid_to, device_id,
-                                  repeat_interval, repeat_unit, enriching_p)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?)"
-               (first values) (second values) (third values) (fourth values)
-               (fifth values) (sixth values) (seventh values) (eighth values)
-               (ninth values) (tenth values) (nth 10 values) (nth 11 values)
-               (nth 12 values) (nth 13 values) now (nth 14 values)
-               (nth 15 values) (nth 16 values) (nth 17 values))
-             (sqlite:execute-non-query db "COMMIT")
-             (setf committed t))
-        (unless committed
-          (ignore-errors (sqlite:execute-non-query db "ROLLBACK")))))))
+      ;; Store large text fields as blobs
+      (let ((desc-hash (store-blob db (third values)))
+            (loc-hash (store-blob db (tenth values))))
+        ;; Start a transaction for atomicity
+        (sqlite:execute-non-query db "BEGIN IMMEDIATE")
+        (unwind-protect
+             (progn
+               ;; Mark any existing current version as superseded
+               (sqlite:execute-non-query db "
+                 UPDATE todos SET valid_to = ?
+                 WHERE id = ? AND valid_to IS NULL"
+                 now (todo-id todo))
+               ;; Insert the new version (description/location_info as hashes)
+               (sqlite:execute-non-query db "
+                 INSERT INTO todos (id, title, description_hash, priority, status,
+                                    scheduled_date, due_date, tags, estimated_minutes,
+                                    location_info_hash, url, parent_id, created_at,
+                                    completed_at, valid_from, valid_to, device_id,
+                                    repeat_interval, repeat_unit, enriching_p)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?)"
+                 (first values) (second values) desc-hash (fourth values)
+                 (fifth values) (sixth values) (seventh values) (eighth values)
+                 (ninth values) loc-hash (nth 10 values) (nth 11 values)
+                 (nth 12 values) (nth 13 values) now (nth 14 values)
+                 (nth 15 values) (nth 16 values) (nth 17 values))
+               (sqlite:execute-non-query db "COMMIT")
+               (setf committed t))
+          (unless committed
+            (ignore-errors (sqlite:execute-non-query db "ROLLBACK"))))))))
 
 (defun db-save-todos (todos)
   "Save all TODOs to the database.
@@ -355,19 +450,21 @@
                (sqlite:execute-non-query db "
                  UPDATE todos SET valid_to = ?
                  WHERE id = ? AND valid_to IS NULL" now id))
-             ;; Insert all TODOs as new versions
+             ;; Insert all TODOs as new versions (with blob storage)
              (dolist (todo unique-todos)
-               (let ((values (todo-to-db-values todo)))
+               (let* ((values (todo-to-db-values todo))
+                      (desc-hash (store-blob db (third values)))
+                      (loc-hash (store-blob db (tenth values))))
                  (sqlite:execute-non-query db "
-                   INSERT INTO todos (id, title, description, priority, status,
+                   INSERT INTO todos (id, title, description_hash, priority, status,
                                       scheduled_date, due_date, tags, estimated_minutes,
-                                      location_info, url, parent_id, created_at,
+                                      location_info_hash, url, parent_id, created_at,
                                       completed_at, valid_from, valid_to, device_id,
                                       repeat_interval, repeat_unit, enriching_p)
                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?)"
-                   (first values) (second values) (third values) (fourth values)
+                   (first values) (second values) desc-hash (fourth values)
                    (fifth values) (sixth values) (seventh values) (eighth values)
-                   (ninth values) (tenth values) (nth 10 values) (nth 11 values)
+                   (ninth values) loc-hash (nth 10 values) (nth 11 values)
                    (nth 12 values) (nth 13 values) now (nth 14 values)
                    (nth 15 values) (nth 16 values) (nth 17 values))))
              (sqlite:execute-non-query db "COMMIT")
@@ -442,17 +539,19 @@
             (unwind-protect
                  (progn
                    (dolist (todo todos)
-                     (let ((values (todo-to-db-values todo)))
+                     (let* ((values (todo-to-db-values todo))
+                            (desc-hash (store-blob db (third values)))
+                            (loc-hash (store-blob db (tenth values))))
                        (sqlite:execute-non-query db "
-                         INSERT INTO todos (id, title, description, priority, status,
+                         INSERT INTO todos (id, title, description_hash, priority, status,
                                             scheduled_date, due_date, tags, estimated_minutes,
-                                            location_info, url, parent_id, created_at,
+                                            location_info_hash, url, parent_id, created_at,
                                             completed_at, valid_from, valid_to, device_id,
                                             repeat_interval, repeat_unit, enriching_p)
                          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?)"
-                         (first values) (second values) (third values) (fourth values)
+                         (first values) (second values) desc-hash (fourth values)
                          (fifth values) (sixth values) (seventh values) (eighth values)
-                         (ninth values) (tenth values) (nth 10 values) (nth 11 values)
+                         (ninth values) loc-hash (nth 10 values) (nth 11 values)
                          (nth 12 values) (nth 13 values) now (nth 14 values)
                          (nth 15 values) (nth 16 values) (nth 17 values))))
                    (sqlite:execute-non-query db "COMMIT")
@@ -593,14 +692,19 @@
                 (lt:format-rfc3339-timestring nil timestamp))))
     (with-db (db)
       (let ((rows (sqlite:execute-to-list db "
-        SELECT row_id, id, title, description, priority, status,
-               scheduled_date, due_date, tags, estimated_minutes,
-               location_info, url, parent_id, created_at, completed_at,
-               valid_from, valid_to, device_id, repeat_interval, repeat_unit,
-               enriching_p
-        FROM todos
-        WHERE valid_from > ?
-        ORDER BY valid_from ASC" ts)))
+        SELECT t.row_id, t.id, t.title,
+               COALESCE(b1.content, t.description) as description,
+               t.priority, t.status,
+               t.scheduled_date, t.due_date, t.tags, t.estimated_minutes,
+               COALESCE(b2.content, t.location_info) as location_info,
+               t.url, t.parent_id, t.created_at, t.completed_at,
+               t.valid_from, t.valid_to, t.device_id, t.repeat_interval,
+               t.repeat_unit, t.enriching_p
+        FROM todos t
+        LEFT JOIN blobs b1 ON t.description_hash = b1.hash
+        LEFT JOIN blobs b2 ON t.location_info_hash = b2.hash
+        WHERE t.valid_from > ?
+        ORDER BY t.valid_from ASC" ts)))
         (mapcar #'row-to-sync-hash-table rows)))))
 
 (defun db-load-current-rows-since (timestamp)
@@ -614,14 +718,19 @@
                 (lt:format-rfc3339-timestring nil timestamp))))
     (with-db (db)
       (let ((rows (sqlite:execute-to-list db "
-        SELECT row_id, id, title, description, priority, status,
-               scheduled_date, due_date, tags, estimated_minutes,
-               location_info, url, parent_id, created_at, completed_at,
-               valid_from, valid_to, device_id, repeat_interval, repeat_unit,
-               enriching_p
-        FROM todos
-        WHERE valid_from > ? AND valid_to IS NULL
-        ORDER BY valid_from ASC" ts)))
+        SELECT t.row_id, t.id, t.title,
+               COALESCE(b1.content, t.description) as description,
+               t.priority, t.status,
+               t.scheduled_date, t.due_date, t.tags, t.estimated_minutes,
+               COALESCE(b2.content, t.location_info) as location_info,
+               t.url, t.parent_id, t.created_at, t.completed_at,
+               t.valid_from, t.valid_to, t.device_id, t.repeat_interval,
+               t.repeat_unit, t.enriching_p
+        FROM todos t
+        LEFT JOIN blobs b1 ON t.description_hash = b1.hash
+        LEFT JOIN blobs b2 ON t.location_info_hash = b2.hash
+        WHERE t.valid_from > ? AND t.valid_to IS NULL
+        ORDER BY t.valid_from ASC" ts)))
         (mapcar #'row-to-sync-hash-table rows)))))
 
 (defun db-merge-rows (rows source-device-id)
@@ -650,34 +759,57 @@
                    (if exists
                        (incf rejected)
                        (progn
-                         ;; Insert the row with its original timestamps
-                         (sqlite:execute-non-query db "
-                           INSERT INTO todos (id, title, description, priority, status,
-                                              scheduled_date, due_date, tags, estimated_minutes,
-                                              location_info, url, parent_id, created_at,
-                                              completed_at, valid_from, valid_to, device_id,
-                                              repeat_interval, repeat_unit, enriching_p)
-                           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
-                           id
-                           (gethash "title" row)
-                           (gethash "description" row)
-                           (gethash "priority" row)
-                           (gethash "status" row)
-                           (gethash "scheduled_date" row)
-                           (gethash "due_date" row)
-                           (gethash "tags" row)
-                           (gethash "estimated_minutes" row)
-                           (gethash "location_info" row)
-                           (gethash "url" row)
-                           (gethash "parent_id" row)
-                           (gethash "created_at" row)
-                           (gethash "completed_at" row)
-                           valid-from
-                           valid-to
-                           device-id
-                           (gethash "repeat_interval" row)
-                           (gethash "repeat_unit" row)
-                           (gethash "enriching_p" row))
+                         ;; Last-writer-wins: if incoming row is current (valid_to NULL),
+                         ;; supersede any existing current version for this id
+                         (when (or (null valid-to) (eq valid-to 'null))
+                           (let ((existing-from (sqlite:execute-single db "
+                             SELECT valid_from FROM todos
+                             WHERE id = ? AND valid_to IS NULL" id)))
+                             (when existing-from
+                               ;; Supersede existing: the one with older valid_from loses
+                               (if (string> valid-from existing-from)
+                                   ;; Incoming is newer — supersede existing
+                                   (sqlite:execute-non-query db "
+                                     UPDATE todos SET valid_to = ?
+                                     WHERE id = ? AND valid_to IS NULL"
+                                     valid-from id)
+                                   ;; Existing is newer — mark incoming as superseded
+                                   (setf valid-to existing-from)))))
+                         ;; Store large text fields as blobs
+                         (let ((desc (gethash "description" row))
+                               (loc (gethash "location_info" row)))
+                           (let ((desc-hash (when (and desc (not (eq desc 'null)))
+                                              (store-blob db desc)))
+                                 (loc-hash (when (and loc (not (eq loc 'null)))
+                                             (store-blob db loc))))
+                             ;; Insert the row
+                             (sqlite:execute-non-query db "
+                               INSERT INTO todos (id, title, description_hash, priority, status,
+                                                  scheduled_date, due_date, tags, estimated_minutes,
+                                                  location_info_hash, url, parent_id, created_at,
+                                                  completed_at, valid_from, valid_to, device_id,
+                                                  repeat_interval, repeat_unit, enriching_p)
+                               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+                               id
+                               (gethash "title" row)
+                               desc-hash
+                               (gethash "priority" row)
+                               (gethash "status" row)
+                               (gethash "scheduled_date" row)
+                               (gethash "due_date" row)
+                               (gethash "tags" row)
+                               (gethash "estimated_minutes" row)
+                               loc-hash
+                               (gethash "url" row)
+                               (gethash "parent_id" row)
+                               (gethash "created_at" row)
+                               (gethash "completed_at" row)
+                               valid-from
+                               valid-to
+                               device-id
+                               (gethash "repeat_interval" row)
+                               (gethash "repeat_unit" row)
+                               (gethash "enriching_p" row))))
                          (incf accepted)))))
                (sqlite:execute-non-query db "COMMIT")
                (setf committed t))

@@ -23,8 +23,11 @@
                :llog
                :bordeaux-threads
                :sqlite
+               :md5
+               :dexador
                :ag-grpc
-               :ag-proto)
+               :ag-proto
+               :cl-x509)
   :serial t
   :components ((:module "src"
                 :components ((:file "package")

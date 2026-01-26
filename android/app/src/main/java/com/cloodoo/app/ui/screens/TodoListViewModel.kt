@@ -21,8 +21,7 @@ import kotlinx.coroutines.launch
 
 class TodoListViewModel(
     application: Application,
-    private val certificateManager: CertificateManager,
-    private val passphrase: String
+    private val certificateManager: CertificateManager
 ) : AndroidViewModel(application) {
 
     companion object {
@@ -32,7 +31,7 @@ class TodoListViewModel(
     private val deviceId = certificateManager.getDeviceName() ?: "unknown"
     private val database = CloodooDatabase.getDatabase(application)
     private val repository = TodoRepository(database, deviceId)
-    private val syncManager = SyncManager(database, certificateManager, deviceId, passphrase)
+    private val syncManager = SyncManager(database, certificateManager, deviceId)
 
     // UI State
     private val _uiState = MutableStateFlow(TodoListUiState())
@@ -205,13 +204,12 @@ class TodoListViewModel(
 
     class Factory(
         private val application: Application,
-        private val certificateManager: CertificateManager,
-        private val passphrase: String
+        private val certificateManager: CertificateManager
     ) : ViewModelProvider.Factory {
         @Suppress("UNCHECKED_CAST")
         override fun <T : ViewModel> create(modelClass: Class<T>): T {
             if (modelClass.isAssignableFrom(TodoListViewModel::class.java)) {
-                return TodoListViewModel(application, certificateManager, passphrase) as T
+                return TodoListViewModel(application, certificateManager) as T
             }
             throw IllegalArgumentException("Unknown ViewModel class")
         }

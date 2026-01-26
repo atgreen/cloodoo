@@ -153,10 +153,8 @@
                                              :priority (intern (string-upcase priority) :keyword)
                                              :due-date due-date
                                              :description note
-                                             :tags (parse-tags tags)))
-                             (todos (load-todos)))
-                        (push todo todos)
-                        (save-todos todos)
+                                             :tags (parse-tags tags))))
+                        (save-todo todo)
                         (format t "~A Added: ~A~%"
                                (tui:colored "✓" :fg tui:*fg-green*)
                                title)
@@ -257,7 +255,7 @@
                          (let ((todo (first matches)))
                            (setf (todo-status todo) :completed)
                            (setf (todo-completed-at todo) (lt:now))
-                           (save-todos todos)
+                           (save-todo todo)
                            (format t "~A Completed: ~A~%"
                                   (tui:colored "✓" :fg tui:*fg-green*)
                                   (todo-title todo))))
@@ -340,6 +338,12 @@
                             (return))))
                       ;; Delete superseded rows
                       (sqlite:execute-non-query db "DELETE FROM todos WHERE valid_to IS NOT NULL")
+                      ;; Remove orphaned blobs (no longer referenced by any row)
+                      (sqlite:execute-non-query db "
+                        DELETE FROM blobs WHERE hash NOT IN (
+                          SELECT description_hash FROM todos WHERE description_hash IS NOT NULL
+                          UNION
+                          SELECT location_info_hash FROM todos WHERE location_info_hash IS NOT NULL)")
                       ;; Vacuum to reclaim space
                       (sqlite:execute-non-query db "VACUUM")
                       ;; Count after
@@ -398,13 +402,19 @@
                 ;; Dump todos data
                 (format t "-- Data: todos~%")
                 (let ((rows (sqlite:execute-to-list db "
-                  SELECT id, title, description, priority, status,
-                         scheduled_date, due_date, tags, estimated_minutes,
-                         location_info, url, parent_id, created_at, completed_at,
-                         valid_from, valid_to, device_id, repeat_interval, repeat_unit, enriching_p
-                  FROM todos
-                  WHERE valid_to IS NULL
-                  ORDER BY created_at")))
+                  SELECT t.id, t.title,
+                         COALESCE(b1.content, t.description) as description,
+                         t.priority, t.status,
+                         t.scheduled_date, t.due_date, t.tags, t.estimated_minutes,
+                         COALESCE(b2.content, t.location_info) as location_info,
+                         t.url, t.parent_id, t.created_at, t.completed_at,
+                         t.valid_from, t.valid_to, t.device_id, t.repeat_interval,
+                         t.repeat_unit, t.enriching_p
+                  FROM todos t
+                  LEFT JOIN blobs b1 ON t.description_hash = b1.hash
+                  LEFT JOIN blobs b2 ON t.location_info_hash = b2.hash
+                  WHERE t.valid_to IS NULL
+                  ORDER BY t.created_at")))
                   (dolist (row rows)
                     (destructuring-bind (id title description priority status
                                          scheduled-date due-date tags estimated-minutes
@@ -529,14 +539,26 @@
                    :long-name "port"
                    :key :port
                    :initial-value 50051
-                   :description "Sync server gRPC port")))
+                   :description "Sync server gRPC port"))
+        (cert-opt (clingon:make-option
+                   :string
+                   :long-name "client-cert"
+                   :key :client-cert
+                   :description "Path to client certificate for mTLS"))
+        (key-opt (clingon:make-option
+                  :string
+                  :long-name "client-key"
+                  :key :client-key
+                  :description "Path to client private key for mTLS")))
     (clingon:make-command
      :name "sync-connect"
      :description "Start TUI and connect to a remote sync server"
-     :options (list host-opt port-opt)
+     :options (list host-opt port-opt cert-opt key-opt)
      :handler (lambda (cmd)
                 (let ((host (clingon:getopt cmd :host))
-                      (port (clingon:getopt cmd :port)))
+                      (port (clingon:getopt cmd :port))
+                      (client-cert (clingon:getopt cmd :client-cert))
+                      (client-key (clingon:getopt cmd :client-key)))
                   ;; Initialize enrichment
                   (init-enrichment)
                   ;; Run with error handling that logs backtraces
@@ -547,7 +569,9 @@
                     (handler-bind ((warning #'muffle-warning))
                       (let* ((model (make-initial-model)))
                         ;; Start sync client connection
-                        (start-sync-client host port :model model)
+                        (start-sync-client host port :model model
+                                           :client-certificate client-cert
+                                           :client-key client-key)
                         ;; Start TUI
                         (unwind-protect
                              (let ((program (tui:make-program model :alt-screen t :mouse :cell-motion)))
@@ -556,7 +580,9 @@
                           (stop-sync-client))))
                     #-sbcl
                     (let* ((model (make-initial-model)))
-                      (start-sync-client host port :model model)
+                      (start-sync-client host port :model model
+                                           :client-certificate client-cert
+                                           :client-key client-key)
                       (unwind-protect
                            (let ((program (tui:make-program model :alt-screen t :mouse :cell-motion)))
                              (tui:run program))
@@ -637,7 +663,8 @@
                                 (let ((passphrase (issue-client-cert device-name :days days)))
                                   (format t "~%~A Certificate created for '~A'~%"
                                           (tui:colored "✓" :fg tui:*fg-green*) device-name)
-                                  (format t "~%P12 file: ~A~%" (client-p12-file device-name))
+                                  (format t "~%Cert: ~A~%" (namestring (client-cert-file device-name)))
+                                  (format t "Key:  ~A~%" (namestring (client-key-file device-name)))
                                   (format t "Passphrase: ~A~%~%" passphrase))
                                 ;; Create cert and start pairing server
                                 (let* ((request (create-pairing-request device-name))
@@ -667,8 +694,8 @@
                                       (loop
                                         (sleep 2)
                                         (cleanup-expired-pairings)
-                                        ;; Check if token was consumed (p12 downloaded)
-                                        (unless (probe-file (client-p12-file device-name))
+                                        ;; Check if token was consumed (cert downloaded)
+                                        (unless (get-pairing-request token)
                                           (format t "~%~A Device '~A' has downloaded its certificate.~%"
                                                   (tui:colored "✓" :fg tui:*fg-green*) device-name)
                                           (return)))
@@ -677,6 +704,10 @@
                                      #-(or sbcl ccl) error ()
                                      (format t "~%")))
                                   (stop-server)))
+                          (usocket:address-in-use-error ()
+                            (format t "~A Port ~A is already in use.~%"
+                                    (tui:colored "✗" :fg tui:*fg-red*) port)
+                            (format t "  Use --port to specify a different port, or stop the existing server.~%"))
                           (error (e)
                             (format t "~A Error: ~A~%"
                                     (tui:colored "✗" :fg tui:*fg-red*) e))))
@@ -735,6 +766,144 @@
                                   (tui:colored "✗" :fg tui:*fg-red*) e))))
                     (format t "Usage: cloodoo cert revoke DEVICE_NAME~%"))))))
 
+(defun make-cert-pair-command ()
+  "Create the 'cert pair' subcommand."
+  (clingon:make-command
+   :name "pair"
+   :description "Pair with a remote server to receive a client certificate"
+   :usage "URL"
+   :handler (lambda (cmd)
+              (let ((args (clingon:command-arguments cmd)))
+                (if args
+                    (let ((url (first args)))
+                      (handler-case
+                          (pair-with-server url)
+                        (error (e)
+                          (format t "~A Error: ~A~%"
+                                  (tui:colored "✗" :fg tui:*fg-red*) e))))
+                    (progn
+                      (format t "Usage: cloodoo cert pair URL~%~%")
+                      (format t "Example: cloodoo cert pair http://192.168.1.100:9876/pair/abc123~%")))))))
+
+(defun http-get (url)
+  "GET a URL, returning (values body status-code) without signaling on HTTP errors."
+  (handler-bind ((dex:http-request-failed
+                   (lambda (e)
+                     (return-from http-get
+                       (values (dex:response-body e) (dex:response-status e))))))
+    (dex:get url)))
+
+(defun http-post (url &key content content-type)
+  "POST to a URL, returning (values body status-code) without signaling on HTTP errors."
+  (handler-bind ((dex:http-request-failed
+                   (lambda (e)
+                     (return-from http-post
+                       (values (dex:response-body e) (dex:response-status e))))))
+    (apply #'dex:post url
+           (append
+            (when content (list :content content))
+            (when content-type (list :headers `(("content-type" . ,content-type))))))))
+
+(defun parse-pairing-url (url)
+  "Parse a pairing URL into (values host port token).
+URL format: http://HOST:PORT/pair/TOKEN"
+  (let* ((without-scheme (if (str:starts-with-p "http://" url)
+                             (subseq url 7)
+                             (if (str:starts-with-p "https://" url)
+                                 (subseq url 8)
+                                 url)))
+         (path-start (position #\/ without-scheme))
+         (host-port (subseq without-scheme 0 path-start))
+         (path (when path-start (subseq without-scheme path-start)))
+         (colon-pos (position #\: host-port))
+         (host (if colon-pos (subseq host-port 0 colon-pos) host-port))
+         (port (if colon-pos
+                   (parse-integer (subseq host-port (1+ colon-pos)))
+                   9876))
+         (token (when (and path (str:starts-with-p "/pair/" path))
+                  (subseq path 6))))
+    (unless token
+      (error "Invalid pairing URL. Expected format: http://HOST:PORT/pair/TOKEN"))
+    (values host port token)))
+
+(defun pair-with-server (url)
+  "Execute the pairing flow: fetch info, download PEM cert/key, store locally."
+  (multiple-value-bind (host port token) (parse-pairing-url url)
+    (let ((base-url (format nil "http://~A:~A" host port)))
+
+      ;; Step 1: Get pairing info
+      (format t "~%Connecting to ~A...~%" base-url)
+      (multiple-value-bind (body status)
+          (http-get (format nil "~A/pair/~A" base-url token))
+        (unless (= status 200)
+          (error "Pairing token not found or expired (HTTP ~A)" status))
+        (let* ((info (jzon:parse body))
+               (device-name (gethash "device_name" info))
+               (expires-in (gethash "expires_in" info)))
+          (format t "~A Server is offering certificate for '~A'~%"
+                  (tui:colored "✓" :fg tui:*fg-green*) device-name)
+          (format t "  Expires in ~A seconds~%~%" expires-in)
+
+          ;; Step 2: Get server device ID for storage path
+          (multiple-value-bind (dev-body dev-status)
+              (http-get (format nil "~A/api/device" base-url))
+            (unless (= dev-status 200)
+              (error "Failed to get server device info (HTTP ~A)" dev-status))
+            (let* ((dev-info (jzon:parse dev-body))
+                   (server-device-id (gethash "device_id" dev-info)))
+
+              ;; Step 3: Prompt for passphrase
+              (format t "Enter passphrase: ")
+              (force-output)
+              (let ((passphrase (str:trim (read-line))))
+                (when (zerop (length passphrase))
+                  (error "Passphrase cannot be empty"))
+
+                ;; Step 4: Download cert and key as PEM
+                (format t "Downloading certificate...~%")
+                (multiple-value-bind (pem-body pem-status)
+                    (http-post (format nil "~A/pair/~A/pem" base-url token)
+                               :content (jzon:stringify
+                                         (alexandria:plist-hash-table
+                                          (list "passphrase" passphrase)
+                                          :test #'equal))
+                               :content-type "application/json")
+                  (unless (= pem-status 200)
+                    (error "Failed to download certificate (HTTP ~A). Token may have expired."
+                           pem-status))
+
+                  (let* ((pem-data (jzon:parse pem-body))
+                         (cert-pem (gethash "cert" pem-data))
+                         (key-pem (gethash "key" pem-data))
+                         (cert-path (paired-client-cert-file server-device-id))
+                         (key-path (paired-client-key-file server-device-id)))
+
+                    ;; Save cert
+                    (ensure-directories-exist cert-path)
+                    (with-open-file (stream cert-path :direction :output
+                                                      :if-exists :supersede)
+                      (write-string cert-pem stream))
+
+                    ;; Save key with restricted permissions
+                    (with-open-file (stream key-path :direction :output
+                                                     :if-exists :supersede)
+                      (write-string key-pem stream))
+                    (uiop:run-program (list "chmod" "600" (namestring key-path))
+                                      :ignore-error-status t)
+
+                    ;; Success
+                    (format t "~%~A Pairing complete!~%"
+                            (tui:colored "✓" :fg tui:*fg-green*))
+                    (format t "~%Certificate stored in:~%")
+                    (format t "  ~A~%" (namestring cert-path))
+                    (format t "  ~A~%" (namestring key-path))
+                    (format t "~%To connect to this server:~%")
+                    (format t "  ~A~%~%"
+                            (tui:colored
+                             (format nil "cloodoo sync-connect --host ~A --port 50051 --client-cert ~A --client-key ~A"
+                                     host (namestring cert-path) (namestring key-path))
+                             :fg tui:*fg-cyan*))))))))))))
+
 (defun make-cert-command ()
   "Create the 'cert' command group."
   (clingon:make-command
@@ -746,6 +915,7 @@
               (clingon:print-usage cmd t))
    :sub-commands (list (make-cert-init-command)
                        (make-cert-issue-command)
+                       (make-cert-pair-command)
                        (make-cert-list-command)
                        (make-cert-revoke-command))))
 
@@ -790,8 +960,8 @@
                       (error (e)
                         (declare (ignore e))))
                     ;; Clear enriching flag regardless of success/failure
-                    (setf (todo-enriching-p todo) nil))
-                  (save-todos todos))))))
+                    (setf (todo-enriching-p todo) nil)
+                    (save-todo todo)))))))
 
 ;;── Native Messaging for Browser Extension ────────────────────────────────────
 
@@ -868,17 +1038,15 @@
                 (unless (or (null u) (eq u 'null)) u))))
     (if title
         ;; Create TODO immediately with raw data, mark for async enrichment
-        (let* ((todo (make-todo title
-                               :description description
-                               :priority priority
-                               :due-date due-date
-                               :tags tags
-                               :url url))
-               (todos (load-todos)))
+        (let ((todo (make-todo title
+                              :description description
+                              :priority priority
+                              :due-date due-date
+                              :tags tags
+                              :url url)))
           ;; Mark as needing enrichment
           (setf (todo-enriching-p todo) t)
-          (push todo todos)
-          (save-todos todos)
+          (save-todo todo)
           (native-host-log "Created TODO: ~A (pending enrichment)" title)
           ;; Spawn background enrichment process
           (let ((exe-path (get-cloodoo-executable)))

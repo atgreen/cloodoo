@@ -43,19 +43,26 @@
                                  tags-raw
                                  (coerce tags-raw 'list)))))
          (due-date (gethash "due_date" data)))
-    (when title
-      (let ((todo (make-todo title
-                             :description description
-                             :priority (when priority
-                                         (intern (string-upcase priority) :keyword))
-                             :tags tags
-                             :due-date (when due-date
-                                         (lt:parse-rfc3339-timestring due-date))))
-            (todos (load-todos)))
-        (push todo todos)
-        (save-todos todos)
-        (setf (hunchentoot:return-code*) 201)
-        (jzon:stringify (todo-to-hash-table todo))))))
+    (unless title
+      (setf (hunchentoot:return-code*) 400)
+      (return-from api-create-todo
+        (jzon:stringify (alexandria:plist-hash-table
+                         '("error" "title is required") :test #'equal))))
+    (handler-case
+        (let ((todo (make-todo title
+                               :description description
+                               :priority (when priority
+                                           (intern (string-upcase priority) :keyword))
+                               :tags tags
+                               :due-date (when due-date
+                                           (lt:parse-rfc3339-timestring due-date)))))
+          (save-todo todo)
+          (setf (hunchentoot:return-code*) 201)
+          (jzon:stringify (todo-to-hash-table todo)))
+      (error (e)
+        (setf (hunchentoot:return-code*) 500)
+        (jzon:stringify (alexandria:plist-hash-table
+                         (list "error" (format nil "~A" e)) :test #'equal))))))
 
 ;;── Sync API Routes ──────────────────────────────────────────────────────────────
 
@@ -123,35 +130,51 @@
           (setf (gethash "error" response) "Invalid or expired pairing token")
           (jzon:stringify response)))))
 
-(easy-routes:defroute api-pair-download ("/pair/:token" :method :post) ()
-  "Download the .p12 certificate bundle for a pairing token.
+(easy-routes:defroute api-pair-download-pem ("/pair/:token/pem" :method :post) ()
+  "Download the certificate and key as PEM text for a pairing token.
+   Requires passphrase in request body: {passphrase: string}.
    This consumes the token (single-use).
-   Returns the .p12 file as application/x-pkcs12."
-  (let ((request (consume-pairing-request token)))
+   Returns JSON: {cert: PEM, key: PEM, device_name: string}."
+  (setf (hunchentoot:content-type*) "application/json")
+  (let ((request (get-pairing-request token)))
     (if request
-        (let ((p12-path (pairing-request-p12-path request)))
-          (if (probe-file p12-path)
+        (let* ((body (hunchentoot:raw-post-data :force-text t))
+               (data (when (plusp (length body)) (jzon:parse body)))
+               (provided-passphrase (when data (gethash "passphrase" data)))
+               (expected-passphrase (pairing-request-passphrase request)))
+          (if (and provided-passphrase
+                   (string= provided-passphrase expected-passphrase))
+              ;; Passphrase matches - consume token and serve certs
               (progn
-                (setf (hunchentoot:content-type*) "application/x-pkcs12")
-                (setf (hunchentoot:header-out "Content-Disposition")
-                      (format nil "attachment; filename=\"~A.p12\""
-                              (pairing-request-device-name request)))
-                ;; Read and return the file contents
-                (with-open-file (stream p12-path
-                                        :direction :input
-                                        :element-type '(unsigned-byte 8))
-                  (let ((data (make-array (file-length stream)
-                                          :element-type '(unsigned-byte 8))))
-                    (read-sequence data stream)
-                    data)))
+                (consume-pairing-request token)
+                (let ((device-name (pairing-request-device-name request))
+                      (response (make-hash-table :test #'equal)))
+                  (let ((cert-path (client-cert-file device-name))
+                        (key-path (client-key-file device-name))
+                        (ca-path (ca-cert-file)))
+                    (if (and (probe-file cert-path) (probe-file key-path))
+                        (progn
+                          (setf (gethash "cert" response)
+                                (uiop:read-file-string cert-path))
+                          (setf (gethash "key" response)
+                                (uiop:read-file-string key-path))
+                          (when (probe-file ca-path)
+                            (setf (gethash "ca_cert" response)
+                                  (uiop:read-file-string ca-path)))
+                          (setf (gethash "device_name" response) device-name)
+                          (jzon:stringify response))
+                        (progn
+                          (setf (hunchentoot:return-code*) 500)
+                          (jzon:stringify (alexandria:plist-hash-table
+                                           '("error" "Certificate files not found")
+                                           :test #'equal)))))))
+              ;; Wrong or missing passphrase
               (progn
-                (setf (hunchentoot:content-type*) "application/json")
-                (setf (hunchentoot:return-code*) 500)
+                (setf (hunchentoot:return-code*) 403)
                 (jzon:stringify (alexandria:plist-hash-table
-                                 '("error" "Certificate file not found")
+                                 '("error" "Invalid passphrase")
                                  :test #'equal)))))
         (progn
-          (setf (hunchentoot:content-type*) "application/json")
           (setf (hunchentoot:return-code*) 404)
           (jzon:stringify (alexandria:plist-hash-table
                            '("error" "Invalid or expired pairing token")
@@ -167,19 +190,6 @@
     (setf (gethash "local_ips" response) (coerce (detect-local-ips) 'vector))
     (jzon:stringify response)))
 
-(easy-routes:defroute api-pair-debug ("/api/pair/debug" :method :get) ()
-  "Debug: list all pending pairing tokens."
-  (setf (hunchentoot:content-type*) "application/json")
-  (let ((tokens nil))
-    (bt:with-lock-held (*pairing-lock*)
-      (maphash (lambda (token request)
-                 (push (list :token token
-                             :device (pairing-request-device-name request)
-                             :expires-in (- (pairing-request-expires-at request)
-                                           (get-universal-time)))
-                       tokens))
-               *pending-pairings*))
-    (jzon:stringify (or tokens #()))))
 
 ;;── Server Control ─────────────────────────────────────────────────────────────
 

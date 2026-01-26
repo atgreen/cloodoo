@@ -1798,8 +1798,8 @@
            (dolist (todo all-todos)
              (when (member (todo-id todo) ids-to-delete :test #'string=)
                (setf (todo-status todo) :deleted)
-               (setf (todo-completed-at todo) now)))
-           (save-todos (model-todos model))
+               (setf (todo-completed-at todo) now)
+               (save-todo todo)))
            ;; Invalidate cache so deleted items disappear
            (invalidate-visible-todos-cache model)
            (setf (model-cursor model)
@@ -1825,8 +1825,8 @@
          (dolist (todo (model-todos model))
            (when (eq (todo-status todo) +status-completed+)
              (setf (todo-status todo) :deleted)
-             (setf (todo-completed-at todo) now))))
-       (save-todos (model-todos model))
+             (setf (todo-completed-at todo) now)
+             (save-todo todo))))
        ;; Invalidate cache so deleted items disappear
        (invalidate-visible-todos-cache model)
        (setf (model-cursor model)
@@ -1850,13 +1850,12 @@
       ;; Confirm delete with y
       ((and (characterp key) (char-equal key #\y))
        (when tag
-         ;; Remove tag from all todos
+         ;; Remove tag from affected todos and save each
          (dolist (todo (model-todos model))
-           (when (todo-tags todo)
+           (when (member tag (todo-tags todo) :test #'string=)
              (setf (todo-tags todo)
-                   (remove tag (todo-tags todo) :test #'string=))))
-         ;; Save changes
-         (save-todos (model-todos model))
+                   (remove tag (todo-tags todo) :test #'string=))
+             (save-todo todo)))
          ;; Remove from selected-tags filter if present
          (remhash tag (model-selected-tags model))
          ;; Invalidate caches
@@ -2441,10 +2440,9 @@
             (setf (todo-due-date new-todo) (getf data :due-date)))
           (when (getf data :location-info)
             (setf (todo-location-info new-todo) (getf data :location-info)))
-          ;; Add to model
-          (push new-todo (model-todos model))))
-      ;; Save all todos
-      (save-todos (model-todos model))
+          ;; Add to model and save
+          (push new-todo (model-todos model))
+          (save-todo new-todo)))
       ;; Invalidate cache so new todos appear
       (invalidate-visible-todos-cache model)
       ;; Refresh tags cache after import

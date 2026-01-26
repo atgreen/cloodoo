@@ -43,10 +43,6 @@
   "Path to a client's certificate."
   (merge-pathnames (format nil "clients/~A.crt" name) (certs-directory)))
 
-(defun client-p12-file (name)
-  "Path to a client's PKCS#12 bundle."
-  (merge-pathnames (format nil "clients/~A.p12" name) (certs-directory)))
-
 (defun clients-directory ()
   "Path to the clients subdirectory."
   (merge-pathnames "clients/" (certs-directory)))
@@ -77,24 +73,6 @@
                                   *passphrase-words*))))
     (format nil "~{~A~^-~}" words)))
 
-;;── OpenSSL Command Helpers ───────────────────────────────────────────────────
-
-(defun run-openssl (&rest args)
-  "Run openssl with the given arguments. Returns (values output error-output exit-code)."
-  (multiple-value-bind (output error-output exit-code)
-      (uiop:run-program (cons "openssl" args)
-                        :output :string
-                        :error-output :string
-                        :ignore-error-status t)
-    (values output error-output exit-code)))
-
-(defun openssl-available-p ()
-  "Check if openssl command is available."
-  (multiple-value-bind (out err code)
-      (run-openssl "version")
-    (declare (ignore out err))
-    (zerop code)))
-
 ;;── CA Initialization ─────────────────────────────────────────────────────────
 
 (defun ca-initialized-p ()
@@ -109,40 +87,30 @@
   (when (and (ca-initialized-p) (not force))
     (error "CA already initialized. Use :force t to regenerate (invalidates all existing certificates)."))
 
-  (unless (openssl-available-p)
-    (error "OpenSSL not found. Please install OpenSSL."))
-
   (ensure-certs-directory)
   (ensure-directories-exist (clients-directory))
 
-  (let ((ca-key (namestring (ca-key-file)))
-        (ca-cert (namestring (ca-cert-file))))
+  (let ((ca-key-path (namestring (ca-key-file)))
+        (ca-cert-path (namestring (ca-cert-file))))
 
-    ;; Generate CA private key
-    (multiple-value-bind (out err code)
-        (run-openssl "genrsa" "-out" ca-key "4096")
-      (declare (ignore out))
-      (unless (zerop code)
-        (error "Failed to generate CA key: ~A" err)))
+    ;; Generate 4096-bit RSA key pair
+    (multiple-value-bind (n e d p q)
+        (cl-x509:generate-rsa-key-pair :bits 4096)
 
-    ;; Set restrictive permissions on private key
-    (uiop:run-program (list "chmod" "600" ca-key) :ignore-error-status t)
+      ;; Save private key
+      (cl-x509:save-private-key-pem ca-key-path n e d p q)
 
-    ;; Generate self-signed CA certificate
-    (multiple-value-bind (out err code)
-        (run-openssl "req" "-x509" "-new" "-nodes"
-                     "-key" ca-key
-                     "-sha256"
-                     "-days" (format nil "~D" days)
-                     "-out" ca-cert
-                     "-subj" (format nil "/CN=Cloodoo CA/O=Cloodoo/OU=~A"
-                                     (get-device-id)))
-      (declare (ignore out))
-      (unless (zerop code)
-        (error "Failed to generate CA certificate: ~A" err)))
+      ;; Generate self-signed CA certificate
+      (let ((cert-der (cl-x509:generate-self-signed-certificate
+                       :n n :e e :d d
+                       :cn "Cloodoo CA"
+                       :o "Cloodoo"
+                       :ou (get-device-id)
+                       :days days)))
+        (cl-x509:save-certificate-pem cert-der ca-cert-path)))
 
     (format t "CA initialized successfully.~%")
-    (format t "CA certificate: ~A~%" ca-cert)
+    (format t "CA certificate: ~A~%" ca-cert-path)
     t))
 
 ;;── Server Certificate ────────────────────────────────────────────────────────
@@ -159,79 +127,50 @@
   (unless (ca-initialized-p)
     (error "CA not initialized. Run 'cloodoo cert init' first."))
 
-  (let* ((server-key (namestring (server-key-file)))
-         (server-cert (namestring (server-cert-file)))
-         (server-csr (namestring (merge-pathnames "server.csr" (certs-directory))))
-         (san-file (namestring (merge-pathnames "server-san.cnf" (certs-directory))))
-         ;; Build list of SANs
+  (let* ((server-key-path (namestring (server-key-file)))
+         (server-cert-path (namestring (server-cert-file)))
          (all-hosts (or hosts
                         (append '("localhost" "127.0.0.1")
-                                (detect-local-ips))))
-         ;; Build SAN extension
-         (san-entries (loop for host in all-hosts
-                            for i from 1
-                            collect (if (ip-address-p host)
-                                        (format nil "IP.~D = ~A" i host)
-                                        (format nil "DNS.~D = ~A" i host)))))
+                                (detect-local-ips)))))
 
-    ;; Generate server private key
-    (multiple-value-bind (out err code)
-        (run-openssl "genrsa" "-out" server-key "2048")
-      (declare (ignore out))
-      (unless (zerop code)
-        (error "Failed to generate server key: ~A" err)))
+    ;; Load CA key for signing
+    (multiple-value-bind (ca-n ca-e ca-d)
+        (cl-x509:load-rsa-key-pair (namestring (ca-key-file)))
+      (declare (ignore ca-e))
 
-    (uiop:run-program (list "chmod" "600" server-key) :ignore-error-status t)
+      ;; Generate server key pair
+      (multiple-value-bind (srv-n srv-e srv-d srv-p srv-q)
+          (cl-x509:generate-rsa-key-pair :bits 2048)
 
-    ;; Create SAN config file
-    (with-open-file (stream san-file :direction :output
-                                     :if-exists :supersede
-                                     :if-does-not-exist :create)
-      (format stream "[req]~%")
-      (format stream "distinguished_name = req_distinguished_name~%")
-      (format stream "req_extensions = v3_req~%")
-      (format stream "prompt = no~%")
-      (format stream "[req_distinguished_name]~%")
-      (format stream "CN = cloodoo-server~%")
-      (format stream "O = Cloodoo~%")
-      (format stream "[v3_req]~%")
-      (format stream "basicConstraints = CA:FALSE~%")
-      (format stream "keyUsage = digitalSignature, keyEncipherment~%")
-      (format stream "extendedKeyUsage = serverAuth~%")
-      (format stream "subjectAltName = @alt_names~%")
-      (format stream "[alt_names]~%")
-      (dolist (entry san-entries)
-        (format stream "~A~%" entry)))
+        (cl-x509:save-private-key-pem server-key-path srv-n srv-e srv-d srv-p srv-q)
 
-    ;; Generate CSR
-    (multiple-value-bind (out err code)
-        (run-openssl "req" "-new"
-                     "-key" server-key
-                     "-out" server-csr
-                     "-config" san-file)
-      (declare (ignore out))
-      (unless (zerop code)
-        (error "Failed to generate server CSR: ~A" err)))
+        ;; Build SAN entries
+        (let ((san-names (mapcar (lambda (host)
+                                   (if (ip-address-p host)
+                                       (list :ip host)
+                                       (list :dns host)))
+                                 all-hosts)))
 
-    ;; Sign with CA
-    (multiple-value-bind (out err code)
-        (run-openssl "x509" "-req"
-                     "-in" server-csr
-                     "-CA" (namestring (ca-cert-file))
-                     "-CAkey" (namestring (ca-key-file))
-                     "-CAcreateserial"
-                     "-out" server-cert
-                     "-days" (format nil "~D" days)
-                     "-sha256"
-                     "-extensions" "v3_req"
-                     "-extfile" san-file)
-      (declare (ignore out))
-      (unless (zerop code)
-        (error "Failed to sign server certificate: ~A" err)))
-
-    ;; Cleanup temp files
-    (when (probe-file server-csr) (delete-file server-csr))
-    (when (probe-file san-file) (delete-file san-file))
+          ;; Generate server certificate signed by CA
+          (let ((cert-der (cl-x509:generate-signed-certificate
+                           :signer-n ca-n
+                           :signer-d ca-d
+                           :issuer-cn "Cloodoo CA"
+                           :issuer-o "Cloodoo"
+                           :issuer-ou (get-device-id)
+                           :subject-n srv-n
+                           :subject-e srv-e
+                           :cn "cloodoo-server"
+                           :o "Cloodoo"
+                           :days days
+                           :extensions (list
+                                        (cl-x509:encode-basic-constraints :ca nil)
+                                        (cl-x509:encode-key-usage
+                                         :digital-signature :key-encipherment)
+                                        (cl-x509:encode-extended-key-usage
+                                         cl-x509:*oid-server-auth*)
+                                        (cl-x509:encode-san-extension san-names)))))
+            (cl-x509:save-certificate-pem cert-der server-cert-path)))))
 
     (format t "Server certificate created.~%")
     (format t "Valid hosts: ~{~A~^, ~}~%" all-hosts)
@@ -241,7 +180,7 @@
 
 (defun issue-client-cert (name &key (days 365))
   "Issue a client certificate for NAME.
-   Returns the passphrase for the .p12 bundle."
+   Returns the passphrase for pairing verification."
   (unless (ca-initialized-p)
     (error "CA not initialized. Run 'cloodoo cert init' first."))
 
@@ -250,61 +189,40 @@
 
   (ensure-directories-exist (clients-directory))
 
-  (let* ((client-key (namestring (client-key-file name)))
-         (client-cert (namestring (client-cert-file name)))
-         (client-csr (namestring (merge-pathnames (format nil "clients/~A.csr" name)
-                                                   (certs-directory))))
-         (client-p12 (namestring (client-p12-file name)))
-         (passphrase (generate-passphrase 3)))
+  (let ((client-key-path (namestring (client-key-file name)))
+        (client-cert-path (namestring (client-cert-file name)))
+        (passphrase (generate-passphrase 3)))
 
-    ;; Generate client private key
-    (multiple-value-bind (out err code)
-        (run-openssl "genrsa" "-out" client-key "2048")
-      (declare (ignore out))
-      (unless (zerop code)
-        (error "Failed to generate client key: ~A" err)))
+    ;; Load CA key for signing
+    (multiple-value-bind (ca-n ca-e ca-d)
+        (cl-x509:load-rsa-key-pair (namestring (ca-key-file)))
+      (declare (ignore ca-e))
 
-    (uiop:run-program (list "chmod" "600" client-key) :ignore-error-status t)
+      ;; Generate client key pair
+      (multiple-value-bind (cli-n cli-e cli-d cli-p cli-q)
+          (cl-x509:generate-rsa-key-pair :bits 2048)
 
-    ;; Generate CSR
-    (multiple-value-bind (out err code)
-        (run-openssl "req" "-new"
-                     "-key" client-key
-                     "-out" client-csr
-                     "-subj" (format nil "/CN=~A/O=Cloodoo Client" name))
-      (declare (ignore out))
-      (unless (zerop code)
-        (error "Failed to generate client CSR: ~A" err)))
+        (cl-x509:save-private-key-pem client-key-path cli-n cli-e cli-d cli-p cli-q)
 
-    ;; Sign with CA
-    (multiple-value-bind (out err code)
-        (run-openssl "x509" "-req"
-                     "-in" client-csr
-                     "-CA" (namestring (ca-cert-file))
-                     "-CAkey" (namestring (ca-key-file))
-                     "-CAcreateserial"
-                     "-out" client-cert
-                     "-days" (format nil "~D" days)
-                     "-sha256")
-      (declare (ignore out))
-      (unless (zerop code)
-        (error "Failed to sign client certificate: ~A" err)))
-
-    ;; Create PKCS#12 bundle with CA cert included
-    (multiple-value-bind (out err code)
-        (run-openssl "pkcs12" "-export"
-                     "-out" client-p12
-                     "-inkey" client-key
-                     "-in" client-cert
-                     "-certfile" (namestring (ca-cert-file))
-                     "-name" name
-                     "-passout" (format nil "pass:~A" passphrase))
-      (declare (ignore out))
-      (unless (zerop code)
-        (error "Failed to create PKCS#12 bundle: ~A" err)))
-
-    ;; Cleanup CSR
-    (when (probe-file client-csr) (delete-file client-csr))
+        ;; Generate client certificate signed by CA
+        (let ((cert-der (cl-x509:generate-signed-certificate
+                         :signer-n ca-n
+                         :signer-d ca-d
+                         :issuer-cn "Cloodoo CA"
+                         :issuer-o "Cloodoo"
+                         :issuer-ou (get-device-id)
+                         :subject-n cli-n
+                         :subject-e cli-e
+                         :cn name
+                         :o "Cloodoo Client"
+                         :days days
+                         :extensions (list
+                                      (cl-x509:encode-basic-constraints :ca nil)
+                                      (cl-x509:encode-key-usage
+                                       :digital-signature :key-encipherment)
+                                      (cl-x509:encode-extended-key-usage
+                                       cl-x509:*oid-client-auth*)))))
+          (cl-x509:save-certificate-pem cert-der client-cert-path))))
 
     ;; Record issuance
     (record-cert-issued name)
@@ -374,11 +292,6 @@
     (push name revoked)
     (save-revoked-list revoked))
 
-  ;; Delete the .p12 file so it can't be used
-  (let ((p12 (client-p12-file name)))
-    (when (probe-file p12)
-      (delete-file p12)))
-
   (format t "Certificate for '~A' has been revoked.~%" name)
   t)
 
@@ -429,7 +342,6 @@
   token
   device-name
   passphrase
-  p12-path
   created-at
   expires-at)
 
@@ -450,7 +362,6 @@
                    :token token
                    :device-name device-name
                    :passphrase passphrase
-                   :p12-path (namestring (client-p12-file device-name))
                    :created-at now
                    :expires-at (+ now (* expiry-minutes 60)))))
     (bt:with-lock-held (*pairing-lock*)
@@ -487,6 +398,25 @@
                  (when (> now (pairing-request-expires-at request))
                    (remhash token *pending-pairings*)))
                *pending-pairings*))))
+
+;;── Paired Certificate Storage (certs received from remote servers) ───────────
+
+(defun paired-directory ()
+  "Directory for storing certificates received from remote servers during pairing."
+  (merge-pathnames "paired/" (certs-directory)))
+
+(defun paired-server-directory (server-id)
+  "Directory for a specific remote server's client cert."
+  (merge-pathnames (format nil "~A/" server-id) (paired-directory)))
+
+(defun paired-client-cert-file (server-id)
+  "Path to the client certificate received from a remote server."
+  (merge-pathnames "client.crt" (paired-server-directory server-id)))
+
+(defun paired-client-key-file (server-id)
+  "Path to the client key received from a remote server."
+  (merge-pathnames "client.key" (paired-server-directory server-id)))
+
 
 ;;── QR Code Generation (ASCII) ────────────────────────────────────────────────
 
