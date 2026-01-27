@@ -1284,37 +1284,56 @@ URL format: http://HOST:PORT/pair/TOKEN"
               (vector "chrome-extension://*/")))
     manifest))
 
-(defun get-native-host-dir ()
-  "Get the native messaging hosts directory for the current platform."
-  (let ((os (uiop:operating-system)))
+(defun get-native-host-dirs ()
+  "Get native messaging host directories for all supported browsers.
+   Returns a list of (browser-name directory-path manifest-type) triples.
+   manifest-type is :chrome or :firefox (they use different JSON keys)."
+  (let ((os (uiop:operating-system))
+        (home (user-homedir-pathname))
+        (dirs nil))
     (cond
       ;; Linux
       ((or (search "linux" (string-downcase os))
            (eq os :linux))
-       (let ((chrome-dir (merge-pathnames ".config/google-chrome/NativeMessagingHosts/"
-                                          (user-homedir-pathname)))
-             (chromium-dir (merge-pathnames ".config/chromium/NativeMessagingHosts/"
-                                            (user-homedir-pathname))))
-         ;; Return chromium dir if chrome doesn't exist
-         (if (probe-file (merge-pathnames ".config/google-chrome/" (user-homedir-pathname)))
-             chrome-dir
-             chromium-dir)))
+       (let ((chrome-dir (merge-pathnames ".config/google-chrome/NativeMessagingHosts/" home))
+             (chromium-dir (merge-pathnames ".config/chromium/NativeMessagingHosts/" home))
+             (firefox-dir (merge-pathnames ".mozilla/native-messaging-hosts/" home)))
+         (when (probe-file (merge-pathnames ".config/google-chrome/" home))
+           (push (list "Google Chrome" chrome-dir :chrome) dirs))
+         (when (probe-file (merge-pathnames ".config/chromium/" home))
+           (push (list "Chromium" chromium-dir :chrome) dirs))
+         (when (probe-file (merge-pathnames ".mozilla/" home))
+           (push (list "Firefox" firefox-dir :firefox) dirs))
+         ;; If no browsers detected, default to Chromium
+         (unless dirs
+           (push (list "Chromium" chromium-dir :chrome) dirs))))
       ;; macOS
       ((or (search "darwin" (string-downcase os))
            (eq os :darwin)
            (search "macos" (string-downcase os)))
-       (merge-pathnames "Library/Application Support/Google/Chrome/NativeMessagingHosts/"
-                        (user-homedir-pathname)))
-      ;; Windows - return a path, but registry setup needed separately
+       (push (list "Google Chrome"
+                   (merge-pathnames "Library/Application Support/Google/Chrome/NativeMessagingHosts/" home)
+                   :chrome)
+             dirs)
+       (push (list "Firefox"
+                   (merge-pathnames "Library/Application Support/Mozilla/NativeMessagingHosts/" home)
+                   :firefox)
+             dirs))
+      ;; Windows
       ((or (search "windows" (string-downcase os))
            (search "win" (string-downcase os))
            (eq os :windows))
-       (merge-pathnames "AppData/Local/Cloodoo/"
-                        (user-homedir-pathname)))
-      ;; Default to Linux-style
+       (push (list "Chrome/Chromium"
+                   (merge-pathnames "AppData/Local/Cloodoo/" home)
+                   :chrome)
+             dirs))
+      ;; Default
       (t
-       (merge-pathnames ".config/chromium/NativeMessagingHosts/"
-                        (user-homedir-pathname))))))
+       (push (list "Chromium"
+                   (merge-pathnames ".config/chromium/NativeMessagingHosts/" home)
+                   :chrome)
+             dirs)))
+    (nreverse dirs)))
 
 (defun create-native-host-wrapper (wrapper-path cloodoo-path)
   "Create a wrapper script that invokes 'cloodoo native-host'."
@@ -1342,7 +1361,7 @@ URL format: http://HOST:PORT/pair/TOKEN"
                         :ignore-error-status t)))))
 
 (defun make-install-native-host-command ()
-  "Create the 'install-native-host' subcommand."
+  "Create the 'setup-extension' subcommand."
   (let ((extension-id-opt (clingon:make-option
                            :string
                            :short-name #\e
@@ -1350,54 +1369,68 @@ URL format: http://HOST:PORT/pair/TOKEN"
                            :key :extension-id
                            :description "Chrome extension ID (optional, allows any extension if not specified)")))
     (clingon:make-command
-     :name "install-native-host"
-     :description "Install native messaging host for browser extension"
+     :name "setup-extension"
+     :aliases '("install-native-host")
+     :description "Set up the browser extension for Chrome, Chromium, and Firefox"
      :options (list extension-id-opt)
      :handler (lambda (cmd)
                 (let* ((extension-id (clingon:getopt cmd :extension-id))
-                       (host-dir (get-native-host-dir))
+                       (browser-dirs (get-native-host-dirs))
                        (cloodoo-exe (get-cloodoo-executable))
-                       (wrapper-name (if (search "win" (string-downcase (uiop:operating-system)))
+                       (is-windows (search "win" (string-downcase (uiop:operating-system))))
+                       (wrapper-name (if is-windows
                                          "cloodoo-native-host.bat"
                                          "cloodoo-native-host"))
-                       (wrapper-path (merge-pathnames wrapper-name host-dir))
-                       (manifest-file (merge-pathnames "com.cloodoo.native.json" host-dir)))
-                  ;; Ensure directory exists
-                  (ensure-directories-exist host-dir)
-                  ;; Create wrapper script
-                  (create-native-host-wrapper wrapper-path cloodoo-exe)
-                  ;; Create manifest pointing to wrapper
-                  (let ((manifest (make-hash-table :test #'equal)))
-                    (setf (gethash "name" manifest) "com.cloodoo.native")
-                    (setf (gethash "description" manifest) "Cloodoo TODO manager native messaging host")
-                    (setf (gethash "path" manifest) (namestring wrapper-path))
-                    (setf (gethash "type" manifest) "stdio")
-                    (setf (gethash "allowed_origins" manifest)
-                          (if extension-id
-                              (vector (format nil "chrome-extension://~A/" extension-id))
-                              (vector "chrome-extension://*/")))
-                    ;; Write manifest file
-                    (with-open-file (stream manifest-file
-                                            :direction :output
-                                            :if-exists :supersede
-                                            :if-does-not-exist :create)
-                      (jzon:stringify manifest :stream stream :pretty t))
-                    (format t "~A Native messaging host installed!~%~%" (tui:colored "✓" :fg tui:*fg-green*))
-                    (format t "Wrapper script: ~A~%" wrapper-path)
-                    (format t "Manifest file:  ~A~%" manifest-file)
-                    (format t "Cloodoo path:   ~A~%~%" cloodoo-exe)
-                    ;; Windows-specific instructions
-                    (when (search "win" (string-downcase (uiop:operating-system)))
-                      (format t "~%~A Windows Registry Setup Required:~%"
-                             (tui:colored "!" :fg tui:*fg-yellow*))
-                      (format t "Run this in an elevated Command Prompt:~%~%")
-                      (format t "  REG ADD \"HKCU\\Software\\Google\\Chrome\\NativeMessagingHosts\\com.cloodoo.native\" /ve /t REG_SZ /d \"~A\" /f~%~%"
-                             (namestring manifest-file)))
-                    ;; Remind about extension ID
-                    (unless extension-id
-                      (format t "~%~A Note: Manifest allows any extension origin.~%"
-                             (tui:colored "!" :fg tui:*fg-yellow*))
-                      (format t "For production, re-run with --extension-id YOUR_EXTENSION_ID~%"))))))))
+                       (installed-count 0))
+                  (dolist (entry browser-dirs)
+                    (destructuring-bind (browser-name host-dir manifest-type) entry
+                      (let ((wrapper-path (merge-pathnames wrapper-name host-dir))
+                            (manifest-file (merge-pathnames "com.cloodoo.native.json" host-dir)))
+                        ;; Ensure directory exists
+                        (ensure-directories-exist host-dir)
+                        ;; Create wrapper script
+                        (create-native-host-wrapper wrapper-path cloodoo-exe)
+                        ;; Create manifest with correct format for this browser
+                        (let ((manifest (make-hash-table :test #'equal)))
+                          (setf (gethash "name" manifest) "com.cloodoo.native")
+                          (setf (gethash "description" manifest) "Cloodoo TODO manager native messaging host")
+                          (setf (gethash "path" manifest) (namestring wrapper-path))
+                          (setf (gethash "type" manifest) "stdio")
+                          (case manifest-type
+                            (:chrome
+                             (setf (gethash "allowed_origins" manifest)
+                                   (if extension-id
+                                       (vector (format nil "chrome-extension://~A/" extension-id))
+                                       (vector "chrome-extension://*/"))))
+                            (:firefox
+                             (setf (gethash "allowed_extensions" manifest)
+                                   (vector "cloodoo@moxielogic.com"))))
+                          ;; Write manifest
+                          (with-open-file (stream manifest-file
+                                                  :direction :output
+                                                  :if-exists :supersede
+                                                  :if-does-not-exist :create)
+                            (jzon:stringify manifest :stream stream :pretty t)))
+                        (format t "~A ~A~%" (tui:colored "✓" :fg tui:*fg-green*) browser-name)
+                        (format t "  Manifest: ~A~%" manifest-file)
+                        (incf installed-count))))
+                  (format t "~%Wrapper script: ~A~%" (merge-pathnames wrapper-name
+                                                        (second (first browser-dirs))))
+                  (format t "Cloodoo path:   ~A~%" cloodoo-exe)
+                  (format t "~%Installed for ~D browser~:P.~%" installed-count)
+                  ;; Windows-specific instructions
+                  (when is-windows
+                    (format t "~%~A Windows Registry Setup Required:~%"
+                           (tui:colored "!" :fg tui:*fg-yellow*))
+                    (format t "Run this in an elevated Command Prompt:~%~%")
+                    (format t "  REG ADD \"HKCU\\Software\\Google\\Chrome\\NativeMessagingHosts\\com.cloodoo.native\" /ve /t REG_SZ /d \"~A\" /f~%~%"
+                           (namestring (merge-pathnames "com.cloodoo.native.json"
+                                                        (second (first browser-dirs))))))
+                  ;; Remind about extension ID
+                  (unless extension-id
+                    (format t "~%~A Chrome/Chromium manifest allows any extension origin.~%"
+                           (tui:colored "!" :fg tui:*fg-yellow*))
+                    (format t "For production, re-run with --extension-id YOUR_EXTENSION_ID~%")))))))
 
 (defun make-app ()
   "Create and return the command-line application."

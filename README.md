@@ -171,7 +171,7 @@ cloodoo dump                Export database as SQL
 cloodoo compact             Remove old row versions
 
 cloodoo native-host         Handle browser native messaging
-cloodoo install-native-host Install native messaging host config
+cloodoo setup-extension     Set up browser extension (Chrome, Chromium, Firefox)
 ```
 
 ## Multi-device sync
@@ -240,7 +240,7 @@ The extension lives in `extension/`. Supports Chrome and Firefox
 1. Load as an unpacked extension from the `extension/` directory
 2. Install the native messaging host:
    ```sh
-   ./cloodoo install-native-host
+   ./cloodoo setup-extension
    ```
 
 ### Supported email services
