@@ -8,11 +8,9 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Done
 import androidx.compose.material.icons.automirrored.filled.Undo
-import androidx.compose.material.icons.outlined.Circle
 import androidx.compose.material.icons.outlined.Place
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -46,7 +44,6 @@ private fun getPriorityColor(priority: String, colors: PriorityColorScheme): Col
 @Composable
 fun TodoItem(
     todo: TodoEntity,
-    onToggleComplete: (String) -> Unit,
     onClick: (String) -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -71,6 +68,7 @@ fun TodoItem(
         )
     ) {
         Row(modifier = Modifier.fillMaxWidth()) {
+            // Priority accent strip
             Box(
                 modifier = Modifier
                     .width(4.dp)
@@ -81,81 +79,53 @@ fun TodoItem(
                     )
             )
 
-            Row(
+            Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(start = 8.dp, end = 12.dp, top = 10.dp, bottom = 10.dp),
-                verticalAlignment = Alignment.Top
+                    .padding(horizontal = 10.dp, vertical = 8.dp)
             ) {
-                IconButton(
-                    onClick = { onToggleComplete(todo.id) },
-                    modifier = Modifier.size(32.dp)
-                ) {
-                    Icon(
-                        imageVector = if (isCompleted) Icons.Filled.CheckCircle else Icons.Outlined.Circle,
-                        contentDescription = if (isCompleted) "Mark incomplete" else "Mark complete",
-                        tint = if (isCompleted) {
-                            MaterialTheme.colorScheme.secondary
-                        } else {
-                            priorityColor.copy(alpha = 0.7f)
-                        },
-                        modifier = Modifier.size(24.dp)
-                    )
-                }
+                Text(
+                    text = todo.title,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = if (isCompleted) {
+                        MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                    } else {
+                        MaterialTheme.colorScheme.onSurface
+                    },
+                    textDecoration = if (isCompleted) TextDecoration.LineThrough else null,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
 
-                Spacer(modifier = Modifier.width(4.dp))
-
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        text = todo.title,
-                        style = MaterialTheme.typography.bodyLarge,
-                        color = if (isCompleted) {
-                            MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
-                        } else {
-                            MaterialTheme.colorScheme.onSurface
-                        },
-                        textDecoration = if (isCompleted) TextDecoration.LineThrough else null,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis
-                    )
-
-                    val hasMetadata = todo.dueDate != null || todo.locationInfo != null
-                    if (hasMetadata && !isCompleted) {
-                        Spacer(modifier = Modifier.height(4.dp))
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            todo.dueDate?.let { dateStr ->
-                                DueDateChip(dateStr = dateStr)
-                            }
-                            todo.locationInfo?.let { locationJson ->
-                                if (locationJson.isNotBlank() && locationJson != "null") {
-                                    val locationName = parseLocationName(locationJson)
-                                    if (locationName != null) {
-                                        MetadataChip(
-                                            icon = Icons.Outlined.Place,
-                                            text = locationName,
-                                            maxWidth = 100.dp
-                                        )
-                                    }
+                // Dates, location, and tags on one line
+                val tags = parseTags(todo.tags)
+                val hasMetadata = todo.dueDate != null || todo.locationInfo != null || tags.isNotEmpty()
+                if (hasMetadata && !isCompleted) {
+                    Spacer(modifier = Modifier.height(3.dp))
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        todo.dueDate?.let { dateStr ->
+                            DueDateChip(dateStr = dateStr)
+                        }
+                        todo.locationInfo?.let { locationJson ->
+                            if (locationJson.isNotBlank() && locationJson != "null") {
+                                val locationName = parseLocationName(locationJson)
+                                if (locationName != null) {
+                                    MetadataChip(
+                                        icon = Icons.Outlined.Place,
+                                        text = locationName,
+                                        maxWidth = 100.dp
+                                    )
                                 }
                             }
                         }
-                    }
-
-                    val tags = parseTags(todo.tags)
-                    if (tags.isNotEmpty() && !isCompleted) {
-                        Spacer(modifier = Modifier.height(6.dp))
-                        Row(
-                            horizontalArrangement = Arrangement.spacedBy(4.dp)
-                        ) {
-                            tags.take(3).forEach { tag ->
-                                TagChip(tag = tag)
-                            }
-                            if (tags.size > 3) {
-                                TagChip(tag = "+${tags.size - 3}")
-                            }
+                        tags.take(3).forEach { tag ->
+                            TagChip(tag = tag)
+                        }
+                        if (tags.size > 3) {
+                            TagChip(tag = "+${tags.size - 3}")
                         }
                     }
                 }
@@ -240,7 +210,6 @@ fun SwipeableTodoItem(
     ) {
         TodoItem(
             todo = todo,
-            onToggleComplete = onToggleComplete,
             onClick = onClick
         )
     }
