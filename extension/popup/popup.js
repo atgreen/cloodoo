@@ -227,9 +227,35 @@ document.addEventListener('DOMContentLoaded', async () => {
     return EMAIL_SITES.some(site => url.includes(site));
   }
 
-  // Capture current page URL and optionally extract email data from email sites
+  // Pre-fill the form from email data (used by both pending stash and content-script paths)
+  function prefillFromEmailData(data) {
+    if (data.subject) {
+      titleInput.value = data.subject;
+    }
+    if (data.snippet) {
+      descriptionInput.value = `Email from: ${data.sender || 'Unknown'}\n\n${data.snippet}`;
+    }
+    if (data.sender) {
+      tagsInput.value = 'email';
+    }
+    if (data.url) {
+      pageUrl = data.url;
+    }
+  }
+
+  // Capture current page URL and optionally extract email data from email sites.
+  // If pendingEmailData was stashed by the quick-add button, use that instead.
   async function capturePageData() {
     try {
+      // Check for data stashed by the Gmail quick-add button (via background.js openPopupWithData)
+      const { pendingEmailData } = await chrome.storage.local.get('pendingEmailData');
+      if (pendingEmailData) {
+        console.log('Cloodoo popup: using pending email data from quick-add button');
+        prefillFromEmailData(pendingEmailData);
+        await chrome.storage.local.remove('pendingEmailData');
+        return;
+      }
+
       const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
       if (tab && tab.url) {
         // Always capture the current page URL
@@ -242,17 +268,7 @@ document.addEventListener('DOMContentLoaded', async () => {
           try {
             const response = await chrome.tabs.sendMessage(tab.id, { action: 'getEmailData' });
             if (response) {
-              // Pre-fill form with email data
-              if (response.subject) {
-                titleInput.value = response.subject;
-              }
-              if (response.snippet) {
-                descriptionInput.value = `Email from: ${response.sender || 'Unknown'}\n\n${response.snippet}`;
-              }
-              if (response.sender) {
-                // Add sender as a tag
-                tagsInput.value = 'email';
-              }
+              prefillFromEmailData(response);
             }
           } catch (e) {
             // Content script might not be loaded

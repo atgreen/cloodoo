@@ -6,12 +6,13 @@ import androidx.room.Room
 import androidx.room.RoomDatabase
 
 @Database(
-    entities = [TodoEntity::class],
-    version = 1,
+    entities = [TodoEntity::class, PendingSyncEntity::class],
+    version = 2,
     exportSchema = false
 )
 abstract class CloodooDatabase : RoomDatabase() {
     abstract fun todoDao(): TodoDao
+    abstract fun pendingSyncDao(): PendingSyncDao
 
     companion object {
         @Volatile
@@ -23,7 +24,9 @@ abstract class CloodooDatabase : RoomDatabase() {
                     context.applicationContext,
                     CloodooDatabase::class.java,
                     "cloodoo.db"
-                ).build()
+                )
+                    .fallbackToDestructiveMigration()
+                    .build()
                 INSTANCE = instance
                 instance
             }

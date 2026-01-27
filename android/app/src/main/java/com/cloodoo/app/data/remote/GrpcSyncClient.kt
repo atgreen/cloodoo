@@ -57,6 +57,10 @@ class GrpcSyncClient(
                     "TLS_CHACHA20_POLY1305_SHA256"
                 )
             )
+            // Accepted risk: hostname verification is disabled because the private CA
+            // issues certificates with IP SANs and the server IP may change across
+            // networks (e.g. Tailscale, LAN roaming). The CA-only trust anchor already
+            // prevents MITM — only certificates signed by our private CA are accepted.
             .hostnameVerifier { _, _ -> true }
             .keepAliveTime(30, TimeUnit.SECONDS)
             .keepAliveTimeout(10, TimeUnit.SECONDS)

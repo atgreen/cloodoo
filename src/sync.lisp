@@ -370,8 +370,19 @@
 
 ;;── Sync Client Connection ────────────────────────────────────────────────────
 
+(defvar *sync-connector-host* nil
+  "Host for the sync connector thread.")
+(defvar *sync-connector-port* nil
+  "Port for the sync connector thread.")
+(defvar *sync-connector-cert* nil
+  "Client certificate path for the sync connector thread.")
+(defvar *sync-connector-key* nil
+  "Client key path for the sync connector thread.")
+
 (defun start-sync-client (host port &key model program client-certificate client-key)
   "Connect to a remote sync server as a client.
+   Returns immediately — all connection logic runs in a background thread
+   that handles connect, receive, and reconnect with exponential backoff.
    HOST is the server address, PORT is the gRPC port.
    MODEL is optional app-model to update with sync status.
    PROGRAM is optional TUI program for triggering redraws.
@@ -382,57 +393,89 @@
 
   (setf *sync-model-ref* model)
   (setf *sync-program-ref* program)
+  (setf *sync-client-running* t)
+  (setf *sync-connector-host* host)
+  (setf *sync-connector-port* port)
+  (setf *sync-connector-cert* client-certificate)
+  (setf *sync-connector-key* client-key)
   (update-sync-status :connecting)
 
   (when model
     (setf (model-sync-server-address model) (format nil "~A:~A" host port)))
 
-  (let ((use-tls (and client-certificate client-key
-                      (probe-file client-certificate)
-                      (probe-file client-key))))
-    (llog:info "Connecting to sync server" :host host :port port :tls use-tls)
-    (format t "~&Connecting to sync server ~A:~A~A...~%" host port
-            (if use-tls " (mTLS)" " (plaintext)"))
+  ;; Register hooks so local changes are sent even while reconnecting
+  (setf *todo-change-hook* #'notify-sync-todo-changed)
+  (setf *todo-delete-hook* #'notify-sync-todo-deleted)
 
-    (handler-case
-        (progn
-          ;; Create gRPC channel
-          (setf *sync-client-channel*
-                (if use-tls
-                    (ag-grpc:make-channel host port
-                                          :tls t
-                                          :tls-client-certificate (namestring client-certificate)
-                                          :tls-client-key (namestring client-key))
-                    (ag-grpc:make-channel host port :tls nil)))
+  ;; All blocking work happens in the connector thread
+  (setf *sync-client-thread*
+        (bt:make-thread #'sync-connector-loop :name "sync-connector"))
 
-          ;; Create the stub and start bidirectional stream
-          (let ((stub (make-proto-todo-sync-stub *sync-client-channel*)))
-            (setf *sync-client-stream* (proto-todo-sync-stream stub)))
+  (llog:info "Sync client started (non-blocking)" :host host :port port)
+  t)
 
-          ;; Send init message
-          (let* ((client-time (now-iso))
-                 (init-msg (make-sync-init-message (get-device-id) "" client-time)))
-            (ag-grpc:stream-send *sync-client-stream* init-msg)
-            (llog:info "Sent sync init" :device-id (get-device-id) :client-time client-time))
+(defun sync-connector-loop ()
+  "Background thread that connects, receives, and reconnects with backoff.
+   Runs until *sync-client-running* is set to nil."
+  (let ((host *sync-connector-host*)
+        (port *sync-connector-port*)
+        (client-certificate *sync-connector-cert*)
+        (client-key *sync-connector-key*)
+        (backoff-delay 1)
+        (max-backoff 30))
+    (let ((use-tls (and client-certificate client-key
+                        (probe-file client-certificate)
+                        (probe-file client-key))))
+      (loop while *sync-client-running* do
+        (handler-case
+            (progn
+              (update-sync-status :connecting)
+              (llog:info "Connecting to sync server" :host host :port port :tls use-tls)
 
-          ;; Register hooks to send local changes to the server
-          (setf *todo-change-hook* #'notify-sync-todo-changed)
-          (setf *todo-delete-hook* #'notify-sync-todo-deleted)
+              ;; Create gRPC channel (blocks if server is unreachable)
+              (setf *sync-client-channel*
+                    (if use-tls
+                        (ag-grpc:make-channel host port
+                                              :tls t
+                                              :tls-client-certificate (namestring client-certificate)
+                                              :tls-client-key (namestring client-key))
+                        (ag-grpc:make-channel host port :tls nil)))
 
-          ;; Start background receive thread
-          (setf *sync-client-running* t)
-          (setf *sync-client-thread*
-                (bt:make-thread #'sync-client-receive-loop
-                                :name "sync-client-receiver"))
+              ;; Create stub and stream
+              (let ((stub (make-proto-todo-sync-stub *sync-client-channel*)))
+                (setf *sync-client-stream* (proto-todo-sync-stream stub)))
 
-          (format t "~&Sync client started.~%")
-          t)
-      (error (e)
-        (llog:error "Failed to connect to sync server" :error (princ-to-string e))
-        (format t "~&Failed to connect: ~A~%" e)
-        (update-sync-status :error (princ-to-string e))
+              ;; Send init message
+              (let* ((client-time (now-iso))
+                     (init-msg (make-sync-init-message (get-device-id) "" client-time)))
+                (ag-grpc:stream-send *sync-client-stream* init-msg)
+                (llog:info "Sent sync init" :device-id (get-device-id) :client-time client-time))
+
+              ;; Reset backoff on successful connection
+              (setf backoff-delay 1)
+
+              ;; Receive loop — blocks until stream ends or error
+              (loop while *sync-client-running*
+                    do (let ((msg (ag-grpc:stream-read-message *sync-client-stream*)))
+                         (if msg
+                             (handle-sync-client-message msg)
+                             (progn
+                               (llog:info "Sync stream ended")
+                               (return))))))
+          (error (e)
+            (llog:error "Sync connection error" :error (princ-to-string e))
+            (update-sync-status :error (princ-to-string e))
+            (notify-tui-refresh)))
+
+        ;; Cleanup before retry
         (cleanup-sync-client)
-        nil))))
+
+        ;; Sleep with backoff before retrying (unless told to stop)
+        (when *sync-client-running*
+          (llog:info "Reconnecting in ~Ds" :delay backoff-delay)
+          (sleep backoff-delay)
+          (setf backoff-delay (min (* backoff-delay 2) max-backoff))))))
+  (llog:info "Sync connector loop exited"))
 
 (defun stop-sync-client ()
   "Disconnect from the sync server."
@@ -473,28 +516,6 @@
       (error (e)
         (llog:warn "Error closing channel" :error (princ-to-string e)))))
   (setf *sync-client-channel* nil))
-
-;;── Sync Client Receive Loop ──────────────────────────────────────────────────
-
-(defun sync-client-receive-loop ()
-  "Background loop to receive messages from the sync server."
-  (llog:info "Sync client receive loop started")
-  (handler-case
-      (loop while *sync-client-running*
-            do (let ((msg (ag-grpc:stream-read-message *sync-client-stream*)))
-                 (if msg
-                     (handle-sync-client-message msg)
-                     ;; nil means stream ended
-                     (progn
-                       (llog:info "Sync stream ended")
-                       (setf *sync-client-running* nil)))))
-    (ag-grpc:grpc-status-error (e)
-      (llog:error "Sync client gRPC error" :error (princ-to-string e))
-      (update-sync-status :error (princ-to-string e)))
-    (error (e)
-      (llog:error "Sync client receive error" :error (princ-to-string e))
-      (update-sync-status :error (princ-to-string e))))
-  (llog:info "Sync client receive loop ended"))
 
 (defun handle-sync-client-message (msg)
   "Handle a message received from the sync server."

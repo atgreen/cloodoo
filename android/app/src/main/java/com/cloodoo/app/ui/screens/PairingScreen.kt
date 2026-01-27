@@ -275,6 +275,21 @@ fun PairingScreen(
                         return@Button
                     }
 
+                    // Reject http:// URLs to non-private IPs.
+                    // Pairing is a short-lived LAN operation so private/Tailscale IPs are OK over HTTP.
+                    try {
+                        val parsed = java.net.URL(url)
+                        if (parsed.protocol.equals("http", ignoreCase = true) &&
+                            !isPrivateHost(parsed.host)
+                        ) {
+                            error = "HTTP is only allowed for private/local IPs. Use https:// for public servers."
+                            return@Button
+                        }
+                    } catch (_: Exception) {
+                        error = "Invalid URL"
+                        return@Button
+                    }
+
                     scope.launch {
                         isLoading = true
                         error = null
@@ -318,6 +333,31 @@ fun PairingScreen(
             }
         }
     }
+}
+
+/**
+ * Returns true if [host] is a private/loopback/Tailscale IP address.
+ * These are safe for cleartext HTTP during the short-lived LAN pairing flow.
+ */
+private fun isPrivateHost(host: String): Boolean {
+    // Resolve hostname to numeric form if needed
+    val addr = try {
+        java.net.InetAddress.getByName(host)
+    } catch (_: Exception) {
+        return false
+    }
+    if (addr.isLoopbackAddress || addr.isLinkLocalAddress || addr.isSiteLocalAddress) {
+        return true
+    }
+    // isSiteLocalAddress covers 10.*, 172.16-31.*, 192.168.* — but check Tailscale CGNAT range
+    // manually: 100.64.0.0 – 100.127.255.255 (RFC 6598 shared-address space)
+    val bytes = addr.address
+    if (bytes.size == 4) {
+        val b0 = bytes[0].toInt() and 0xFF
+        val b1 = bytes[1].toInt() and 0xFF
+        if (b0 == 100 && b1 in 64..127) return true
+    }
+    return false
 }
 
 private data class PairingResult(

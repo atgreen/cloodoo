@@ -25,6 +25,7 @@ class SyncManager(
     }
 
     private val todoDao = database.todoDao()
+    private val pendingSyncDao = database.pendingSyncDao()
     private var grpcClient: GrpcSyncClient? = null
     private var syncJob: Job? = null
     private var reconnectJob: Job? = null
@@ -124,10 +125,21 @@ class SyncManager(
 
     /**
      * Send a local todo change to the server.
+     * If disconnected, queues the change for delivery on reconnect.
      */
     suspend fun sendTodoUpsert(todo: TodoEntity) {
-        val client = grpcClient ?: run {
-            Log.w(TAG, "Not connected, cannot send upsert")
+        val client = grpcClient
+        if (client == null || _connectionState.value != ConnectionState.CONNECTED) {
+            Log.d(TAG, "Not connected, queuing upsert for ${todo.id}")
+            pendingSyncDao.insert(
+                com.cloodoo.app.data.local.PendingSyncEntity(
+                    todoId = todo.id,
+                    changeType = "upsert",
+                    createdAt = java.time.ZonedDateTime.now().format(
+                        java.time.format.DateTimeFormatter.ISO_OFFSET_DATE_TIME
+                    )
+                )
+            )
             return
         }
 
@@ -138,15 +150,68 @@ class SyncManager(
 
     /**
      * Send a delete request to the server.
+     * If disconnected, queues the delete and clears any pending upserts for the same todoId.
      */
     suspend fun sendTodoDelete(todoId: String) {
-        val client = grpcClient ?: run {
-            Log.w(TAG, "Not connected, cannot send delete")
+        val client = grpcClient
+        if (client == null || _connectionState.value != ConnectionState.CONNECTED) {
+            Log.d(TAG, "Not connected, queuing delete for $todoId")
+            // Clear any pending upserts for the same todo — the delete supersedes them
+            pendingSyncDao.deleteByTodoId(todoId, "upsert")
+            pendingSyncDao.insert(
+                com.cloodoo.app.data.local.PendingSyncEntity(
+                    todoId = todoId,
+                    changeType = "delete",
+                    createdAt = java.time.ZonedDateTime.now().format(
+                        java.time.format.DateTimeFormatter.ISO_OFFSET_DATE_TIME
+                    )
+                )
+            )
             return
         }
 
         client.sendDelete(deviceId, todoId)
         _syncEvents.emit(SyncEvent.Sent(todoId))
+    }
+
+    /**
+     * Drain the pending sync queue after reconnecting.
+     * For upserts, looks up the current TodoEntity and sends it.
+     * For deletes, sends the delete ID.
+     * Entries are removed from the queue on success.
+     */
+    private suspend fun drainPendingSyncQueue() {
+        val client = grpcClient ?: return
+        val pending = pendingSyncDao.getAll()
+        if (pending.isEmpty()) return
+
+        Log.d(TAG, "Draining ${pending.size} pending sync entries")
+        for (entry in pending) {
+            try {
+                when (entry.changeType) {
+                    "upsert" -> {
+                        val todo = todoDao.getCurrentById(entry.todoId)
+                        if (todo != null) {
+                            client.sendUpsert(deviceId, todo.toProto())
+                            _syncEvents.emit(SyncEvent.Sent(entry.todoId))
+                        } else {
+                            Log.d(TAG, "Pending upsert for ${entry.todoId} skipped — todo no longer exists")
+                        }
+                    }
+                    "delete" -> {
+                        client.sendDelete(deviceId, entry.todoId)
+                        _syncEvents.emit(SyncEvent.Sent(entry.todoId))
+                    }
+                }
+                pendingSyncDao.delete(entry.rowId)
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to drain pending entry ${entry.rowId}", e)
+                // Stop draining on error — remaining entries stay queued for next reconnect
+                break
+            }
+        }
+        val remaining = pendingSyncDao.getAll().size
+        Log.d(TAG, "Pending sync queue drained, $remaining entries remaining")
     }
 
     private suspend fun handleServerMessage(message: SyncMessage) {
@@ -167,6 +232,7 @@ class SyncManager(
                 }
 
                 _connectionState.value = ConnectionState.CONNECTED
+                drainPendingSyncQueue()
                 if (ack.pendingChanges > 0) {
                     // Defer advancing lastServerTime until all pending changes are received
                     pendingAckServerTime = ack.serverTime

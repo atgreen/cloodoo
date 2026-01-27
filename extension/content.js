@@ -103,32 +103,40 @@
     return data && (data.subject || data.sender);
   }
 
-  // Record DOM for later analysis when extraction fails
+  // Record DOM for later analysis when extraction fails.
+  // Gated behind the domRecordingEnabled storage flag (disabled by default).
   function recordDomForAnalysis(extractionResult) {
     const site = getEmailSite();
     console.log('Cloodoo: recordDomForAnalysis called, site:', site, 'extractionResult:', extractionResult);
     if (!site) return; // Only record for known email sites
 
-    console.log('Cloodoo: Recording DOM for analysis (extraction failed)');
+    chrome.storage.local.get('domRecordingEnabled', (result) => {
+      if (!result.domRecordingEnabled) {
+        console.log('Cloodoo: DOM recording disabled, skipping');
+        return;
+      }
 
-    // Get the main content area HTML to avoid capturing the entire page
-    const mainContent = document.querySelector('[role="main"]');
-    const html = mainContent ? mainContent.outerHTML : document.body.innerHTML;
+      console.log('Cloodoo: Recording DOM for analysis (extraction failed)');
 
-    // Limit size to avoid huge payloads (max 500KB)
-    const maxSize = 500 * 1024;
-    const truncatedHtml = html.length > maxSize
-      ? html.substring(0, maxSize) + '\n<!-- TRUNCATED -->'
-      : html;
+      // Get the main content area HTML to avoid capturing the entire page
+      const mainContent = document.querySelector('[role="main"]');
+      const html = mainContent ? mainContent.outerHTML : document.body.innerHTML;
 
-    chrome.runtime.sendMessage({
-      action: 'recordDom',
-      site: site,
-      url: window.location.href,
-      html: truncatedHtml,
-      extractionResult: extractionResult
-    }).catch(err => {
-      console.log('Cloodoo: Failed to record DOM:', err);
+      // Limit size to avoid huge payloads (max 500KB)
+      const maxSize = 500 * 1024;
+      const truncatedHtml = html.length > maxSize
+        ? html.substring(0, maxSize) + '\n<!-- TRUNCATED -->'
+        : html;
+
+      chrome.runtime.sendMessage({
+        action: 'recordDom',
+        site: site,
+        url: window.location.href,
+        html: truncatedHtml,
+        extractionResult: extractionResult
+      }).catch(err => {
+        console.log('Cloodoo: Failed to record DOM:', err);
+      });
     });
   }
 

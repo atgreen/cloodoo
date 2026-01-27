@@ -279,10 +279,30 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     return true;
   }
 
+  if (request.action === 'openPopupWithData') {
+    // Stash email data so the popup can pre-fill from it
+    chrome.storage.local.set({ pendingEmailData: request.emailData }, () => {
+      chrome.windows.create({
+        url: 'popup/popup.html',
+        type: 'popup',
+        width: 420,
+        height: 520
+      });
+    });
+    return false;
+  }
+
   if (request.action === 'recordDom') {
-    // Record DOM for analysis when extraction fails on known email sites
+    // Record DOM for analysis when extraction fails on known email sites.
+    // Gated behind the domRecordingEnabled flag (disabled by default).
     (async () => {
       try {
+        const { domRecordingEnabled } = await chrome.storage.local.get('domRecordingEnabled');
+        if (!domRecordingEnabled) {
+          console.log('Cloodoo: DOM recording disabled, skipping');
+          sendResponse({ success: false, error: 'DOM recording disabled' });
+          return;
+        }
         const nativeAvailable = await checkNativeMessaging();
         if (nativeAvailable) {
           const response = await sendNativeMessage({
