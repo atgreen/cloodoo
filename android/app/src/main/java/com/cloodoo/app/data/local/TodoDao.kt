@@ -51,6 +51,12 @@ interface TodoDao {
     suspend fun getCurrentById(id: String): TodoEntity?
 
     /**
+     * Count current (non-superseded) TODOs.
+     */
+    @Query("SELECT COUNT(*) FROM todos WHERE validTo IS NULL")
+    suspend fun countCurrent(): Int
+
+    /**
      * Get all TODOs (for debugging).
      */
     @Query("SELECT * FROM todos ORDER BY validFrom DESC")

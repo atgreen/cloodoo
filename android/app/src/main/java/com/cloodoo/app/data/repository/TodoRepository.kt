@@ -22,6 +22,11 @@ class TodoRepository(
     fun getCurrentTodos(): Flow<List<TodoEntity>> = todoDao.getCurrentTodos()
 
     /**
+     * Check if there are no current TODOs in the local database.
+     */
+    suspend fun isEmpty(): Boolean = todoDao.countCurrent() == 0
+
+    /**
      * Create a new TODO.
      */
     suspend fun createTodo(
@@ -29,6 +34,7 @@ class TodoRepository(
         description: String? = null,
         priority: String = "medium",
         dueDate: String? = null,
+        scheduledDate: String? = null,
         tags: String? = null
     ): TodoEntity {
         val now = nowIso()
@@ -40,6 +46,7 @@ class TodoRepository(
             description = description,
             priority = priority,
             dueDate = dueDate,
+            scheduledDate = scheduledDate,
             tags = tags,
             createdAt = now,
             validFrom = now,

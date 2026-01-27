@@ -17,13 +17,13 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
+import com.cloodoo.app.data.security.CertificateManager
 import com.google.mlkit.vision.barcode.BarcodeScanning
 import com.google.mlkit.vision.barcode.common.Barcode
 import com.google.mlkit.vision.common.InputImage
@@ -36,8 +36,8 @@ import java.util.concurrent.Executors
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun PairingScreen(
-    onPairingComplete: (serverAddress: String, port: Int, certPem: String, keyPem: String, caCertPem: String?, deviceName: String) -> Unit,
-    onCancel: () -> Unit
+    certificateManager: CertificateManager,
+    onPairingComplete: () -> Unit
 ) {
     var mode by remember { mutableStateOf(PairingMode.MANUAL) }
     var scannedUrl by remember { mutableStateOf<String?>(null) }
@@ -47,7 +47,6 @@ fun PairingScreen(
     var error by remember { mutableStateOf<String?>(null) }
     var hasCameraPermission by remember { mutableStateOf(false) }
 
-    val context = LocalContext.current
     val scope = rememberCoroutineScope()
 
     // Camera permission launcher
@@ -64,12 +63,7 @@ fun PairingScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Pair with Server") },
-                navigationIcon = {
-                    IconButton(onClick = onCancel) {
-                        Icon(Icons.Default.Close, contentDescription = "Cancel")
-                    }
-                }
+                title = { Text("Pair with Server") }
             )
         }
     ) { padding ->
@@ -276,7 +270,6 @@ fun PairingScreen(
                     }
 
                     // Reject http:// URLs to non-private IPs.
-                    // Pairing is a short-lived LAN operation so private/Tailscale IPs are OK over HTTP.
                     try {
                         val parsed = java.net.URL(url)
                         if (parsed.protocol.equals("http", ignoreCase = true) &&
@@ -297,14 +290,20 @@ fun PairingScreen(
                             val result = downloadCertificate(url, passphrase)
                             result.fold(
                                 onSuccess = { pairingResult ->
-                                    onPairingComplete(
-                                        pairingResult.serverAddress,
-                                        pairingResult.grpcPort,
-                                        pairingResult.certPem,
-                                        pairingResult.keyPem,
-                                        pairingResult.caCertPem,
-                                        pairingResult.deviceName
+                                    val importResult = certificateManager.importPemCertificate(
+                                        certPem = pairingResult.certPem,
+                                        keyPem = pairingResult.keyPem,
+                                        caCertPem = pairingResult.caCertPem,
+                                        deviceName = pairingResult.deviceName,
+                                        serverAddress = pairingResult.serverAddress,
+                                        serverPort = pairingResult.grpcPort
                                     )
+                                    if (importResult.isSuccess) {
+                                        onPairingComplete()
+                                    } else {
+                                        error = importResult.exceptionOrNull()?.message
+                                            ?: "Failed to import certificate"
+                                    }
                                 },
                                 onFailure = { e ->
                                     error = e.message ?: "Failed to download certificate"
@@ -337,10 +336,8 @@ fun PairingScreen(
 
 /**
  * Returns true if [host] is a private/loopback/Tailscale IP address.
- * These are safe for cleartext HTTP during the short-lived LAN pairing flow.
  */
 private fun isPrivateHost(host: String): Boolean {
-    // Resolve hostname to numeric form if needed
     val addr = try {
         java.net.InetAddress.getByName(host)
     } catch (_: Exception) {
@@ -349,8 +346,6 @@ private fun isPrivateHost(host: String): Boolean {
     if (addr.isLoopbackAddress || addr.isLinkLocalAddress || addr.isSiteLocalAddress) {
         return true
     }
-    // isSiteLocalAddress covers 10.*, 172.16-31.*, 192.168.* — but check Tailscale CGNAT range
-    // manually: 100.64.0.0 – 100.127.255.255 (RFC 6598 shared-address space)
     val bytes = addr.address
     if (bytes.size == 4) {
         val b0 = bytes[0].toInt() and 0xFF
@@ -381,7 +376,6 @@ private suspend fun downloadCertificate(
             val parsedUrl = java.net.URL(url)
             val serverAddress = parsedUrl.host
 
-            // POST to /pair/:token/pem with passphrase in JSON body
             val pemUrl = java.net.URL("$url/pem")
             Log.d("PairingScreen", "Connecting to $pemUrl")
 
@@ -393,7 +387,6 @@ private suspend fun downloadCertificate(
             connection.doOutput = true
             connection.setRequestProperty("Content-Type", "application/json")
 
-            // Send passphrase as JSON body
             val jsonBody = org.json.JSONObject().apply {
                 put("passphrase", passphrase)
             }.toString()
@@ -420,10 +413,10 @@ private suspend fun downloadCertificate(
             val json = org.json.JSONObject(responseBody)
             val certPem = json.getString("cert")
             val keyPem = json.getString("key")
-            val caCertPem = json.optString("ca_cert", null)
+            val caCertPem = if (json.has("ca_cert") && !json.isNull("ca_cert")) json.getString("ca_cert") else null
             val deviceName = json.getString("device_name")
 
-            Log.d("PairingScreen", "Received cert for device: $deviceName, ca_cert: ${caCertPem != null}")
+            Log.d("PairingScreen", "Received cert for device: $deviceName, has ca_cert: ${caCertPem != null}")
 
             Result.success(PairingResult(
                 serverAddress = serverAddress,
@@ -445,7 +438,6 @@ private fun QrScannerView(
     modifier: Modifier = Modifier,
     onQrScanned: (String) -> Unit
 ) {
-    val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
     var hasScanned by remember { mutableStateOf(false) }
 

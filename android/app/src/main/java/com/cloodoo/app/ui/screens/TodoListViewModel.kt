@@ -119,21 +119,57 @@ class TodoListViewModel(
     }
 
     fun connect() {
-        syncManager.connect(_lastSyncTime.value, viewModelScope)
+        viewModelScope.launch {
+            val savedSyncTime = _lastSyncTime.value
+
+            // If we have a saved sync time but no local data, force a full sync
+            val since = if (savedSyncTime != null && repository.isEmpty()) {
+                Log.d(TAG, "Local DB empty despite saved sync time, forcing full sync")
+                _lastSyncTime.value = null
+                saveLastSyncTime(getApplication())
+                null
+            } else {
+                savedSyncTime
+            }
+            syncManager.connect(since, viewModelScope)
+        }
     }
 
     fun disconnect() {
         syncManager.disconnect()
     }
 
-    fun createTodo(title: String, priority: String = "medium", dueDate: String? = null) {
+    fun refreshSync() {
+        disconnect()
+        // Clear sync time to force full resync
+        _lastSyncTime.value = null
+        saveLastSyncTime(getApplication())
+        connect()
+    }
+
+    fun unpair() {
+        disconnect()
+        certificateManager.removeCertificate()
+    }
+
+    fun createTodo(
+        title: String,
+        description: String? = null,
+        priority: String = "medium",
+        dueDate: String? = null,
+        scheduledDate: String? = null,
+        tags: String? = null
+    ) {
         if (title.isBlank()) return
 
         viewModelScope.launch {
             val todo = repository.createTodo(
                 title = title.trim(),
+                description = description,
                 priority = priority,
-                dueDate = dueDate
+                dueDate = dueDate,
+                scheduledDate = scheduledDate,
+                tags = tags
             )
             syncManager.sendTodoUpsert(todo)
         }
@@ -143,19 +179,27 @@ class TodoListViewModel(
         viewModelScope.launch {
             val todo = _uiState.value.todos.find { it.id == todoId }
             if (todo != null) {
-                val wasCompleted = todo.status == "completed"
-                if (wasCompleted) {
-                    repository.updateTodo(todoId, status = "pending")
+                val isDone = todo.status == "completed" || todo.status == "cancelled"
+                if (isDone) {
+                    repository.updateTodo(todoId, status = "pending", completedAt = "")
                 } else {
                     repository.completeTodo(todoId)
-                    // Trigger confetti when completing a task
                     _uiState.update { it.copy(showConfetti = true) }
                 }
-                // Get updated entity and send to server
                 val updated = database.todoDao().getCurrentById(todoId)
                 if (updated != null) {
                     syncManager.sendTodoUpsert(updated)
                 }
+            }
+        }
+    }
+
+    fun cancelTodo(todoId: String) {
+        viewModelScope.launch {
+            repository.updateTodo(todoId, status = "cancelled")
+            val updated = database.todoDao().getCurrentById(todoId)
+            if (updated != null) {
+                syncManager.sendTodoUpsert(updated)
             }
         }
     }

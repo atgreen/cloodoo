@@ -1,21 +1,17 @@
 package com.cloodoo.app.ui.components
 
 import androidx.compose.animation.animateColorAsState
-import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CheckCircle
-import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Done
-import androidx.compose.material.icons.filled.Undo
-import androidx.compose.material.icons.outlined.AccessTime
+import androidx.compose.material.icons.automirrored.filled.Undo
 import androidx.compose.material.icons.outlined.Circle
 import androidx.compose.material.icons.outlined.Place
 import androidx.compose.material3.*
@@ -25,36 +21,28 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import com.cloodoo.app.data.local.TodoEntity
+import com.cloodoo.app.ui.theme.LocalPriorityColors
+import com.cloodoo.app.ui.theme.PriorityColorScheme
+import com.cloodoo.app.ui.util.parseTags
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
-import kotlinx.coroutines.launch
 import java.time.LocalDate
 import java.time.ZonedDateTime
 import java.time.format.DateTimeFormatter
-import kotlin.math.roundToInt
 
-/**
- * Priority colors for the left border accent
- */
-private fun getPriorityColor(priority: String): Color {
+private fun getPriorityColor(priority: String, colors: PriorityColorScheme): Color {
     return when (priority.lowercase()) {
-        "high" -> Color(0xFFE53935)   // Red
-        "medium" -> Color(0xFFFB8C00) // Orange
-        "low" -> Color(0xFF43A047)    // Green
-        else -> Color.Gray
+        "high" -> colors.high
+        "medium" -> colors.medium
+        "low" -> colors.low
+        else -> colors.none
     }
 }
 
-/**
- * Enhanced TODO item with left priority border and rich metadata display
- */
 @Composable
 fun TodoItem(
     todo: TodoEntity,
@@ -63,12 +51,12 @@ fun TodoItem(
     modifier: Modifier = Modifier
 ) {
     val isCompleted = todo.status == "completed"
-    val priorityColor = getPriorityColor(todo.priority)
+    val priorityColors = LocalPriorityColors.current
+    val priorityColor = getPriorityColor(todo.priority, priorityColors)
 
     Card(
         modifier = modifier
             .fillMaxWidth()
-            .padding(horizontal = 12.dp, vertical = 3.dp)
             .clickable { onClick(todo.id) },
         shape = RoundedCornerShape(8.dp),
         colors = CardDefaults.cardColors(
@@ -83,7 +71,6 @@ fun TodoItem(
         )
     ) {
         Row(modifier = Modifier.fillMaxWidth()) {
-            // Priority color bar on left edge
             Box(
                 modifier = Modifier
                     .width(4.dp)
@@ -100,7 +87,6 @@ fun TodoItem(
                     .padding(start = 8.dp, end = 12.dp, top = 10.dp, bottom = 10.dp),
                 verticalAlignment = Alignment.Top
             ) {
-                // Completion checkbox
                 IconButton(
                     onClick = { onToggleComplete(todo.id) },
                     modifier = Modifier.size(32.dp)
@@ -120,7 +106,6 @@ fun TodoItem(
                 Spacer(modifier = Modifier.width(4.dp))
 
                 Column(modifier = Modifier.weight(1f)) {
-                    // Title
                     Text(
                         text = todo.title,
                         style = MaterialTheme.typography.bodyLarge,
@@ -134,22 +119,16 @@ fun TodoItem(
                         overflow = TextOverflow.Ellipsis
                     )
 
-                    // Metadata row: due date, location
-                    val hasMetadata = todo.dueDate != null ||
-                                      todo.locationInfo != null
-
+                    val hasMetadata = todo.dueDate != null || todo.locationInfo != null
                     if (hasMetadata && !isCompleted) {
                         Spacer(modifier = Modifier.height(4.dp))
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
-                            // Due date chip
                             todo.dueDate?.let { dateStr ->
                                 DueDateChip(dateStr = dateStr)
                             }
-
-                            // Location indicator
                             todo.locationInfo?.let { locationJson ->
                                 if (locationJson.isNotBlank() && locationJson != "null") {
                                     val locationName = parseLocationName(locationJson)
@@ -165,7 +144,6 @@ fun TodoItem(
                         }
                     }
 
-                    // Tags row
                     val tags = parseTags(todo.tags)
                     if (tags.isNotEmpty() && !isCompleted) {
                         Spacer(modifier = Modifier.height(6.dp))
@@ -186,150 +164,96 @@ fun TodoItem(
     }
 }
 
-/**
- * Swipe-to-reveal TODO item - swipe left to reveal action buttons
- */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SwipeableTodoItem(
     todo: TodoEntity,
     onToggleComplete: (String) -> Unit,
     onClick: (String) -> Unit,
-    onDelete: (String) -> Unit,
+    onCancel: (String) -> Unit,
+    enableCancel: Boolean = true,
     modifier: Modifier = Modifier
 ) {
-    val isCompleted = todo.status == "completed"
-    val scope = rememberCoroutineScope()
-
-    // Width of revealed action buttons area
-    val actionButtonsWidth = 140.dp
-    val actionButtonsWidthPx = with(LocalDensity.current) { actionButtonsWidth.toPx() }
-
-    // Swipe offset - negative means swiped left (revealing right-side buttons)
-    val offsetX = remember { Animatable(0f) }
-
-    Box(
-        modifier = modifier
-            .fillMaxWidth()
-            .padding(horizontal = 12.dp, vertical = 3.dp)
-            .clip(RoundedCornerShape(8.dp))
-    ) {
-        // Background action buttons (revealed when swiping left)
-        Row(
-            modifier = Modifier
-                .fillMaxHeight()
-                .width(actionButtonsWidth)
-                .align(Alignment.CenterEnd),
-            horizontalArrangement = Arrangement.End
-        ) {
-            // Complete/Undo button
-            Box(
-                modifier = Modifier
-                    .fillMaxHeight()
-                    .weight(1f)
-                    .background(if (isCompleted) Color(0xFFFFA726) else Color(0xFF66BB6A))
-                    .clickable {
-                        scope.launch {
-                            offsetX.animateTo(0f, tween(200))
-                        }
-                        onToggleComplete(todo.id)
-                    },
-                contentAlignment = Alignment.Center
-            ) {
-                Column(
-                    horizontalAlignment = Alignment.CenterHorizontally
-                ) {
-                    Icon(
-                        imageVector = if (isCompleted) Icons.Default.Undo else Icons.Default.Done,
-                        contentDescription = if (isCompleted) "Reopen" else "Complete",
-                        tint = Color.White,
-                        modifier = Modifier.size(24.dp)
-                    )
-                    Spacer(modifier = Modifier.height(2.dp))
-                    Text(
-                        text = if (isCompleted) "Undo" else "Done",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = Color.White
-                    )
+    val isDone = todo.status == "completed" || todo.status == "cancelled"
+    val dismissState = rememberSwipeToDismissBoxState(
+        confirmValueChange = { value ->
+            when (value) {
+                SwipeToDismissBoxValue.StartToEnd -> {
+                    onToggleComplete(todo.id)
+                    false
                 }
-            }
-
-            // Delete button
-            Box(
-                modifier = Modifier
-                    .fillMaxHeight()
-                    .weight(1f)
-                    .background(Color(0xFFEF5350))
-                    .clickable {
-                        scope.launch {
-                            offsetX.animateTo(0f, tween(200))
-                        }
-                        onDelete(todo.id)
-                    },
-                contentAlignment = Alignment.Center
-            ) {
-                Column(
-                    horizontalAlignment = Alignment.CenterHorizontally
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Delete,
-                        contentDescription = "Delete",
-                        tint = Color.White,
-                        modifier = Modifier.size(24.dp)
-                    )
-                    Spacer(modifier = Modifier.height(2.dp))
-                    Text(
-                        text = "Delete",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = Color.White
-                    )
+                SwipeToDismissBoxValue.EndToStart -> {
+                    onCancel(todo.id)
+                    false
                 }
+                SwipeToDismissBoxValue.Settled -> true
             }
         }
+    )
 
-        // Foreground card (slides left to reveal buttons)
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .offset { IntOffset(offsetX.value.roundToInt(), 0) }
-                .pointerInput(Unit) {
-                    detectHorizontalDragGestures(
-                        onDragEnd = {
-                            scope.launch {
-                                // Snap to revealed or closed position
-                                val target = if (offsetX.value < -actionButtonsWidthPx / 2) {
-                                    -actionButtonsWidthPx  // Reveal buttons
-                                } else {
-                                    0f  // Close
-                                }
-                                offsetX.animateTo(target, tween(200))
-                            }
-                        },
-                        onHorizontalDrag = { _, dragAmount ->
-                            scope.launch {
-                                val newOffset = (offsetX.value + dragAmount)
-                                    .coerceIn(-actionButtonsWidthPx, 0f)  // Only allow left swipe
-                                offsetX.snapTo(newOffset)
-                            }
-                        }
-                    )
-                }
-        ) {
-            TodoItem(
-                todo = todo,
-                onToggleComplete = onToggleComplete,
-                onClick = onClick
+    SwipeToDismissBox(
+        state = dismissState,
+        modifier = modifier.padding(horizontal = 12.dp, vertical = 3.dp),
+        backgroundContent = {
+            val direction = dismissState.targetValue
+            val color by animateColorAsState(
+                when (direction) {
+                    SwipeToDismissBoxValue.StartToEnd ->
+                        if (isDone) MaterialTheme.colorScheme.tertiary
+                        else MaterialTheme.colorScheme.secondary
+                    SwipeToDismissBoxValue.EndToStart -> MaterialTheme.colorScheme.error
+                    else -> Color.Transparent
+                },
+                label = "swipe_bg"
             )
-        }
+            val icon = when (direction) {
+                SwipeToDismissBoxValue.StartToEnd ->
+                    if (isDone) Icons.AutoMirrored.Filled.Undo else Icons.Default.Done
+                SwipeToDismissBoxValue.EndToStart -> Icons.Default.Close
+                else -> Icons.Default.Done
+            }
+            val alignment = when (direction) {
+                SwipeToDismissBoxValue.StartToEnd -> Alignment.CenterStart
+                else -> Alignment.CenterEnd
+            }
+            val scale by animateFloatAsState(
+                if (dismissState.targetValue == SwipeToDismissBoxValue.Settled) 0.75f else 1f,
+                label = "swipe_scale"
+            )
+            Box(
+                Modifier
+                    .fillMaxSize()
+                    .background(color, RoundedCornerShape(8.dp))
+                    .padding(horizontal = 20.dp),
+                contentAlignment = alignment
+            ) {
+                Icon(
+                    icon,
+                    contentDescription = null,
+                    modifier = Modifier.scale(scale),
+                    tint = Color.White
+                )
+            }
+        },
+        enableDismissFromStartToEnd = true,
+        enableDismissFromEndToStart = enableCancel
+    ) {
+        TodoItem(
+            todo = todo,
+            onToggleComplete = onToggleComplete,
+            onClick = onClick
+        )
     }
 }
 
 @Composable
 fun PriorityBadge(priority: String, modifier: Modifier = Modifier) {
+    val priorityColors = LocalPriorityColors.current
     val (color, label) = when (priority.lowercase()) {
-        "high" -> Pair(Color(0xFFE53935), "H")
-        "medium" -> Pair(Color(0xFFFB8C00), "M")
-        "low" -> Pair(Color(0xFF43A047), "L")
-        else -> Pair(Color.Gray, "?")
+        "high" -> Pair(priorityColors.high, "H")
+        "medium" -> Pair(priorityColors.medium, "M")
+        "low" -> Pair(priorityColors.low, "L")
+        else -> Pair(priorityColors.none, "?")
     }
 
     Box(
@@ -439,22 +363,6 @@ fun TagChip(tag: String, modifier: Modifier = Modifier) {
     }
 }
 
-/**
- * Parse tags from JSON array string
- */
-private fun parseTags(tagsJson: String?): List<String> {
-    if (tagsJson.isNullOrBlank() || tagsJson == "null") return emptyList()
-    return try {
-        val type = object : TypeToken<List<String>>() {}.type
-        Gson().fromJson(tagsJson, type) ?: emptyList()
-    } catch (e: Exception) {
-        emptyList()
-    }
-}
-
-/**
- * Parse location name from JSON object string
- */
 private fun parseLocationName(locationJson: String): String? {
     return try {
         val type = object : TypeToken<Map<String, Any?>>() {}.type
@@ -462,16 +370,5 @@ private fun parseLocationName(locationJson: String): String? {
         map["name"] as? String
     } catch (e: Exception) {
         null
-    }
-}
-
-/**
- * Format duration in minutes to human readable string
- */
-private fun formatDuration(minutes: Int): String {
-    return when {
-        minutes < 60 -> "${minutes}m"
-        minutes % 60 == 0 -> "${minutes / 60}h"
-        else -> "${minutes / 60}h ${minutes % 60}m"
     }
 }
