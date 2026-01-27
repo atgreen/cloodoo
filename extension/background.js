@@ -3,17 +3,10 @@
 // Copyright (C) 2026 Anthony Green <green@moxielogic.com>
 
 const NATIVE_HOST_NAME = 'com.cloodoo.native';
-const DEFAULT_SERVER_URL = 'http://127.0.0.1:9876';
 const PENDING_TODOS_KEY = 'pendingTodos';
 
 // Track if native messaging is available
 let nativeMessagingAvailable = null;
-
-// Get server URL from storage (for HTTP fallback)
-async function getServerUrl() {
-  const result = await chrome.storage.sync.get(['serverUrl']);
-  return result.serverUrl || DEFAULT_SERVER_URL;
-}
 
 // Get pending TODOs from local storage
 async function getPendingTodos() {
@@ -78,30 +71,10 @@ async function checkNativeMessaging() {
   }
 }
 
-// Check if HTTP server is healthy
-async function checkServerHealth() {
-  try {
-    const serverUrl = await getServerUrl();
-    const response = await fetch(`${serverUrl}/api/health`, {
-      method: 'GET',
-      headers: { 'Accept': 'application/json' }
-    });
-    return response.ok;
-  } catch (error) {
-    return false;
-  }
-}
-
-// Check overall health (native or HTTP)
+// Check health via native messaging
 async function checkHealth() {
-  // First check native messaging
   const nativeAvailable = await checkNativeMessaging();
-  if (nativeAvailable) {
-    return { healthy: true, method: 'native' };
-  }
-  // Fall back to HTTP
-  const httpHealthy = await checkServerHealth();
-  return { healthy: httpHealthy, method: httpHealthy ? 'http' : 'none' };
+  return { healthy: nativeAvailable, method: nativeAvailable ? 'native' : 'none' };
 }
 
 // Create a TODO via native messaging
@@ -119,78 +92,33 @@ async function createTodoNative(todoData) {
   }
 }
 
-// Create a TODO via HTTP API
-async function createTodoHttp(todoData) {
-  const serverUrl = await getServerUrl();
-  const response = await fetch(`${serverUrl}/api/todos`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Accept': 'application/json'
-    },
-    body: JSON.stringify(todoData)
-  });
-
-  if (!response.ok) {
-    throw new Error(`Server error: ${response.status}`);
-  }
-
-  return { success: true, todo: await response.json() };
-}
-
-// Try to create a TODO - uses native messaging, then HTTP, then stores locally
+// Try to create a TODO - uses native messaging, falls back to local queue
 async function createTodo(todoData) {
   console.log('createTodo called with:', todoData);
-  // Try native messaging first
   const nativeAvailable = await checkNativeMessaging();
-  console.log('nativeAvailable:', nativeAvailable);
   if (nativeAvailable) {
     try {
-      console.log('Trying native messaging...');
       const result = await createTodoNative(todoData);
       console.log('Native messaging succeeded:', result);
       return { success: true, todo: result.todo, synced: true, method: 'native' };
     } catch (error) {
-      console.log('Native messaging failed, trying HTTP:', error.message);
+      console.log('Native messaging failed, storing locally:', error.message);
     }
   }
 
-  // Try HTTP fallback
-  const httpHealthy = await checkServerHealth();
-  if (httpHealthy) {
-    try {
-      const result = await createTodoHttp(todoData);
-      return { success: true, todo: result.todo, synced: true, method: 'http' };
-    } catch (error) {
-      console.log('HTTP failed, storing locally:', error.message);
-    }
-  }
-
-  // Store locally as last resort
+  // Store locally when native messaging is unavailable
   const pendingTodo = await addPendingTodo(todoData);
   return { success: true, todo: pendingTodo, synced: false, pending: true };
 }
 
-// Sync a single pending TODO
+// Sync a single pending TODO via native messaging
 async function syncOneTodo(todo) {
   const { _pendingId, _createdAt, ...todoData } = todo;
 
-  // Try native first
   const nativeAvailable = await checkNativeMessaging();
   if (nativeAvailable) {
     try {
       await createTodoNative(todoData);
-      return true;
-    } catch (error) {
-      // Continue to HTTP fallback
-    }
-  }
-
-  // Try HTTP
-  const httpHealthy = await checkServerHealth();
-  if (httpHealthy) {
-    try {
-      await createTodoHttp(todoData);
       return true;
     } catch (error) {
       return false;
@@ -241,13 +169,6 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       .catch(error => {
         sendResponse({ success: false, error: error.message });
       });
-    return true;
-  }
-
-  if (request.action === 'getServerUrl') {
-    getServerUrl().then(url => {
-      sendResponse({ url });
-    });
     return true;
   }
 
