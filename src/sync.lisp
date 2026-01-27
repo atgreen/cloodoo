@@ -542,14 +542,11 @@
            ;; Server rejected connection
            (progn
              (llog:error "Server rejected connection" :error error-msg)
-             (format t "~&Sync error: ~A~%" error-msg)
              (update-sync-status :error error-msg)
              (setf *sync-client-running* nil))
            ;; Connection accepted
            (progn
              (llog:info "Sync connected" :server-time server-time :pending pending)
-             (format t "~&Sync connected. Server time: ~A, pending changes: ~D~%"
-                     server-time pending)
              (update-sync-status :connected)
              (when *sync-model-ref*
                (setf (model-sync-pending-count *sync-model-ref*) pending))))))
