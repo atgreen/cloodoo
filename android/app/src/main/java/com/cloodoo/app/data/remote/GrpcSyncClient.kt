@@ -42,27 +42,22 @@ class GrpcSyncClient(
         Log.i(TAG, "Server port: $serverPort")
 
         val sslSocketFactory = certificateManager.createSslSocketFactory()
+            ?: throw IllegalStateException("Failed to create TLS credentials - certificate or CA may be missing")
 
-        val builder = OkHttpChannelBuilder.forAddress(serverAddress, serverPort)
+        Log.i(TAG, "Using TLS 1.3 with mTLS client certificate")
 
-        if (sslSocketFactory != null) {
-            Log.i(TAG, "Using TLS 1.3 with mTLS client certificate")
-            builder.sslSocketFactory(sslSocketFactory)
-                .tlsConnectionSpec(
-                    arrayOf("TLSv1.3"),
-                    arrayOf(
-                        "TLS_AES_128_GCM_SHA256",
-                        "TLS_AES_256_GCM_SHA384",
-                        "TLS_CHACHA20_POLY1305_SHA256"
-                    )
+        managedChannel = OkHttpChannelBuilder
+            .forAddress(serverAddress, serverPort)
+            .sslSocketFactory(sslSocketFactory)
+            .tlsConnectionSpec(
+                arrayOf("TLSv1.3"),
+                arrayOf(
+                    "TLS_AES_128_GCM_SHA256",
+                    "TLS_AES_256_GCM_SHA384",
+                    "TLS_CHACHA20_POLY1305_SHA256"
                 )
-                .hostnameVerifier { _, _ -> true }  // Server cert uses IP SANs
-        } else {
-            Log.w(TAG, "No TLS certificates available, using plaintext")
-            builder.usePlaintext()
-        }
-
-        managedChannel = builder
+            )
+            .hostnameVerifier { _, _ -> true }
             .keepAliveTime(30, TimeUnit.SECONDS)
             .keepAliveTimeout(10, TimeUnit.SECONDS)
             .keepAliveWithoutCalls(true)

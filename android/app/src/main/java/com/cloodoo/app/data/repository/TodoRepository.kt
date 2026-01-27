@@ -60,6 +60,7 @@ class TodoRepository(
         priority: String? = null,
         status: String? = null,
         dueDate: String? = null,
+        scheduledDate: String? = null,
         tags: String? = null,
         completedAt: String? = null
     ) {
@@ -70,14 +71,16 @@ class TodoRepository(
         todoDao.markSuperseded(todoId, now)
 
         // Insert new version
+        // Convention: null = keep current, "" = clear (set to null), other = set value
         val updated = current.copy(
             rowId = 0,  // Let Room auto-generate
             title = title ?: current.title,
             description = description ?: current.description,
             priority = priority ?: current.priority,
             status = status ?: current.status,
-            dueDate = dueDate ?: current.dueDate,
-            tags = tags ?: current.tags,
+            dueDate = when (dueDate) { null -> current.dueDate; "" -> null; else -> dueDate },
+            scheduledDate = when (scheduledDate) { null -> current.scheduledDate; "" -> null; else -> scheduledDate },
+            tags = when (tags) { null -> current.tags; "" -> null; else -> tags },
             completedAt = completedAt ?: current.completedAt,
             validFrom = now,
             validTo = null,

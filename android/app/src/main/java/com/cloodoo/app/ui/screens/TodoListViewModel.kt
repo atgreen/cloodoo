@@ -181,6 +181,16 @@ class TodoListViewModel(
         }
     }
 
+    fun updateTodo(todoId: String, dueDate: String? = null, scheduledDate: String? = null, tags: String? = null) {
+        viewModelScope.launch {
+            repository.updateTodo(todoId, dueDate = dueDate, scheduledDate = scheduledDate, tags = tags)
+            val updated = database.todoDao().getCurrentById(todoId)
+            if (updated != null) {
+                syncManager.sendTodoUpsert(updated)
+            }
+        }
+    }
+
     fun clearSyncMessage() {
         _uiState.update { it.copy(lastSyncResult = null, syncError = null) }
     }

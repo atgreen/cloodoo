@@ -134,9 +134,8 @@ fun TodoItem(
                         overflow = TextOverflow.Ellipsis
                     )
 
-                    // Metadata row: due date, time estimate, location
+                    // Metadata row: due date, location
                     val hasMetadata = todo.dueDate != null ||
-                                      todo.estimatedMinutes != null ||
                                       todo.locationInfo != null
 
                     if (hasMetadata && !isCompleted) {
@@ -148,16 +147,6 @@ fun TodoItem(
                             // Due date chip
                             todo.dueDate?.let { dateStr ->
                                 DueDateChip(dateStr = dateStr)
-                            }
-
-                            // Estimated time
-                            todo.estimatedMinutes?.let { minutes ->
-                                if (minutes > 0) {
-                                    MetadataChip(
-                                        icon = Icons.Outlined.AccessTime,
-                                        text = formatDuration(minutes)
-                                    )
-                                }
                             }
 
                             // Location indicator
