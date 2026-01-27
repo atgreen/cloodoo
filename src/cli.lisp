@@ -1296,10 +1296,16 @@ URL format: http://HOST:PORT/pair/TOKEN"
       ((or (search "linux" (string-downcase os))
            (eq os :linux))
        (let ((chrome-dir (merge-pathnames ".config/google-chrome/NativeMessagingHosts/" home))
+             (chrome-beta-dir (merge-pathnames ".config/google-chrome-beta/NativeMessagingHosts/" home))
+             (chrome-unstable-dir (merge-pathnames ".config/google-chrome-unstable/NativeMessagingHosts/" home))
              (chromium-dir (merge-pathnames ".config/chromium/NativeMessagingHosts/" home))
              (firefox-dir (merge-pathnames ".mozilla/native-messaging-hosts/" home)))
          (when (probe-file (merge-pathnames ".config/google-chrome/" home))
            (push (list "Google Chrome" chrome-dir :chrome) dirs))
+         (when (probe-file (merge-pathnames ".config/google-chrome-beta/" home))
+           (push (list "Google Chrome Beta" chrome-beta-dir :chrome) dirs))
+         (when (probe-file (merge-pathnames ".config/google-chrome-unstable/" home))
+           (push (list "Google Chrome Unstable" chrome-unstable-dir :chrome) dirs))
          (when (probe-file (merge-pathnames ".config/chromium/" home))
            (push (list "Chromium" chromium-dir :chrome) dirs))
          (when (probe-file (merge-pathnames ".mozilla/" home))
@@ -1313,6 +1319,18 @@ URL format: http://HOST:PORT/pair/TOKEN"
            (search "macos" (string-downcase os)))
        (push (list "Google Chrome"
                    (merge-pathnames "Library/Application Support/Google/Chrome/NativeMessagingHosts/" home)
+                   :chrome)
+             dirs)
+       (push (list "Google Chrome Beta"
+                   (merge-pathnames "Library/Application Support/Google/Chrome Beta/NativeMessagingHosts/" home)
+                   :chrome)
+             dirs)
+       (push (list "Google Chrome Dev"
+                   (merge-pathnames "Library/Application Support/Google/Chrome Dev/NativeMessagingHosts/" home)
+                   :chrome)
+             dirs)
+       (push (list "Chromium"
+                   (merge-pathnames "Library/Application Support/Chromium/NativeMessagingHosts/" home)
                    :chrome)
              dirs)
        (push (list "Firefox"
@@ -1367,7 +1385,8 @@ URL format: http://HOST:PORT/pair/TOKEN"
                            :short-name #\e
                            :long-name "extension-id"
                            :key :extension-id
-                           :description "Chrome extension ID (optional, allows any extension if not specified)")))
+                           :description "Chrome extension ID (find at chrome://extensions with Developer mode on)"
+                           :required t)))
     (clingon:make-command
      :name "setup-extension"
      :aliases '("install-native-host")
@@ -1399,9 +1418,7 @@ URL format: http://HOST:PORT/pair/TOKEN"
                           (case manifest-type
                             (:chrome
                              (setf (gethash "allowed_origins" manifest)
-                                   (if extension-id
-                                       (vector (format nil "chrome-extension://~A/" extension-id))
-                                       (vector "chrome-extension://*/"))))
+                                   (vector (format nil "chrome-extension://~A/" extension-id))))
                             (:firefox
                              (setf (gethash "allowed_extensions" manifest)
                                    (vector "cloodoo@moxielogic.com"))))
@@ -1417,6 +1434,7 @@ URL format: http://HOST:PORT/pair/TOKEN"
                   (format t "~%Wrapper script: ~A~%" (merge-pathnames wrapper-name
                                                         (second (first browser-dirs))))
                   (format t "Cloodoo path:   ~A~%" cloodoo-exe)
+                  (format t "Extension ID:   ~A~%" extension-id)
                   (format t "~%Installed for ~D browser~:P.~%" installed-count)
                   ;; Windows-specific instructions
                   (when is-windows
@@ -1426,11 +1444,7 @@ URL format: http://HOST:PORT/pair/TOKEN"
                     (format t "  REG ADD \"HKCU\\Software\\Google\\Chrome\\NativeMessagingHosts\\com.cloodoo.native\" /ve /t REG_SZ /d \"~A\" /f~%~%"
                            (namestring (merge-pathnames "com.cloodoo.native.json"
                                                         (second (first browser-dirs))))))
-                  ;; Remind about extension ID
-                  (unless extension-id
-                    (format t "~%~A Chrome/Chromium manifest allows any extension origin.~%"
-                           (tui:colored "!" :fg tui:*fg-yellow*))
-                    (format t "For production, re-run with --extension-id YOUR_EXTENSION_ID~%")))))))
+                  (format t "~%Restart your browser for changes to take effect.~%"))))))
 
 (defun make-app ()
   "Create and return the command-line application."
