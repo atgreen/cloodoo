@@ -68,6 +68,68 @@ Mark a task done:
 ./cloodoo done groceries
 ```
 
+## How cloodoo works
+
+Cloodoo can run in two ways: **standalone** on a single machine, or
+with a **sync server** that keeps multiple devices in sync.
+
+### Standalone (single machine)
+
+Just run `./cloodoo`. It stores your tasks in a local SQLite database
+and that's it -- no server, no network, no setup. The TUI, the CLI
+commands, and the browser extension all read and write the same local
+database.
+
+This is the default. If you only use one computer and don't need your
+tasks on your phone, standalone mode is all you need.
+
+### With a sync server (multiple devices)
+
+If you want your tasks on more than one device, you run a sync server.
+The sync server is just another `cloodoo` command:
+
+```sh
+./cloodoo cert init       # create a certificate authority (once)
+./cloodoo sync-server     # start the sync server
+```
+
+The sync server uses gRPC with mutual TLS, so every device needs a
+certificate. You issue one with `./cloodoo cert issue my-phone`,
+which prints a QR code the other device can scan.
+
+Once the sync server is running:
+
+- **The TUI** on other machines can connect to it. If a machine has
+  been paired, the TUI connects automatically on startup.
+- **The Android app** connects to the sync server after scanning the
+  QR code. It keeps a local copy of your tasks and syncs changes in
+  real time. If you're offline, changes queue up and sync when you
+  reconnect.
+- Changes made on any device are broadcast to all other connected
+  devices immediately.
+
+### Where the browser extension fits in
+
+The browser extension works by talking to the `cloodoo` executable on
+your machine through the browser's native messaging protocol -- it
+does not make network connections to any server. When you capture a
+task from an email, the extension sends it to the local `cloodoo`
+process, which writes it to your local database.
+
+This means the extension works the same way regardless of whether you
+are running a sync server or not:
+
+- **Without a sync server**: the task goes into your local database
+  and shows up in your TUI.
+- **With a sync server**: the task goes into your local database and,
+  because your TUI is connected to the sync server, it syncs to your
+  other devices automatically.
+
+If native messaging isn't set up yet (you haven't run
+`./cloodoo setup-extension`), the extension queues tasks locally in
+the browser and retries periodically until the native host is
+available.
+
 ## TUI keybindings
 
 Press `?` in the TUI for the full help overlay.
