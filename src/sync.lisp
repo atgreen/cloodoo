@@ -470,10 +470,15 @@
         ;; Cleanup before retry
         (cleanup-sync-client)
 
-        ;; Sleep with backoff before retrying (unless told to stop)
+        ;; Sleep with backoff before retrying (unless told to stop).
+        ;; Sleep in short increments so stop-sync-client isn't blocked.
         (when *sync-client-running*
           (llog:info "Reconnecting in ~Ds" :delay backoff-delay)
-          (sleep backoff-delay)
+          (let ((remaining backoff-delay))
+            (loop while (and *sync-client-running* (> remaining 0))
+                  do (let ((step (min 0.5 remaining)))
+                       (sleep step)
+                       (decf remaining step))))
           (setf backoff-delay (min (* backoff-delay 2) max-backoff))))))
   (llog:info "Sync connector loop exited"))
 
@@ -486,10 +491,18 @@
   (setf *todo-change-hook* nil)
   (setf *todo-delete-hook* nil)
 
-  ;; Close channel FIRST to unblock the receive thread
+  ;; Close channel to unblock stream-read-message
   (cleanup-sync-client)
 
-  ;; Now wait for receive thread to finish (should exit quickly after channel close)
+  ;; Interrupt the thread to break out of sleep or make-channel
+  (when (and *sync-client-thread* (bt:thread-alive-p *sync-client-thread*))
+    (handler-case
+        (bt:interrupt-thread *sync-client-thread*
+                             (lambda () (error "sync client shutting down")))
+      (error (e)
+        (llog:warn "Error interrupting sync thread" :error (princ-to-string e)))))
+
+  ;; Wait for the thread to finish
   (when (and *sync-client-thread* (bt:thread-alive-p *sync-client-thread*))
     (handler-case
         (bt:join-thread *sync-client-thread*)
