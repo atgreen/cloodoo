@@ -41,37 +41,37 @@
       ;; Suppress poll warnings from SBCL when terminal resizes
       #+sbcl
       (handler-bind ((warning #'muffle-warning))
-        (let* ((model (make-initial-model)))
+        (let* ((model (make-initial-model))
+               (program (tui:make-program model :alt-screen t :mouse :cell-motion)))
           (if sync-host
               ;; Auto-connect to paired sync server
               (let ((cert-path (namestring (paired-client-cert-file sync-server-id)))
                     (key-path (namestring (paired-client-key-file sync-server-id))))
                 (start-sync-client sync-host sync-port
                                    :model model
+                                   :program program
                                    :client-certificate cert-path
                                    :client-key key-path)
                 (unwind-protect
-                     (let ((program (tui:make-program model :alt-screen t :mouse :cell-motion)))
-                       (tui:run program))
+                     (tui:run program)
                   (stop-sync-client)))
               ;; No sync config — run TUI without sync
-              (let ((program (tui:make-program model :alt-screen t :mouse :cell-motion)))
-                (tui:run program)))))
+              (tui:run program))))
       #-sbcl
-      (let* ((model (make-initial-model)))
+      (let* ((model (make-initial-model))
+             (program (tui:make-program model :alt-screen t :mouse :cell-motion)))
         (if sync-host
             (let ((cert-path (namestring (paired-client-cert-file sync-server-id)))
                   (key-path (namestring (paired-client-key-file sync-server-id))))
               (start-sync-client sync-host sync-port
                                  :model model
+                                 :program program
                                  :client-certificate cert-path
                                  :client-key key-path)
               (unwind-protect
-                   (let ((program (tui:make-program model :alt-screen t :mouse :cell-motion)))
-                     (tui:run program))
+                   (tui:run program)
                 (stop-sync-client)))
-            (let ((program (tui:make-program model :alt-screen t :mouse :cell-motion)))
-              (tui:run program)))))))
+            (tui:run program))))))
 
 ;;── Entry Point ────────────────────────────────────────────────────────────────
 

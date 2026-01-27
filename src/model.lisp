@@ -247,3 +247,9 @@
           (:month (lt:timestamp+ base interval :month))
           (:year (lt:timestamp+ base interval :year))
           (otherwise nil))))))
+
+;;── Sync Refresh Message ──────────────────────────────────────────────────────
+
+(tui:defmessage sync-refresh-msg ()
+  :print-name sync-refresh
+  :documentation "Message sent to trigger a TUI redraw after sync data arrives.")

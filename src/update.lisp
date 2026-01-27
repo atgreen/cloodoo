@@ -2174,6 +2174,10 @@
   (setf (model-term-height model) (tui:window-size-msg-height msg))
   (values model nil))
 
+(defmethod tui:update-message ((model app-model) (msg sync-refresh-msg))
+  "Handle sync refresh - model already updated, just trigger redraw."
+  (values model nil))
+
 (defmethod tui:update-message ((model app-model) (msg tui:mouse-scroll-event))
   "Handle mouse scroll by scrolling the viewport."
   (when (eq (model-view-state model) :list)

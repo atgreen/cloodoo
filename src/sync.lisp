@@ -344,6 +344,14 @@
 (defvar *sync-model-ref* nil
   "Reference to the app model for updating sync status.")
 
+(defvar *sync-program-ref* nil
+  "Reference to the TUI program for triggering redraws after sync updates.")
+
+(defun notify-tui-refresh ()
+  "Send a sync-refresh message to the TUI program to trigger a redraw."
+  (when *sync-program-ref*
+    (tui:send *sync-program-ref* (make-instance 'sync-refresh-msg))))
+
 ;;── Sync Client Status ────────────────────────────────────────────────────────
 
 (defun sync-client-connected-p ()
@@ -357,20 +365,23 @@
   (when *sync-model-ref*
     (setf (model-sync-status *sync-model-ref*) status)
     (when error-msg
-      (setf (model-sync-error-message *sync-model-ref*) error-msg))))
+      (setf (model-sync-error-message *sync-model-ref*) error-msg))
+    (notify-tui-refresh)))
 
 ;;── Sync Client Connection ────────────────────────────────────────────────────
 
-(defun start-sync-client (host port &key model client-certificate client-key)
+(defun start-sync-client (host port &key model program client-certificate client-key)
   "Connect to a remote sync server as a client.
    HOST is the server address, PORT is the gRPC port.
    MODEL is optional app-model to update with sync status.
+   PROGRAM is optional TUI program for triggering redraws.
    CLIENT-CERTIFICATE - Path to client certificate for mTLS.
    CLIENT-KEY - Path to client private key for mTLS."
   (when *sync-client-channel*
     (stop-sync-client))
 
   (setf *sync-model-ref* model)
+  (setf *sync-program-ref* program)
   (update-sync-status :connecting)
 
   (when model
@@ -444,7 +455,8 @@
   (setf *sync-client-thread* nil)
 
   (update-sync-status :disconnected)
-  (setf *sync-model-ref* nil))
+  (setf *sync-model-ref* nil)
+  (setf *sync-program-ref* nil))
 
 (defun cleanup-sync-client ()
   "Clean up sync client resources (channel and stream)."
@@ -537,7 +549,8 @@
 (defun refresh-model-todos (model)
   "Refresh the model's todo list from the database."
   (setf (model-todos model) (load-todos))
-  (setf (model-visible-todos-dirty model) t))
+  (setf (model-visible-todos-dirty model) t)
+  (notify-tui-refresh))
 
 ;;── Send Changes to Server ────────────────────────────────────────────────────
 
