@@ -1,226 +1,349 @@
 # Cloodoo
 
-A personal TODO system with a modern TUI (Text User Interface), multi-device sync, and an Android companion app.
+A personal TODO system with a terminal UI, real-time multi-device sync,
+an Android companion app, and a browser extension for capturing tasks
+from email.
+
+Written in Common Lisp. Built on SQLite with temporal versioning,
+gRPC bidirectional streaming with mTLS, and optional LLM enrichment.
 
 ## Features
 
-- **Modern TUI** - Full-featured terminal interface with mouse support, collapsible trees, and rich formatting
-- **Hierarchical tasks** - Organize tasks as parent/child trees with unlimited nesting
-- **Smart scheduling** - Due dates, scheduled dates, and automatic priority sorting
-- **Tags & filtering** - Organize with tags, filter by status, search by text
-- **AI enrichment** - Optional AI-powered task analysis and suggestions (requires OpenAI API key)
-- **Multi-device sync** - Sync across devices via gRPC over Tailscale
-- **Android app** - Companion Android app with bidirectional sync
-- **Browser extension** - Native messaging support for browser integration
-- **Org-mode import** - Import tasks from Emacs org-mode files
+- **Terminal UI** with vim-style navigation, mouse support, hierarchical
+  tasks, inline editing, tag sidebar, calendar date picker, and
+  collapsible subtrees
+- **Real-time sync** across devices via gRPC bidirectional streaming
+  with mutual TLS authentication
+- **Android app** (Jetpack Compose, Material 3) with offline sync
+  queue, QR code pairing, and background reconnect
+- **Browser extension** (Manifest V3) that extracts TODO context from
+  Gmail, Outlook, Yahoo Mail, ProtonMail, and Zoho Mail
+- **AI enrichment** via Gemini, OpenAI, Anthropic, or local Ollama --
+  auto-fills descriptions, tags, priorities, and time estimates
+- **REST API** for programmatic access and the browser extension
+- **Certificate management** with a built-in CA, device pairing via QR
+  codes, and certificate revocation
+- **Temporal database** -- every change creates a new version; nothing
+  is overwritten
+- **Org-mode import** -- bring tasks in from Emacs
 
-## Installation
+## Building
 
-### Prerequisites
-
-- [SBCL](http://www.sbcl.org/) (Steel Bank Common Lisp)
-- [ocicl](https://github.com/ocicl/ocicl) (Common Lisp package manager)
-
-### Building
+Requires [SBCL](http://www.sbcl.org/) and
+[ocicl](https://github.com/ocicl/ocicl) for Common Lisp dependencies.
 
 ```sh
-# Clone the repository
 git clone https://github.com/atgreen/cloodoo.git
 cd cloodoo
-
-# Install dependencies
 ocicl install
-
-# Build the binary
 make
 ```
 
-### Running
+This produces a `cloodoo` executable in the project root.
+
+## Quick start
+
+Launch the TUI:
 
 ```sh
-# Run the TUI
 ./cloodoo
-
-# Or run directly with SBCL
-sbcl --eval "(asdf:load-system :cloodoo)" \
-     --eval "(cloodoo:main)" \
-     --quit
 ```
 
-## TUI Keyboard Shortcuts
+Add a task from the command line:
 
-Press `?` in the TUI to see the full help overlay.
+```sh
+./cloodoo add "Buy groceries" --priority high --due 2026-02-01 --tag errands
+```
+
+List tasks:
+
+```sh
+./cloodoo list
+./cloodoo list --status pending --priority high
+```
+
+Mark a task done:
+
+```sh
+./cloodoo done groceries
+```
+
+## TUI keybindings
+
+Press `?` in the TUI for the full help overlay.
 
 ### Navigation
+
 | Key | Action |
-|-----|--------|
-| `j`/`k` or `↑`/`↓` | Navigate up/down |
-| `g`/`G` | Jump to first/last item |
-| `PgUp`/`PgDn` | Page up/down |
-| `Enter` | View item details |
+|---|---|
+| `j` / `k` / Arrow keys | Move down / up |
+| `g` / `G` | Jump to first / last item |
+| `PgUp` / `PgDn` | Page up / down |
+| `Enter` | View details |
 | `Esc` | Go back / cancel |
 
-### Task Management
+### Task management
+
 | Key | Action |
-|-----|--------|
-| `a` | Add new task |
+|---|---|
+| `a` | Add sibling task |
 | `A` | Add child task |
 | `e` | Edit task |
-| `Space` | Cycle status (pending/in-progress/done) |
-| `Del` or `d` | Delete task |
-| `D` | Delete all completed tasks |
-| `B`/`C` | Set priority B/C |
-| `Shift+↑`/`↓` | Increase/decrease priority |
+| `Space` | Cycle status (pending / in-progress / completed / waiting / cancelled) |
+| `Del` / `d` | Delete task |
+| `D` | Delete all completed |
 
 ### Organization
-| Key | Action |
-|-----|--------|
-| `>` | Indent (make child of above) |
-| `<` | Outdent (move to parent level) |
-| `z` | Collapse/expand children |
-| `t` | Edit tags |
-| `/` | Search |
-| `f` | Filter by status |
-| `s` | Cycle sort order |
-| `c` | Clear all filters |
 
-### Dates
 | Key | Action |
-|-----|--------|
+|---|---|
+| `>` / `Tab` | Indent (make child) |
+| `<` / `Shift+Tab` | Outdent |
+| `z` | Collapse / expand children |
+| `Shift+Up` / `Shift+Down` | Increase / decrease priority |
+| `B` / `C` | Set priority to medium / low |
 | `S` | Set scheduled date |
-| `L` | Set due date (deadLine) |
+| `L` | Set due date |
+| `t` | Edit tags |
 
-In the datepicker:
+### Filtering and search
+
 | Key | Action |
-|-----|--------|
-| `h`/`j`/`k`/`l` | Navigate calendar |
-| `[`/`]` | Previous/next month |
-| `{`/`}` | Previous/next year |
+|---|---|
+| `/` | Search |
+| `f` | Cycle status filter |
+| `s` | Cycle sort order (priority / due date / created / title) |
+| `c` | Clear filters |
+| `l` | Toggle tag sidebar |
+| `r` | Refresh from database |
+
+### Date picker
+
+| Key | Action |
+|---|---|
+| `h` / `j` / `k` / `l` | Navigate calendar |
+| `[` / `]` | Previous / next month |
+| `{` / `}` | Previous / next year |
 | `Home` | Jump to today |
 | `Del` | Clear date |
+| `Enter` | Confirm |
 
-### Sidebar
+### Tag sidebar
+
 | Key | Action |
-|-----|--------|
-| `l` | Toggle sidebar |
+|---|---|
 | `Tab` | Focus sidebar |
-| `j`/`k` | Navigate tags (when focused) |
+| `j` / `k` | Navigate tags |
 | `Space` | Toggle tag filter |
 | `a` | Select all tags |
+| `1`-`9`, `0` | Preset tag combinations |
 
 ### Other
+
 | Key | Action |
-|-----|--------|
-| `i` | Import from org-mode file |
-| `u` | Edit user context (for AI) |
+|---|---|
 | `&` | Re-run AI enrichment |
-| `?` | Show help |
+| `u` | Edit user context (`$EDITOR`) |
+| `i` | Import org-mode file |
+| `?` | Help |
 | `q` | Quit |
 
-## CLI Commands
+## CLI commands
 
-```sh
-# List all tasks
-cloodoo list
+```
+cloodoo                     Launch the TUI
+cloodoo add TITLE           Add a task (--priority, --due, --tag, --note)
+cloodoo list                List tasks (--status, --priority, --all)
+cloodoo done SEARCH         Mark a task completed
+cloodoo stats               Show counts and overdue tasks
 
-# Add a new task
-cloodoo add "Buy groceries" --tags "shopping,errands"
+cloodoo server              Start REST API (default localhost:9876)
+cloodoo sync-server         Start gRPC sync server (default 0.0.0.0:50051)
+cloodoo sync-connect        Connect TUI to a remote sync server
 
-# Mark task as done
-cloodoo done <task-id>
+cloodoo cert init           Initialize certificate authority
+cloodoo cert issue NAME     Issue client certificate (shows QR code)
+cloodoo cert list           List issued certificates
+cloodoo cert revoke NAME    Revoke a certificate
 
-# Show statistics
-cloodoo stats
+cloodoo enrich-pending      Process tasks awaiting AI enrichment
+cloodoo dump                Export database as SQL
+cloodoo compact             Remove old row versions
 
-# Database maintenance
-cloodoo dump           # Export to JSON
-cloodoo compact        # Compact database (remove deleted items)
-
-# AI enrichment
-cloodoo enrich-pending # Process tasks awaiting AI enrichment
+cloodoo native-host         Handle browser native messaging
+cloodoo install-native-host Install native messaging host config
 ```
 
-## Multi-Device Sync
+## Multi-device sync
 
-Cloodoo supports syncing across multiple devices using gRPC over Tailscale.
+Cloodoo syncs in real time over gRPC with mutual TLS.
 
-### Setup
-
-1. **Initialize certificates** (on the server):
-   ```sh
-   cloodoo cert init
-   ```
-
-2. **Issue client certificates**:
-   ```sh
-   cloodoo cert issue my-phone
-   cloodoo cert issue my-laptop
-   ```
-
-3. **Start the sync server**:
-   ```sh
-   cloodoo sync-server --host 0.0.0.0 --port 50051
-   ```
-
-4. **Connect from other devices**:
-   ```sh
-   cloodoo sync-connect --host <tailscale-ip> --port 50051
-   ```
-
-### Certificate Management
+### 1. Initialize the certificate authority
 
 ```sh
-cloodoo cert init              # Initialize CA
-cloodoo cert issue <name>      # Issue client certificate
-cloodoo cert list              # List issued certificates
-cloodoo cert revoke <name>     # Revoke certificate
+./cloodoo cert init
 ```
 
-## Android App
+### 2. Start the sync server
 
-The companion Android app provides full task management with bidirectional sync.
+```sh
+./cloodoo sync-server
+```
 
-### Features
-- View and manage all tasks
-- Create, edit, and complete tasks
-- Automatic sync over Tailscale
-- Material Design 3 UI
+Listens on port 50051 with mTLS by default.
 
-### Setup
+### 3. Pair a device
 
-1. Build the Android app from the `android/` directory
-2. Configure the sync server address in app settings
-3. Import client certificates (generated with `cloodoo cert issue`)
+On the server, issue a certificate and show a QR code:
+
+```sh
+./cloodoo cert issue my-phone
+```
+
+On the Android app, scan the QR code or enter the pairing URL and
+passphrase. The app stores the client certificate and connects
+automatically on future launches.
+
+The TUI also auto-connects on startup if a paired config exists.
+
+### 4. Manage certificates
+
+```sh
+./cloodoo cert list
+./cloodoo cert revoke my-old-laptop
+```
+
+## Android app
+
+The companion app lives in `android/`. Standard Gradle project using
+Jetpack Compose, Room, and gRPC.
+
+```sh
+cd android
+./gradlew assembleDebug
+```
+
+- Material Design 3 UI with todo list, priority badges, and due dates
+- QR code scanning for device pairing (ML Kit)
+- Offline sync queue -- changes made while disconnected are sent on
+  reconnect
+- Cleartext HTTP restricted to localhost and private IPs
+- Minimum SDK 26 (Android 8.0)
+
+## Browser extension
+
+The extension lives in `extension/`. Supports Chrome and Firefox
+(Manifest V3).
+
+### Install
+
+1. Load as an unpacked extension from the `extension/` directory
+2. Install the native messaging host:
+   ```sh
+   ./cloodoo install-native-host
+   ```
+
+### Supported email services
+
+- Gmail -- including a toolbar quick-add button
+- Outlook (live.com, office.com, office365.com)
+- Yahoo Mail
+- ProtonMail
+- Zoho Mail
+
+The extension extracts email subject, sender, date, and body snippet to
+pre-fill the TODO form. Tasks can be created even when offline and will
+sync when the server becomes available.
+
+## REST API
+
+Start the HTTP server:
+
+```sh
+./cloodoo server                  # localhost:9876
+./cloodoo server --port 8080      # custom port
+```
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/api/health` | Health check |
+| `GET` | `/api/todos` | List all current tasks |
+| `POST` | `/api/todos` | Create a task |
+| `GET` | `/api/device` | Device ID and server time |
+| `GET` | `/api/sync?since=TS` | Changes since timestamp |
+| `POST` | `/api/sync` | Merge remote changes |
+| `GET` | `/pair/:token` | Pairing request info |
+| `POST` | `/pair/:token/pem` | Download certificates (passphrase required) |
+
+## AI enrichment
+
+Set one of these environment variables (or add to `.env`):
+
+| Provider | Variable | Default model |
+|---|---|---|
+| Gemini | `GEMINI_API_KEY` | `gemini-2.0-flash` |
+| OpenAI | `OPENAI_API_KEY` | `gpt-4o-mini` |
+| Anthropic | `ANTHROPIC_API_KEY` | `claude-sonnet-4-20250514` |
+| Ollama | *(none -- local)* | `llama3.2:latest` |
+
+Enrichment runs automatically for new tasks or on demand with `&` in
+the TUI. You can also process the queue from the CLI:
+
+```sh
+./cloodoo enrich-pending
+```
+
+Press `u` in the TUI to edit a user context file
+(`~/.config/cloodoo/user-context.md`) that gives the LLM background
+about you -- location, work context, preferences -- so enrichment
+results are more relevant.
 
 ## Configuration
 
-Cloodoo follows the XDG Base Directory specification:
+Cloodoo follows the XDG Base Directory spec:
 
-- **Data**: `~/.local/share/cloodoo/`
-  - `cloodoo.db` - SQLite database
-  - `ca/` - Certificate authority files
+| Directory | Contents |
+|---|---|
+| `~/.local/share/cloodoo/` | SQLite database, certificates, blobs |
+| `~/.config/cloodoo/` | `config.lisp`, `user-context.md`, sync pairing |
+| `~/.cache/cloodoo/` | Temporary files |
 
-- **Config**: `~/.config/cloodoo/`
-  - `user-context.md` - User context for AI enrichment
+## Database
 
-- **Cache**: `~/.cache/cloodoo/`
-  - Temporary files
+SQLite with temporal versioning. Every update creates a new row with a
+`valid_from` timestamp; the previous row gets a `valid_to`. Current
+state is always `WHERE valid_to IS NULL`.
 
-### Environment Variables
+```sh
+./cloodoo dump       # Export as SQL
+./cloodoo compact    # Remove old versions to reclaim space
+./cloodoo stats      # Counts, overdue tasks, priorities
+```
 
-| Variable | Description |
-|----------|-------------|
-| `OPENAI_API_KEY` | OpenAI API key for AI enrichment |
-| `EDITOR` | Preferred text editor for editing notes |
+## Project layout
 
-## Data Storage
+```
+src/
+  package.lisp       Package definition
+  model.lisp         Todo data model
+  db.lisp            SQLite with temporal versioning
+  storage.lisp       File-based persistence and XDG paths
+  enrich.lisp        LLM enrichment (Gemini, OpenAI, Anthropic, Ollama)
+  view.lisp          TUI rendering
+  components.lisp    Reusable UI components
+  update.lisp        TUI event handling and keybindings
+  server.lisp        REST API (Hunchentoot)
+  sync.lisp          gRPC bidirectional sync server and client
+  grpc-proto.lisp    Protocol buffer definitions
+  certs.lisp         Certificate authority and mTLS
+  cli.lisp           CLI commands (clingon)
+  main.lisp          Entry point
+android/             Jetpack Compose companion app
+extension/           Browser extension (Manifest V3)
+cloodoo.asd          ASDF system definition
+Makefile             Build script
+```
 
-Cloodoo uses SQLite for persistent storage with the following features:
+## License
 
-- **Soft delete** - Deleted items are marked, not removed (until compaction)
-- **Timestamps** - Created/modified times for sync conflict resolution
-- **Device tracking** - Each device has a unique ID for sync
-
-## Author and License
-
-Cloodoo was written by Anthony Green and is distributed under the terms of the MIT license.
+MIT -- Copyright (C) 2026 Anthony Green
