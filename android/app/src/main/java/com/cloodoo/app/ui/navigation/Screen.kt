@@ -6,4 +6,5 @@ sealed class Screen(val route: String) {
     object Settings : Screen("settings")
     object AddTask : Screen("add_task")
     object Pairing : Screen("pairing")
+    object VoiceAdd : Screen("voice_add")
 }

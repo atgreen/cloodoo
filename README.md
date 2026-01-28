@@ -285,10 +285,11 @@ cd android
 ```
 
 - Material Design 3 UI with todo list, priority badges, and due dates
+- Speed dial FAB with voice input (on-device speech-to-text) and
+  form-based task creation
 - QR code scanning for device pairing (ML Kit)
 - Offline sync queue -- changes made while disconnected are sent on
   reconnect
-- Cleartext HTTP restricted to localhost and private IPs
 - Minimum SDK 26 (Android 8.0)
 
 ## Browser extension

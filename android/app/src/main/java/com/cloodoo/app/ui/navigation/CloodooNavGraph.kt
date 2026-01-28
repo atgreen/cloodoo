@@ -20,6 +20,7 @@ import androidx.navigation.compose.rememberNavController
 import com.cloodoo.app.data.remote.ConnectionState
 import com.cloodoo.app.data.security.CertificateManager
 import com.cloodoo.app.ui.components.ConfettiOverlay
+import com.cloodoo.app.ui.components.SpeedDialFab
 import com.cloodoo.app.ui.screens.*
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -138,15 +139,7 @@ fun CloodooApp() {
                         }
                     }
                 },
-                floatingActionButton = {
-                    if (showFab) {
-                        FloatingActionButton(
-                            onClick = { navController.navigate(Screen.AddTask.route) }
-                        ) {
-                            Icon(Icons.Default.Add, contentDescription = "Add Task")
-                        }
-                    }
-                },
+                floatingActionButton = {},
                 snackbarHost = { SnackbarHost(snackbarHostState) }
             ) { padding ->
                 NavHost(
@@ -173,7 +166,21 @@ fun CloodooApp() {
                             onNavigateBack = { navController.popBackStack() }
                         )
                     }
+                    composable(Screen.VoiceAdd.route) {
+                        VoiceAddScreen(
+                            viewModel = viewModel,
+                            onNavigateBack = { navController.popBackStack() }
+                        )
+                    }
                 }
+            }
+
+            // Speed dial FAB overlay
+            if (showFab) {
+                SpeedDialFab(
+                    onTypeClick = { navController.navigate(Screen.AddTask.route) },
+                    onSpeakClick = { navController.navigate(Screen.VoiceAdd.route) }
+                )
             }
 
             // Confetti overlay rendered above everything
