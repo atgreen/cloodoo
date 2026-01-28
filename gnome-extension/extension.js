@@ -88,8 +88,8 @@ export default class CloodooExtension extends Extension {
         });
     }
 
-    async _showDialog(screenshotPath) {
-        return new Promise((resolve) => {
+    async _showDialog(_screenshotPath) {
+        return new Promise(resolve => {
             // Use zenity for the dialog (simpler than creating custom GTK dialog)
             const argv = [
                 'zenity',
@@ -110,7 +110,7 @@ export default class CloodooExtension extends Extension {
 
                 proc.communicate_utf8_async(null, null, (proc, result) => {
                     try {
-                        const [, stdout, stderr] = proc.communicate_utf8_finish(result);
+                        const [, stdout, _stderr] = proc.communicate_utf8_finish(result);
 
                         if (!proc.get_successful()) {
                             resolve(null);  // User cancelled

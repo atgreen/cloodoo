@@ -3,7 +3,7 @@
   "name": "Cloodoo Screenshot Capture",
   "description": "Capture screenshots and create TODO items in cloodoo",
   "version": 1,
-  "shell-version": ["45", "46", "47"],
+  "shell-version": ["45", "46", "47", "48", "49"],
   "url": "https://github.com/atgreen/cloodoo",
   "settings-schema": "org.gnome.shell.extensions.cloodoo"
 }
