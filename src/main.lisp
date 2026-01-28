@@ -77,6 +77,8 @@
 
 (defun main ()
   "The main entrypoint."
+  ;; Set up SIGQUIT handler to dump thread stacks (like JVM Ctrl+\)
+  (setup-thread-dump-signal)
   (handler-bind ((error (lambda (e)
                           (format *error-output* "~%Error: ~A~%~%" e)
                           #+sbcl (sb-debug:print-backtrace :stream *error-output* :count 20)

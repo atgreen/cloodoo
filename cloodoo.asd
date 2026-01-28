@@ -44,6 +44,7 @@
                              (:file "view")
                              (:file "server")
                              (:file "sync")
+                             (:file "debug")
                              (:file "cli")
                              (:file "main"))))
   :build-operation "program-op"
