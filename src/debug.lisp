@@ -19,11 +19,20 @@
       (format stream "  Stack:~%")
       (handler-case
           #+sbcl
-          (let ((backtrace (sb-debug:list-backtrace thread)))
-            (loop for frame in backtrace
-                  for i from 0
-                  when (< i 30)  ; Limit to 30 frames
-                  do (format stream "    ~2D: ~A~%" i frame)))
+          (if (eq thread sb-thread:*current-thread*)
+              ;; Current thread - print directly
+              (sb-debug:print-backtrace :stream stream :count 30)
+              ;; Other thread - have it print its own backtrace
+              (progn
+                (sb-thread:interrupt-thread
+                 thread
+                 (lambda ()
+                   (handler-case
+                       (sb-debug:print-backtrace :stream stream :count 30)
+                     (error (e)
+                       (format stream "    Error in thread backtrace: ~A~%" e)))))
+                ;; Give it a moment to print
+                (sleep 0.05)))
           #-sbcl
           (format stream "    (backtrace not available on this implementation)~%")
         (error (e)
