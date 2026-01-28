@@ -66,10 +66,11 @@
     "river" "mountain" "forest" "desert" "ocean" "island" "valley" "plain")
   "Word list for generating memorable passphrases.")
 
-(defun generate-passphrase (&optional (word-count 3))
-  "Generate a memorable passphrase with WORD-COUNT words."
+(defun generate-passphrase (&optional (word-count 4))
+  "Generate a memorable passphrase with WORD-COUNT words using CSPRNG.
+   Default 4 words (~26 bits entropy from 72-word list)."
   (let ((words (loop repeat word-count
-                     collect (nth (random (length *passphrase-words*))
+                     collect (nth (secure-random (length *passphrase-words*))
                                   *passphrase-words*))))
     (format nil "~{~A~^-~}" words)))
 
@@ -356,10 +357,11 @@
   expires-at)
 
 (defun generate-pairing-token ()
-  "Generate a short, URL-safe pairing token."
+  "Generate a short, URL-safe pairing token using CSPRNG.
+   12 characters from a 31-char alphabet ≈ 59 bits of entropy."
   (let ((chars "abcdefghijkmnpqrstuvwxyz23456789"))  ; Avoid confusing chars
-    (coerce (loop repeat 8
-                  collect (char chars (random (length chars))))
+    (coerce (loop repeat 12
+                  collect (char chars (secure-random (length chars))))
             'string)))
 
 (defun create-pairing-request (device-name &key (expiry-minutes 10))

@@ -12,6 +12,29 @@
   "Return the path to the SQLite database file."
   (merge-pathnames "cloodoo.db" (data-directory)))
 
+;;── Cryptographically Secure Random ──────────────────────────────────────────
+
+(defun secure-random-bytes (n)
+  "Read N cryptographically random bytes from /dev/urandom."
+  (with-open-file (stream "/dev/urandom" :element-type '(unsigned-byte 8))
+    (let ((bytes (make-array n :element-type '(unsigned-byte 8))))
+      (read-sequence bytes stream)
+      bytes)))
+
+(defun secure-random (limit)
+  "Return a cryptographically random non-negative integer below LIMIT.
+   Uses /dev/urandom. Applies rejection sampling to avoid modulo bias."
+  (let* ((byte-count (max 1 (ceiling (integer-length limit) 8)))
+         (mask (1- (ash 1 (* byte-count 8)))))
+    (loop
+      (let* ((bytes (secure-random-bytes byte-count))
+             (value (loop for byte across bytes
+                          for shift from 0 by 8
+                          sum (ash byte shift))))
+        (let ((candidate (logand value mask)))
+          (when (< candidate limit)
+            (return candidate)))))))
+
 ;;── Device ID Management ─────────────────────────────────────────────────────
 
 (defvar *device-id* nil
@@ -22,13 +45,13 @@
   (merge-pathnames "device-id" (data-directory)))
 
 (defun generate-device-id ()
-  "Generate a new UUID for this device."
+  "Generate a new UUID v4 for this device using CSPRNG."
   (format nil "~8,'0X-~4,'0X-~4,'0X-~4,'0X-~12,'0X"
-          (random #xFFFFFFFF)
-          (random #xFFFF)
-          (logior #x4000 (random #x0FFF))  ; Version 4 UUID
-          (logior #x8000 (random #x3FFF))  ; Variant 1
-          (random #xFFFFFFFFFFFF)))
+          (secure-random #xFFFFFFFF)
+          (secure-random #xFFFF)
+          (logior #x4000 (secure-random #x0FFF))  ; Version 4 UUID
+          (logior #x8000 (secure-random #x3FFF))  ; Variant 1
+          (secure-random #xFFFFFFFFFFFF)))
 
 (defun load-device-id ()
   "Load or create the device ID for this machine."

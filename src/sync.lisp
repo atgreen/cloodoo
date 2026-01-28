@@ -20,6 +20,10 @@
 (defvar *clients-lock* (bt:make-lock "clients-lock")
   "Lock for synchronizing access to connected clients list.")
 
+(defvar *sync-debug* nil
+  "When true, emit verbose sync debug output to *standard-output*.
+   Do NOT enable in production -- debug output includes serialized message bytes.")
+
 ;;── Client Registration ───────────────────────────────────────────────────────
 
 (defun register-sync-client (stream device-id)
@@ -38,9 +42,13 @@
 
 (defun broadcast-change (change-msg &optional exclude-device-id)
   "Broadcast a change to all connected clients except the one specified.
-   CHANGE-MSG should be a proto-sync-message."
-  (bt:with-lock-held (*clients-lock*)
-    (dolist (entry *connected-clients*)
+   CHANGE-MSG should be a proto-sync-message.
+   Snapshots the client list under lock, then sends outside the lock
+   to avoid holding the lock during network I/O."
+  (let ((clients-snapshot
+          (bt:with-lock-held (*clients-lock*)
+            (copy-list *connected-clients*))))
+    (dolist (entry clients-snapshot)
       (destructuring-bind (device-id . stream) entry
         (when (or (null exclude-device-id)
                   (not (string= device-id exclude-device-id)))
@@ -55,18 +63,18 @@
   "Handler for bidirectional TodoSync.SyncStream RPC.
    CTX is the call context, STREAM is for sending/receiving messages."
   (declare (ignore ctx))
-  (format t "~&[SYNC-DEBUG] handle-sync-stream entered~%")
+  (when *sync-debug* (format t "~&[SYNC-DEBUG] handle-sync-stream entered~%"))
   (let ((client-device-id nil))
     (unwind-protect
          (block sync-handler
            ;; Read the first message which should be SyncInit
-           (format t "~&[SYNC-DEBUG] Waiting for init message...~%")
+           (when *sync-debug* (format t "~&[SYNC-DEBUG] Waiting for init message...~%"))
            (let ((init-msg (ag-grpc:stream-recv stream)))
              (unless init-msg
                (llog:warn "Client disconnected before sending init")
                (return-from sync-handler))
 
-             (format t "~&[SYNC-DEBUG] Got message, msg-case=~A~%" (proto-msg-case init-msg))
+             (when *sync-debug* (format t "~&[SYNC-DEBUG] Got message, msg-case=~A~%" (proto-msg-case init-msg)))
 
              ;; Verify it's a SyncInit message
              (unless (eq (proto-msg-case init-msg) :init)
@@ -78,8 +86,9 @@
                     (since (proto-init-since sync-init))
                     (client-time-str (proto-init-client-time sync-init)))
                (setf client-device-id device-id)
-               (format t "~&[SYNC-DEBUG] Init: device-id=~A since=~A client-time=~A~%"
-                       device-id since client-time-str)
+               (when *sync-debug*
+                 (format t "~&[SYNC-DEBUG] Init: device-id=~A since=~A client-time=~A~%"
+                         device-id since client-time-str))
 
                ;; Check clock skew if client sent its time
                (when (and client-time-str (plusp (length client-time-str)))
@@ -105,22 +114,22 @@
                                                             since
                                                             "1970-01-01T00:00:00Z")))
                       (pending-count (length rows)))
-                 (format t "~&[SYNC-DEBUG] Pending changes to send: ~D~%" pending-count)
+                 (when *sync-debug* (format t "~&[SYNC-DEBUG] Pending changes to send: ~D~%" pending-count))
 
                  ;; Send SyncAck
                  (let ((ack-msg (make-sync-ack-message (now-iso) pending-count)))
-                   (format t "~&[SYNC-DEBUG] Sending ACK (server-time=~A, pending=~D)~%"
-                           (now-iso) pending-count)
-                   (let ((ack-bytes (ag-proto:serialize-to-bytes ack-msg)))
-                     (format t "~&[SYNC-DEBUG] ACK serialized: ~D bytes: ~{~2,'0X ~}~%"
-                             (length ack-bytes)
-                             (coerce ack-bytes 'list)))
+                   (when *sync-debug*
+                     (format t "~&[SYNC-DEBUG] Sending ACK (server-time=~A, pending=~D)~%"
+                             (now-iso) pending-count)
+                     (let ((ack-bytes (ag-proto:serialize-to-bytes ack-msg)))
+                       (format t "~&[SYNC-DEBUG] ACK serialized: ~D bytes~%"
+                               (length ack-bytes))))
                    (handler-case
                        (progn
                          (ag-grpc:stream-send stream ack-msg)
-                         (format t "~&[SYNC-DEBUG] ACK sent successfully~%"))
+                         (when *sync-debug* (format t "~&[SYNC-DEBUG] ACK sent successfully~%")))
                      (error (e)
-                       (format t "~&[SYNC-DEBUG] ERROR sending ACK: ~A~%" e)
+                       (llog:error "Failed to send ACK" :error (princ-to-string e))
                        (return-from sync-handler))))
 
                  ;; Send all pending changes (using the row's actual valid_from timestamp)
@@ -132,29 +141,31 @@
                      (handler-case
                          (ag-grpc:stream-send stream change-msg)
                        (error (e)
-                         (format t "~&[SYNC-DEBUG] ERROR sending change: ~A~%" e)
+                         (llog:error "Failed to send change" :error (princ-to-string e))
                          (return-from sync-handler)))))
-                 (format t "~&[SYNC-DEBUG] All pending changes sent. Entering receive loop.~%")
-                 (force-output)
+                 (when *sync-debug*
+                   (format t "~&[SYNC-DEBUG] All pending changes sent. Entering receive loop.~%")
+                   (force-output))
 
                  ;; Register this client for receiving broadcasts
                  (register-sync-client stream device-id)
 
                  ;; Main receive loop - process incoming changes from this client
                  (loop
-                   (format t "~&[SYNC-DEBUG] Calling stream-recv...~%")
-                   (force-output)
+                   (when *sync-debug*
+                     (format t "~&[SYNC-DEBUG] Calling stream-recv...~%")
+                     (force-output))
                    (let ((msg (handler-case
                                   (ag-grpc:stream-recv stream)
                                 (error (e)
-                                  (format t "~&[SYNC-DEBUG] stream-recv ERROR: ~A (type: ~A)~%"
-                                          e (type-of e))
-                                  (force-output)
+                                  (llog:error "stream-recv error" :error (princ-to-string e)
+                                              :type (princ-to-string (type-of e)))
                                   nil))))
                      (unless msg
                        ;; Client disconnected
-                       (format t "~&[SYNC-DEBUG] stream-recv returned nil (client disconnected)~%")
-                       (force-output)
+                       (when *sync-debug*
+                         (format t "~&[SYNC-DEBUG] stream-recv returned nil (client disconnected)~%")
+                         (force-output))
                        (return-from sync-handler))
 
                      (when (eq (proto-msg-case msg) :change)
@@ -177,8 +188,9 @@
                               (broadcast-change msg device-id))))))))))))
 
       ;; Cleanup on exit
-      (format t "~&[SYNC-DEBUG] Handler exiting, cleanup. device-id=~A~%" client-device-id)
-      (force-output)
+      (when *sync-debug*
+        (format t "~&[SYNC-DEBUG] Handler exiting, cleanup. device-id=~A~%" client-device-id)
+        (force-output))
       (when client-device-id
         (unregister-sync-client client-device-id)))))
 
@@ -234,9 +246,9 @@
   ;; Check for mTLS certificates
   (let ((use-tls (and require-tls (ca-initialized-p) (server-cert-initialized-p))))
     (when (and require-tls (not use-tls))
-      (format t "~&WARNING: mTLS certificates not initialized.~%")
-      (format t "Run 'cloodoo cert init' to set up secure sync.~%")
-      (format t "Starting in INSECURE mode (no authentication).~%~%"))
+      (error "mTLS certificates not initialized but require-tls is true.~%~
+              Run 'cloodoo cert init' to set up secure sync.~%~
+              Pass :require-tls nil to explicitly start without TLS (NOT recommended)."))
 
     ;; Disable ENABLE_PUSH (deprecated in RFC 9113, gRPC doesn't use server push)
     (let ((push-setting (assoc ag-http2::+settings-enable-push+
