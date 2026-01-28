@@ -18,8 +18,37 @@ src/grpc-proto.lisp: ag-protoc android/app/src/main/proto/cloodoo_sync.proto
 		-o $@ \
 		android/app/src/main/proto/cloodoo_sync.proto
 
+.PHONY: android android-install clean
+
 cloodoo: src/grpc-proto.lisp src/*.lisp *.asd
 	sbcl --eval "(asdf:make :cloodoo)" --quit
+
+# Build Android app (output: android/app/build/outputs/apk/debug/app-debug.apk)
+android:
+	@echo "Building Android app..."
+	@if [ -n "$$JAVA_HOME" ] && $$JAVA_HOME/bin/java -version 2>&1 | grep -q "version \"21"; then \
+		echo "Using existing JAVA_HOME: $$JAVA_HOME"; \
+		cd android && ./gradlew assembleDebug; \
+	elif [ -d /usr/lib/jvm/java-21-openjdk ]; then \
+		echo "Setting JAVA_HOME to /usr/lib/jvm/java-21-openjdk"; \
+		cd android && JAVA_HOME=/usr/lib/jvm/java-21-openjdk ./gradlew assembleDebug; \
+	else \
+		echo "Error: Java 21 not found. Please install JDK 21 or set JAVA_HOME"; \
+		exit 1; \
+	fi
+
+# Install Android app to connected device via ADB
+# Set DEVICE to target a specific device: make android-install DEVICE=58181FDCQ003T4
+android-install: android
+	@echo "Installing Android app..."
+	@if [ -n "$(DEVICE)" ]; then \
+		adb -s $(DEVICE) install -r android/app/build/outputs/apk/debug/app-debug.apk; \
+	elif adb devices | grep -q "device$$"; then \
+		adb install -r android/app/build/outputs/apk/debug/app-debug.apk; \
+	else \
+		echo "No Android device connected"; \
+		exit 1; \
+	fi
 
 clean:
 	rm -rf *~ cloodoo src/grpc-proto.lisp
