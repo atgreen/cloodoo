@@ -25,7 +25,7 @@ import com.cloodoo.app.ui.screens.*
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun CloodooApp() {
+fun CloodooApp(openQuickAdd: Boolean = false) {
     val context = LocalContext.current
     val application = context.applicationContext as Application
     val certificateManager = remember { CertificateManager(context) }
@@ -38,6 +38,13 @@ fun CloodooApp() {
         )
     } else {
         val navController = rememberNavController()
+
+        LaunchedEffect(openQuickAdd) {
+            if (openQuickAdd) {
+                navController.navigate(Screen.QuickAdd.route)
+            }
+        }
+
         val viewModel: TodoListViewModel = viewModel(
             factory = TodoListViewModel.Factory(application, certificateManager)
         )
@@ -172,6 +179,18 @@ fun CloodooApp() {
                             onNavigateBack = { navController.popBackStack() }
                         )
                     }
+                    composable(Screen.OcrCapture.route) {
+                        OcrCaptureScreen(
+                            viewModel = viewModel,
+                            onNavigateBack = { navController.popBackStack() }
+                        )
+                    }
+                    composable(Screen.QuickAdd.route) {
+                        QuickAddScreen(
+                            viewModel = viewModel,
+                            onNavigateBack = { navController.popBackStack() }
+                        )
+                    }
                 }
             }
 
@@ -179,7 +198,9 @@ fun CloodooApp() {
             if (showFab) {
                 SpeedDialFab(
                     onTypeClick = { navController.navigate(Screen.AddTask.route) },
-                    onSpeakClick = { navController.navigate(Screen.VoiceAdd.route) }
+                    onSpeakClick = { navController.navigate(Screen.VoiceAdd.route) },
+                    onCameraClick = { navController.navigate(Screen.OcrCapture.route) },
+                    onQuickAddClick = { navController.navigate(Screen.QuickAdd.route) }
                 )
             }
 

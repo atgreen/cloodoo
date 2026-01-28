@@ -7,4 +7,6 @@ sealed class Screen(val route: String) {
     object AddTask : Screen("add_task")
     object Pairing : Screen("pairing")
     object VoiceAdd : Screen("voice_add")
+    object OcrCapture : Screen("ocr_capture")
+    object QuickAdd : Screen("quick_add")
 }

@@ -134,6 +134,13 @@ dependencies {
 
     // QR code scanning for pairing
     implementation("com.google.mlkit:barcode-scanning:17.2.0")
+
+    // OCR text recognition
+    implementation("com.google.mlkit:text-recognition:16.0.0")
+
+    // Glance for home screen widgets
+    implementation("androidx.glance:glance-appwidget:1.1.0")
+    implementation("androidx.glance:glance-material3:1.1.0")
     implementation("androidx.camera:camera-core:1.3.1")
     implementation("androidx.camera:camera-camera2:1.3.1")
     implementation("androidx.camera:camera-lifecycle:1.3.1")

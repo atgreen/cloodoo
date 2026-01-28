@@ -11,6 +11,8 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Mic
@@ -24,7 +26,22 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 
 private enum class VoiceState {
-    READY, LISTENING, PROCESSING, RESULT, ERROR, PERMISSION_DENIED
+    READY, LISTENING, PROCESSING, RESULT, MULTI_RESULT, ERROR, PERMISSION_DENIED
+}
+
+private fun splitIntoTasks(text: String): List<String> {
+    // Try numbered items: "1. foo 2. bar"
+    val numbered = Regex("""(?:^|\s)\d+[.)]\s*""").split(text).map { it.trim() }.filter { it.isNotBlank() }
+    if (numbered.size > 1) return numbered
+
+    // Try "and" separator: "foo, bar, and baz" or "foo and bar"
+    val andSplit = text.split(Regex(""",\s+and\s+|\s+and\s+""", RegexOption.IGNORE_CASE))
+        .flatMap { it.split(",") }
+        .map { it.trim() }
+        .filter { it.isNotBlank() }
+    if (andSplit.size > 1) return andSplit
+
+    return listOf(text)
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -40,6 +57,8 @@ fun VoiceAddScreen(
     var errorMessage by remember { mutableStateOf("") }
     var hasPermission by remember { mutableStateOf(false) }
     var rmsLevel by remember { mutableFloatStateOf(0f) }
+    var splitTasks by remember { mutableStateOf<List<String>>(emptyList()) }
+    var selectedTasks by remember { mutableStateOf<Set<Int>>(emptySet()) }
 
     val permissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission()
@@ -106,7 +125,14 @@ fun VoiceAddScreen(
                 val matches = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
                 if (!matches.isNullOrEmpty()) {
                     recognizedText = matches[0]
-                    voiceState = VoiceState.RESULT
+                    val tasks = splitIntoTasks(recognizedText)
+                    if (tasks.size > 1) {
+                        splitTasks = tasks
+                        selectedTasks = tasks.indices.toSet()
+                        voiceState = VoiceState.MULTI_RESULT
+                    } else {
+                        voiceState = VoiceState.RESULT
+                    }
                 } else {
                     errorMessage = "No speech detected. Please try again."
                     voiceState = VoiceState.ERROR
@@ -241,6 +267,67 @@ fun VoiceAddScreen(
                             onNavigateBack()
                         }) {
                             Text("Save")
+                        }
+                    }
+                }
+
+                VoiceState.MULTI_RESULT -> {
+                    Column(
+                        modifier = Modifier
+                            .verticalScroll(rememberScrollState())
+                            .padding(horizontal = 16.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Text(
+                            text = "${splitTasks.size} tasks detected",
+                            style = MaterialTheme.typography.titleMedium
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        splitTasks.forEachIndexed { index, task ->
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Checkbox(
+                                    checked = index in selectedTasks,
+                                    onCheckedChange = { checked ->
+                                        selectedTasks = if (checked) {
+                                            selectedTasks + index
+                                        } else {
+                                            selectedTasks - index
+                                        }
+                                    }
+                                )
+                                Text(
+                                    text = task,
+                                    style = MaterialTheme.typography.bodyLarge,
+                                    modifier = Modifier.weight(1f)
+                                )
+                            }
+                        }
+                        Spacer(modifier = Modifier.height(16.dp))
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(16.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            OutlinedButton(
+                                onClick = { startListening() },
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Text("Try Again")
+                            }
+                            Button(
+                                onClick = {
+                                    selectedTasks.sorted().forEach { index ->
+                                        viewModel.createTodo(title = splitTasks[index])
+                                    }
+                                    onNavigateBack()
+                                },
+                                enabled = selectedTasks.isNotEmpty(),
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Text("Save ${selectedTasks.size} Tasks")
+                            }
                         }
                     }
                 }

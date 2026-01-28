@@ -14,6 +14,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.unit.dp
+import androidx.compose.runtime.mutableIntStateOf
 import com.cloodoo.app.ui.util.formatDate
 import com.cloodoo.app.ui.util.millisToIsoDate
 import com.cloodoo.app.ui.util.tagsToStorageString
@@ -33,6 +34,8 @@ fun AddTaskScreen(
     var newTagText by remember { mutableStateOf("") }
     var showDueDatePicker by remember { mutableStateOf(false) }
     var showScheduledDatePicker by remember { mutableStateOf(false) }
+    var repeatUnit by remember { mutableStateOf<String?>(null) }
+    var repeatInterval by remember { mutableIntStateOf(1) }
 
     val focusRequester = remember { FocusRequester() }
     LaunchedEffect(Unit) { focusRequester.requestFocus() }
@@ -55,7 +58,9 @@ fun AddTaskScreen(
                                 priority = priority,
                                 dueDate = dueDate,
                                 scheduledDate = scheduledDate,
-                                tags = if (tags.isNotEmpty()) tagsToStorageString(tags) else null
+                                tags = if (tags.isNotEmpty()) tagsToStorageString(tags) else null,
+                                repeatInterval = if (repeatUnit != null) repeatInterval else null,
+                                repeatUnit = repeatUnit
                             )
                             onNavigateBack()
                         },
@@ -186,6 +191,46 @@ fun AddTaskScreen(
                     enabled = newTagText.isNotBlank()
                 ) {
                     Text("Add")
+                }
+            }
+
+            // Recurrence
+            Text("Recurrence", style = MaterialTheme.typography.labelLarge)
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                listOf(null to "None", "day" to "Daily", "week" to "Weekly", "month" to "Monthly").forEach { (value, label) ->
+                    FilterChip(
+                        selected = repeatUnit == value,
+                        onClick = { repeatUnit = value; repeatInterval = 1 },
+                        label = { Text(label) }
+                    )
+                }
+            }
+            if (repeatUnit != null) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text("Every", style = MaterialTheme.typography.bodyMedium)
+                    OutlinedTextField(
+                        value = repeatInterval.toString(),
+                        onValueChange = { text ->
+                            text.toIntOrNull()?.let { if (it > 0) repeatInterval = it }
+                        },
+                        singleLine = true,
+                        modifier = Modifier.width(64.dp),
+                        textStyle = MaterialTheme.typography.bodyMedium
+                    )
+                    Text(
+                        when (repeatUnit) {
+                            "day" -> if (repeatInterval == 1) "day" else "days"
+                            "week" -> if (repeatInterval == 1) "week" else "weeks"
+                            "month" -> if (repeatInterval == 1) "month" else "months"
+                            else -> ""
+                        },
+                        style = MaterialTheme.typography.bodyMedium
+                    )
                 }
             }
         }

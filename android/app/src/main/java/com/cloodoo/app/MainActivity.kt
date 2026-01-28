@@ -11,9 +11,10 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
+        val openQuickAdd = intent?.getBooleanExtra("quick_add", false) == true
         setContent {
             CloodooTheme {
-                CloodooApp()
+                CloodooApp(openQuickAdd = openQuickAdd)
             }
         }
     }

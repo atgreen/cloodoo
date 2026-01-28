@@ -322,6 +322,8 @@ class SyncManager(
             .setCreatedAt(createdAt)
             .setCompletedAt(completedAt ?: "")
             .setParentId(parentId ?: "")
+            .setRepeatInterval(repeatInterval ?: 0)
+            .setRepeatUnit(repeatUnit ?: "")
             .build()
     }
 
@@ -338,6 +340,8 @@ class SyncManager(
             estimatedMinutes = if (estimatedMinutes > 0) estimatedMinutes else null,
             url = url.ifEmpty { null },
             parentId = parentId.ifEmpty { null },
+            repeatInterval = if (repeatInterval > 0) repeatInterval else null,
+            repeatUnit = repeatUnit.ifEmpty { null },
             createdAt = createdAt,
             completedAt = completedAt.ifEmpty { null },
             validFrom = validFrom,

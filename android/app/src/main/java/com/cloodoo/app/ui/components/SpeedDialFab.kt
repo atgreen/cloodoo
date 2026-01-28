@@ -13,7 +13,9 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.FlashOn
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -28,6 +30,8 @@ import androidx.compose.ui.unit.dp
 fun SpeedDialFab(
     onTypeClick: () -> Unit,
     onSpeakClick: () -> Unit,
+    onCameraClick: () -> Unit,
+    onQuickAddClick: () -> Unit,
 ) {
     var expanded by remember { mutableStateOf(false) }
     val rotation by animateFloatAsState(
@@ -63,7 +67,7 @@ fun SpeedDialFab(
                 .align(Alignment.BottomEnd)
                 .padding(end = 16.dp, bottom = 16.dp)
         ) {
-            // Mini-FABs
+            // Mini-FABs (bottom to top, closest to FAB first)
             AnimatedVisibility(
                 visible = expanded,
                 enter = fadeIn(tween(150)) + slideInVertically(
@@ -80,6 +84,15 @@ fun SpeedDialFab(
                     verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
                     MiniFabWithLabel(
+                        label = "Scan",
+                        icon = Icons.Default.CameraAlt,
+                        contentDescription = "OCR capture",
+                        onClick = {
+                            expanded = false
+                            onCameraClick()
+                        }
+                    )
+                    MiniFabWithLabel(
                         label = "Speak",
                         icon = Icons.Default.Mic,
                         contentDescription = "Voice add",
@@ -89,12 +102,21 @@ fun SpeedDialFab(
                         }
                     )
                     MiniFabWithLabel(
-                        label = "Type",
+                        label = "Form",
                         icon = Icons.Default.Edit,
-                        contentDescription = "Type add",
+                        contentDescription = "Form add",
                         onClick = {
                             expanded = false
                             onTypeClick()
+                        }
+                    )
+                    MiniFabWithLabel(
+                        label = "Quick",
+                        icon = Icons.Default.FlashOn,
+                        contentDescription = "Quick add",
+                        onClick = {
+                            expanded = false
+                            onQuickAddClick()
                         }
                     )
                 }

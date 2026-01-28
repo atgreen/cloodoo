@@ -178,6 +178,8 @@ Return ONLY a valid JSON object with these keys:
 - estimated_minutes: (Integer estimate)
 - scheduled_date: (ISO 8601 date when task should be worked on, e.g. \"2026-01-20\" or \"2026-01-20T14:00:00\", or null)
 - due_date: (ISO 8601 date when task must be completed by, e.g. \"2026-01-25\", or null)
+- repeat_interval: (Integer for recurrence, e.g. 1 for every 1 unit, 2 for every 2 units, or null if not recurring)
+- repeat_unit: (One of: \"day\", \"week\", \"month\", \"year\", or null if not recurring)
 - location: (Object with business/place info, or null if no location mentioned)
   - name: (Business or place name, properly formatted)
   - address: (Full street address if known or can be inferred, otherwise null)
@@ -192,6 +194,14 @@ Date Extraction Rules:
 - Include time if mentioned (\"3pm\" -> \"T15:00:00\")
 - If only a day is mentioned without context, assume it's the SCHEDULED date
 - If a date seems like both (appointment), use scheduled_date
+
+Recurrence Rules:
+- If the user says \"every day\", \"daily\", set repeat_interval=1, repeat_unit=\"day\"
+- If the user says \"every week\", \"weekly\", set repeat_interval=1, repeat_unit=\"week\"
+- If the user says \"every month\", \"monthly\", set repeat_interval=1, repeat_unit=\"month\"
+- If the user says \"every year\", \"yearly\", \"annually\", set repeat_interval=1, repeat_unit=\"year\"
+- If the user says \"every 2 weeks\", \"biweekly\", set repeat_interval=2, repeat_unit=\"week\"
+- If there is no recurrence, set both repeat_interval and repeat_unit to null
 
 Rules for Processing:
 - Action Verbs: Always start the task_title with a verb (Schedule, Buy, Call, Fix, Review, etc.)
@@ -323,10 +333,21 @@ Respond with ONLY the JSON object, no markdown formatting or additional text.")
               :map-url map-url
               :website website)))))
 
+(defun parse-repeat-unit (unit-string)
+  "Parse a repeat unit string into a keyword. Returns nil if not valid."
+  (when (and unit-string (stringp unit-string) (> (length unit-string) 0))
+    (let ((lower (string-downcase unit-string)))
+      (cond
+        ((string= lower "day") :day)
+        ((string= lower "week") :week)
+        ((string= lower "month") :month)
+        ((string= lower "year") :year)
+        (t nil)))))
+
 (defun parse-enrichment-response (response)
   "Parse the JSON response from the LLM enrichment.
-   Returns a plist with :title, :description, :category, :priority, :estimated-minutes, :location-info
-   or NIL if parsing fails."
+   Returns a plist with :title, :description, :category, :priority, :estimated-minutes, :location-info,
+   :repeat-interval, :repeat-unit or NIL if parsing fails."
   (llog:debug "Parsing enrichment response"
               :response-length (length response)
               :response-preview (subseq response 0 (min 200 (length response))))
@@ -340,6 +361,11 @@ Respond with ONLY the JSON object, no markdown formatting or additional text.")
               (let* ((location-info (parse-location-info (gethash "location" data)))
                      (scheduled-date (parse-iso-date (json-null-to-nil (gethash "scheduled_date" data))))
                      (due-date (parse-iso-date (json-null-to-nil (gethash "due_date" data))))
+                     (raw-repeat-interval (json-null-to-nil (gethash "repeat_interval" data)))
+                     (raw-repeat-unit (json-null-to-nil (gethash "repeat_unit" data)))
+                     (repeat-interval (when (and raw-repeat-interval (numberp raw-repeat-interval) (> raw-repeat-interval 0))
+                                        (truncate raw-repeat-interval)))
+                     (repeat-unit (when repeat-interval (parse-repeat-unit raw-repeat-unit)))
                      (result (list :title (json-null-to-nil (gethash "task_title" data))
                                    :description (json-null-to-nil (gethash "description" data))
                                    :category (json-null-to-nil (gethash "category" data))
@@ -353,6 +379,8 @@ Respond with ONLY the JSON object, no markdown formatting or additional text.")
                                                        (if (numberp m) (truncate m) 15))
                                    :scheduled-date scheduled-date
                                    :due-date due-date
+                                   :repeat-interval repeat-interval
+                                   :repeat-unit repeat-unit
                                    :location-info location-info)))
                 (llog:info "Successfully parsed enrichment response"
                            :title (getf result :title)
@@ -363,7 +391,9 @@ Respond with ONLY the JSON object, no markdown formatting or additional text.")
                                             (lt:format-rfc3339-timestring nil scheduled-date))
                            :due-date (when due-date
                                       (lt:format-rfc3339-timestring nil due-date))
-                           :has-location (if location-info "yes" "no"))
+                           :has-location (if location-info "yes" "no")
+                           :repeat-interval repeat-interval
+                           :repeat-unit repeat-unit)
                 (when location-info
                   (llog:debug "Location info extracted"
                               :location-name (getf location-info :name)

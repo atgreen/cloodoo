@@ -10,6 +10,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Done
+import androidx.compose.material.icons.filled.Repeat
 import androidx.compose.material.icons.automirrored.filled.Undo
 import androidx.compose.material.icons.outlined.Place
 import androidx.compose.material3.*
@@ -97,15 +98,32 @@ fun TodoItem(
                     overflow = TextOverflow.Ellipsis
                 )
 
-                // Dates, location, and tags on one line
+                // Dates, location, repeat, and tags on one line
                 val tags = parseTags(todo.tags)
-                val hasMetadata = todo.dueDate != null || todo.locationInfo != null || tags.isNotEmpty()
+                val hasRepeat = todo.repeatInterval != null && todo.repeatInterval > 0 && !todo.repeatUnit.isNullOrEmpty()
+                val hasMetadata = todo.dueDate != null || todo.locationInfo != null || tags.isNotEmpty() || hasRepeat
                 if (hasMetadata && !isCompleted) {
                     Spacer(modifier = Modifier.height(3.dp))
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
+                        if (hasRepeat) {
+                            val repeatLabel = when {
+                                todo.repeatInterval == 1 -> when (todo.repeatUnit) {
+                                    "day" -> "Daily"
+                                    "week" -> "Weekly"
+                                    "month" -> "Monthly"
+                                    "year" -> "Yearly"
+                                    else -> ""
+                                }
+                                else -> "Every ${todo.repeatInterval} ${todo.repeatUnit}s"
+                            }
+                            MetadataChip(
+                                icon = Icons.Default.Repeat,
+                                text = repeatLabel
+                            )
+                        }
                         todo.dueDate?.let { dateStr ->
                             DueDateChip(dateStr = dateStr)
                         }

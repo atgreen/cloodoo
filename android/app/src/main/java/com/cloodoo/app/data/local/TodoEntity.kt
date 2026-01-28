@@ -31,6 +31,8 @@ data class TodoEntity(
     val locationInfo: String? = null,  // JSON object stored as string
     val url: String? = null,
     val parentId: String? = null,
+    val repeatInterval: Int? = null,
+    val repeatUnit: String? = null,  // "day", "week", "month", "year"
     val createdAt: String,
     val completedAt: String? = null,
     val validFrom: String,

@@ -35,7 +35,9 @@ class TodoRepository(
         priority: String = "medium",
         dueDate: String? = null,
         scheduledDate: String? = null,
-        tags: String? = null
+        tags: String? = null,
+        repeatInterval: Int? = null,
+        repeatUnit: String? = null
     ): TodoEntity {
         val now = nowIso()
         val todoId = generateId()
@@ -48,6 +50,8 @@ class TodoRepository(
             dueDate = dueDate,
             scheduledDate = scheduledDate,
             tags = tags,
+            repeatInterval = repeatInterval,
+            repeatUnit = repeatUnit,
             createdAt = now,
             validFrom = now,
             deviceId = deviceId
@@ -69,7 +73,9 @@ class TodoRepository(
         dueDate: String? = null,
         scheduledDate: String? = null,
         tags: String? = null,
-        completedAt: String? = null
+        completedAt: String? = null,
+        repeatInterval: Int? = null,
+        repeatUnit: String? = null
     ) {
         val current = todoDao.getCurrentById(todoId) ?: return
         val now = nowIso()
@@ -89,6 +95,8 @@ class TodoRepository(
             scheduledDate = when (scheduledDate) { null -> current.scheduledDate; "" -> null; else -> scheduledDate },
             tags = when (tags) { null -> current.tags; "" -> null; else -> tags },
             completedAt = completedAt ?: current.completedAt,
+            repeatInterval = repeatInterval ?: current.repeatInterval,
+            repeatUnit = repeatUnit ?: current.repeatUnit,
             validFrom = now,
             validTo = null,
             deviceId = deviceId

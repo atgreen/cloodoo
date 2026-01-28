@@ -18,6 +18,8 @@ import com.cloodoo.app.ui.components.TodoGroupData
 import com.cloodoo.app.ui.components.groupTodosByDate
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
+import java.time.ZonedDateTime
+import java.time.format.DateTimeFormatter
 
 class TodoListViewModel(
     application: Application,
@@ -158,7 +160,9 @@ class TodoListViewModel(
         priority: String = "medium",
         dueDate: String? = null,
         scheduledDate: String? = null,
-        tags: String? = null
+        tags: String? = null,
+        repeatInterval: Int? = null,
+        repeatUnit: String? = null
     ) {
         if (title.isBlank()) return
 
@@ -169,7 +173,9 @@ class TodoListViewModel(
                 priority = priority,
                 dueDate = dueDate,
                 scheduledDate = scheduledDate,
-                tags = tags
+                tags = tags,
+                repeatInterval = repeatInterval,
+                repeatUnit = repeatUnit
             )
             syncManager.sendTodoUpsert(todo)
         }
@@ -183,14 +189,47 @@ class TodoListViewModel(
                 if (isDone) {
                     repository.updateTodo(todoId, status = "pending", completedAt = "")
                 } else {
-                    repository.completeTodo(todoId)
-                    _uiState.update { it.copy(showConfetti = true) }
+                    // Check if this is a recurring task
+                    val interval = todo.repeatInterval
+                    val unit = todo.repeatUnit
+                    if (interval != null && interval > 0 && !unit.isNullOrEmpty()) {
+                        // Reschedule instead of completing
+                        val newScheduled = shiftDate(todo.scheduledDate, interval, unit)
+                        val newDue = shiftDate(todo.dueDate, interval, unit)
+                        repository.updateTodo(
+                            todoId,
+                            status = "pending",
+                            completedAt = "",
+                            scheduledDate = newScheduled ?: todo.scheduledDate,
+                            dueDate = newDue ?: todo.dueDate
+                        )
+                    } else {
+                        repository.completeTodo(todoId)
+                        _uiState.update { it.copy(showConfetti = true) }
+                    }
                 }
                 val updated = database.todoDao().getCurrentById(todoId)
                 if (updated != null) {
                     syncManager.sendTodoUpsert(updated)
                 }
             }
+        }
+    }
+
+    private fun shiftDate(isoDate: String?, interval: Int, unit: String): String? {
+        if (isoDate.isNullOrEmpty()) return null
+        return try {
+            val zdt = ZonedDateTime.parse(isoDate)
+            val shifted = when (unit) {
+                "day" -> zdt.plusDays(interval.toLong())
+                "week" -> zdt.plusWeeks(interval.toLong())
+                "month" -> zdt.plusMonths(interval.toLong())
+                "year" -> zdt.plusYears(interval.toLong())
+                else -> return null
+            }
+            shifted.format(DateTimeFormatter.ISO_OFFSET_DATE_TIME)
+        } catch (e: Exception) {
+            null
         }
     }
 

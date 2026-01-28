@@ -1,4 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Cloodoo</string>
+    <string name="widget_description">Quickly add a new task to Cloodoo</string>
 </resources>
