@@ -165,6 +165,17 @@
         content TEXT NOT NULL
       )")
 
+    ;; Content-addressed attachment storage for binary files (screenshots, etc.)
+    (sqlite:execute-non-query db "
+      CREATE TABLE IF NOT EXISTS attachments (
+        hash TEXT PRIMARY KEY,
+        content BLOB NOT NULL,
+        filename TEXT NOT NULL,
+        mime_type TEXT NOT NULL,
+        size INTEGER NOT NULL,
+        created_at TEXT NOT NULL
+      )")
+
     ;; Migration: add description_hash column
     (handler-case
         (sqlite:execute-non-query db "
@@ -175,6 +186,12 @@
     (handler-case
         (sqlite:execute-non-query db "
           ALTER TABLE todos ADD COLUMN location_info_hash TEXT")
+      (error () nil))
+
+    ;; Migration: add attachment_hashes column
+    (handler-case
+        (sqlite:execute-non-query db "
+          ALTER TABLE todos ADD COLUMN attachment_hashes TEXT")
       (error () nil))
 
     ;; Migrate existing inline descriptions to blobs
@@ -281,6 +298,50 @@
       (when (= (length rows) 1000)
         (migrate-inline-to-blobs db)))))
 
+;;── Content-Addressed Attachment Storage ──────────────────────────────────────
+
+(defun content-hash-file (filepath)
+  "Compute SHA256 hash of file contents."
+  (let ((hash (ironclad:digest-file :sha256 (pathname filepath))))
+    (ironclad:byte-array-to-hex-string hash)))
+
+(defun guess-mime-type (filepath)
+  "Guess MIME type from file extension."
+  (let ((ext (pathname-type filepath)))
+    (cond
+      ((and ext (string-equal ext "png")) "image/png")
+      ((and ext (or (string-equal ext "jpg") (string-equal ext "jpeg"))) "image/jpeg")
+      ((and ext (string-equal ext "gif")) "image/gif")
+      ((and ext (string-equal ext "webp")) "image/webp")
+      ((and ext (string-equal ext "bmp")) "image/bmp")
+      (t "application/octet-stream"))))
+
+(defun store-attachment (db filepath)
+  "Store file in attachments table, returning its hash. Deduplicates by content hash."
+  (when (probe-file filepath)
+    (let* ((hash (content-hash-file filepath))
+           (content (alexandria:read-file-into-byte-vector filepath))
+           (filename (file-namestring filepath))
+           (mime-type (guess-mime-type filepath))
+           (size (length content))
+           (created-at (now-iso)))
+      ;; Insert or ignore (hash is PK, handles deduplication)
+      (sqlite:execute-non-query db
+        "INSERT OR IGNORE INTO attachments (hash, content, filename, mime_type, size, created_at)
+         VALUES (?, ?, ?, ?, ?, ?)"
+        hash content filename mime-type size created-at)
+      hash)))
+
+(defun resolve-attachment (db hash)
+  "Retrieve attachment metadata and content by hash.
+   Returns (values hash content filename mime-type size created-at) or NIL."
+  (when hash
+    (let ((row (sqlite:execute-one-row-m-v db
+                 "SELECT hash, content, filename, mime_type, size, created_at
+                  FROM attachments WHERE hash = ?" hash)))
+      (when row
+        (values-list row)))))
+
 ;;── Row to TODO Conversion ────────────────────────────────────────────────────
 
 (defun row-to-todo (row)
@@ -288,12 +349,12 @@
    ROW is a list: (row_id id title description priority status scheduled_date
                   due_date tags estimated_minutes location_info url parent_id
                   created_at completed_at valid_from valid_to device_id
-                  repeat_interval repeat_unit enriching_p)"
+                  repeat_interval repeat_unit enriching_p attachment_hashes)"
   (destructuring-bind (row-id id title description priority status
                        scheduled-date due-date tags estimated-minutes
                        location-info url parent-id created-at completed-at
                        valid-from valid-to device-id
-                       &optional repeat-interval repeat-unit enriching-p) row
+                       &optional repeat-interval repeat-unit enriching-p attachment-hashes) row
     (declare (ignore row-id valid-from valid-to parent-id))
     (make-instance 'todo
                    :id id
@@ -316,6 +377,8 @@
                                               :map-url (gethash "map_url" ht)
                                               :website (gethash "website" ht)))))
                    :url (unless (eq url :null) url)
+                   :attachment-hashes (when (and attachment-hashes (not (eq attachment-hashes :null)))
+                                        (coerce (jzon:parse attachment-hashes) 'list))
                    :device-id (unless (eq device-id :null) device-id)
                    :repeat-interval (unless (or (null repeat-interval) (eq repeat-interval :null))
                                       repeat-interval)
@@ -338,7 +401,7 @@
              COALESCE(b2.content, t.location_info) as location_info,
              t.url, t.parent_id, t.created_at, t.completed_at,
              t.valid_from, t.valid_to, t.device_id, t.repeat_interval,
-             t.repeat_unit, t.enriching_p
+             t.repeat_unit, t.enriching_p, t.attachment_hashes
       FROM todos t
       LEFT JOIN blobs b1 ON t.description_hash = b1.hash
       LEFT JOIN blobs b2 ON t.location_info_hash = b2.hash
@@ -361,7 +424,7 @@
                COALESCE(b2.content, t.location_info) as location_info,
                t.url, t.parent_id, t.created_at, t.completed_at,
                t.valid_from, t.valid_to, t.device_id, t.repeat_interval,
-               t.repeat_unit, t.enriching_p
+               t.repeat_unit, t.enriching_p, t.attachment_hashes
         FROM todos t
         LEFT JOIN blobs b1 ON t.description_hash = b1.hash
         LEFT JOIN blobs b2 ON t.location_info_hash = b2.hash
@@ -408,7 +471,10 @@
         (when (todo-repeat-unit todo)
           (string-downcase (symbol-name (todo-repeat-unit todo))))
         ;; Enrichment flag
-        (if (todo-enriching-p todo) 1 0)))
+        (if (todo-enriching-p todo) 1 0)
+        ;; Attachment hashes
+        (when (todo-attachment-hashes todo)
+          (jzon:stringify (coerce (todo-attachment-hashes todo) 'vector)))))
 
 (defun db-save-todo (todo)
   "Save a TODO to the database using append-only semantics.
@@ -436,13 +502,13 @@
                                     scheduled_date, due_date, tags, estimated_minutes,
                                     location_info_hash, url, parent_id, created_at,
                                     completed_at, valid_from, valid_to, device_id,
-                                    repeat_interval, repeat_unit, enriching_p)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?)"
+                                    repeat_interval, repeat_unit, enriching_p, attachment_hashes)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?)"
                  (first values) (second values) desc-hash (fourth values)
                  (fifth values) (sixth values) (seventh values) (eighth values)
                  (ninth values) loc-hash (nth 10 values) (nth 11 values)
                  (nth 12 values) (nth 13 values) now (nth 14 values)
-                 (nth 15 values) (nth 16 values) (nth 17 values))
+                 (nth 15 values) (nth 16 values) (nth 17 values) (nth 18 values))
                (sqlite:execute-non-query db "COMMIT")
                (setf committed t))
           (unless committed
@@ -482,13 +548,13 @@
                                       scheduled_date, due_date, tags, estimated_minutes,
                                       location_info_hash, url, parent_id, created_at,
                                       completed_at, valid_from, valid_to, device_id,
-                                      repeat_interval, repeat_unit, enriching_p)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?)"
+                                      repeat_interval, repeat_unit, enriching_p, attachment_hashes)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?)"
                    (first values) (second values) desc-hash (fourth values)
                    (fifth values) (sixth values) (seventh values) (eighth values)
                    (ninth values) loc-hash (nth 10 values) (nth 11 values)
                    (nth 12 values) (nth 13 values) now (nth 14 values)
-                   (nth 15 values) (nth 16 values) (nth 17 values))))
+                   (nth 15 values) (nth 16 values) (nth 17 values) (nth 18 values))))
              (sqlite:execute-non-query db "COMMIT")
              (setf committed t))
         (unless committed
@@ -569,13 +635,13 @@
                                             scheduled_date, due_date, tags, estimated_minutes,
                                             location_info_hash, url, parent_id, created_at,
                                             completed_at, valid_from, valid_to, device_id,
-                                            repeat_interval, repeat_unit, enriching_p)
-                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?)"
+                                            repeat_interval, repeat_unit, enriching_p, attachment_hashes)
+                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?)"
                          (first values) (second values) desc-hash (fourth values)
                          (fifth values) (sixth values) (seventh values) (eighth values)
                          (ninth values) loc-hash (nth 10 values) (nth 11 values)
                          (nth 12 values) (nth 13 values) now (nth 14 values)
-                         (nth 15 values) (nth 16 values) (nth 17 values))))
+                         (nth 15 values) (nth 16 values) (nth 17 values) (nth 18 values))))
                    (sqlite:execute-non-query db "COMMIT")
                    (setf committed t))
               (unless committed
@@ -680,7 +746,7 @@
                        scheduled-date due-date tags estimated-minutes
                        location-info url parent-id created-at completed-at
                        valid-from valid-to device-id
-                       &optional repeat-interval repeat-unit enriching-p) row
+                       &optional repeat-interval repeat-unit enriching-p attachment-hashes) row
     (let ((ht (make-hash-table :test #'equal)))
       (setf (gethash "row_id" ht) row-id)
       (setf (gethash "id" ht) id)
@@ -703,6 +769,7 @@
       (setf (gethash "repeat_interval" ht) (db-null-to-json-null repeat-interval))
       (setf (gethash "repeat_unit" ht) (db-null-to-json-null repeat-unit))
       (setf (gethash "enriching_p" ht) (db-null-to-json-null enriching-p))
+      (setf (gethash "attachment_hashes" ht) (db-null-to-json-null attachment-hashes))
       ht)))
 
 (defun db-load-current-rows-since (timestamp)
@@ -723,7 +790,7 @@
                COALESCE(b2.content, t.location_info) as location_info,
                t.url, t.parent_id, t.created_at, t.completed_at,
                t.valid_from, t.valid_to, t.device_id, t.repeat_interval,
-               t.repeat_unit, t.enriching_p
+               t.repeat_unit, t.enriching_p, t.attachment_hashes
         FROM todos t
         LEFT JOIN blobs b1 ON t.description_hash = b1.hash
         LEFT JOIN blobs b2 ON t.location_info_hash = b2.hash

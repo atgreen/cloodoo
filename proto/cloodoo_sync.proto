@@ -29,6 +29,7 @@ message TodoData {
   string parent_id = 14;
   int32 repeat_interval = 15;
   string repeat_unit = 16;   // "day", "week", "month", "year" or empty
+  repeated string attachment_hashes = 17;  // SHA256 hashes
 }
 
 // A change event sent in either direction

@@ -86,6 +86,12 @@
     :accessor todo-url
     :type (or null string)
     :documentation "URL associated with this TODO (e.g., email link).")
+   (attachment-hashes
+    :initarg :attachment-hashes
+    :initform nil
+    :accessor todo-attachment-hashes
+    :type (or null list)
+    :documentation "List of attachment hashes (SHA256) referencing attachments table.")
    (created-at
     :initarg :created-at
     :accessor todo-created-at

@@ -134,18 +134,25 @@
                    :short-name #\n
                    :long-name "note"
                    :key :note
-                   :description "Optional description/notes")))
+                   :description "Optional description/notes"))
+        (attachment-opt (clingon:make-option
+                         :filepath
+                         :short-name #\a
+                         :long-name "attachment"
+                         :key :attachment
+                         :description "Attach a file (screenshot, document, etc.)")))
     (clingon:make-command
      :name "add"
      :description "Add a new TODO"
      :usage "TITLE"
-     :options (list priority-opt due-opt tags-opt desc-opt)
+     :options (list priority-opt due-opt tags-opt desc-opt attachment-opt)
      :handler (lambda (cmd)
                 (let ((args (clingon:command-arguments cmd))
                       (priority (clingon:getopt cmd :priority))
                       (due (clingon:getopt cmd :due))
                       (tags (clingon:getopt cmd :tags))
-                      (note (clingon:getopt cmd :note)))
+                      (note (clingon:getopt cmd :note))
+                      (attachment-path (clingon:getopt cmd :attachment)))
                   (if args
                       (let* ((title (format nil "~{~A~^ ~}" args))
                              (due-date (when due (parse-due-date due)))
@@ -154,10 +161,20 @@
                                              :due-date due-date
                                              :description note
                                              :tags (parse-tags tags))))
+                        ;; Handle attachment if provided
+                        (when (and attachment-path (probe-file attachment-path))
+                          (with-db (db)
+                            (let ((hash (store-attachment db attachment-path)))
+                              (setf (todo-attachment-hashes todo) (list hash)))))
                         (save-todo todo)
                         (format t "~A Added: ~A~%"
                                (tui:colored "✓" :fg tui:*fg-green*)
                                title)
+                        (when attachment-path
+                          (if (probe-file attachment-path)
+                              (format t "  Attachment: ~A~%" (file-namestring attachment-path))
+                              (format t "  ~A Attachment file not found: ~A~%"
+                                     (tui:colored "⚠" :fg tui:*fg-yellow*) attachment-path)))
                         (when due-date
                           (format t "  Due: ~A~%"
                                  (lt:format-timestring nil due-date

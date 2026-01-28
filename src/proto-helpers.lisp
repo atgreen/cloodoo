@@ -53,7 +53,8 @@
                                    :completed-at (or (todo-completed-at todo) "")
                                    :parent-id ""
                                    :repeat-interval (or (todo-repeat-interval todo) 0)
-                                   :repeat-unit (or (todo-repeat-unit todo) "")))
+                                   :repeat-unit (or (todo-repeat-unit todo) "")
+                                   :attachment-hashes (or (todo-attachment-hashes todo) '())))
          (change (make-instance 'proto-todo-change
                                 :device-id device-id
                                 :timestamp timestamp))
@@ -188,5 +189,6 @@
                  :repeat-unit (let ((ru (proto-repeat-unit proto-data)))
                                 (when (and ru (> (length ru) 0))
                                   (intern (string-upcase ru) :keyword)))
+                 :attachment-hashes (proto-attachment-hashes proto-data)
                  :created-at (lt:parse-timestring (proto-created-at proto-data))
                  :completed-at (parse-timestamp (proto-completed-at proto-data))))

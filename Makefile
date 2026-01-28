@@ -1,4 +1,4 @@
-.PHONY: android android-install clean
+.PHONY: android android-install install-extension clean
 
 # Default target: build the TUI application
 cloodoo: src/grpc-proto.lisp src/*.lisp *.asd
@@ -50,6 +50,17 @@ android-install: android
 		echo "No Android device connected"; \
 		exit 1; \
 	fi
+
+# Install GNOME Shell extension
+install-extension:
+	@echo "Installing GNOME Shell extension..."
+	@cd gnome-extension && glib-compile-schemas schemas/
+	@mkdir -p ~/.local/share/gnome-shell/extensions/cloodoo-screenshot@moxielogic.com
+	@cp -r gnome-extension/* ~/.local/share/gnome-shell/extensions/cloodoo-screenshot@moxielogic.com/
+	@echo "Extension installed. Please restart GNOME Shell:"
+	@echo "  X11: Press Alt+F2, type 'r', press Enter"
+	@echo "  Wayland: Log out and log back in"
+	@echo "Then enable with: gnome-extensions enable cloodoo-screenshot@moxielogic.com"
 
 clean:
 	rm -rf *~ cloodoo src/grpc-proto.lisp
