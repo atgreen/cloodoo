@@ -590,6 +590,9 @@
             ;; Track progress and only refresh when done with initial batch
             (when (> *sync-pending-count* 0)
               (incf *sync-received-count*)
+              ;; Yield CPU every 10 writes to keep UI responsive
+              (when (zerop (mod *sync-received-count* 10))
+                (sleep 0.001))
               (when (>= *sync-received-count* *sync-pending-count*)
                 (llog:info "Initial sync complete" :count *sync-received-count*)
                 (when *sync-model-ref* (refresh-model-todos *sync-model-ref*))
