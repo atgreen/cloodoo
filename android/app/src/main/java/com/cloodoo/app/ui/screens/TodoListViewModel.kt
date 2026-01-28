@@ -39,8 +39,8 @@ class TodoListViewModel(
     private val _uiState = MutableStateFlow(TodoListUiState())
     val uiState: StateFlow<TodoListUiState> = _uiState.asStateFlow()
 
-    // Track which sections are collapsed (Completed starts collapsed)
-    private val _collapsedSections = MutableStateFlow(setOf(DateGroup.COMPLETED))
+    // Track which sections are collapsed (all groups start collapsed)
+    private val _collapsedSections = MutableStateFlow(DateGroup.values().toSet())
 
     // Connection state from SyncManager
     val connectionState: StateFlow<ConnectionState> = syncManager.connectionState
