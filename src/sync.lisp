@@ -357,6 +357,12 @@
 (defvar *sync-program-ref* nil
   "Reference to the TUI program for triggering redraws after sync updates.")
 
+(defvar *sync-pending-count* 0
+  "Number of pending changes expected from server during initial sync.")
+
+(defvar *sync-received-count* 0
+  "Number of changes received so far during initial sync.")
+
 (defun notify-tui-refresh ()
   "Send a sync-refresh message to the TUI program to trigger a redraw."
   (when *sync-program-ref*
@@ -565,6 +571,9 @@
            (progn
              (llog:info "Sync connected" :server-time server-time :pending pending)
              (update-sync-status :connected)
+             (setf *sync-pending-count* pending)
+             (setf *sync-received-count* 0)
+             (llog:info "Expecting pending changes" :count pending)
              (when *sync-model-ref*
                (setf (model-sync-pending-count *sync-model-ref*) pending))))))
 
@@ -578,9 +587,13 @@
             ;; Suppress notifications to avoid sending the change back
             (let ((*suppress-change-notifications* t))
               (db-save-todo todo))
-            ;; Refresh the model's todo list if we have a reference
-            (when *sync-model-ref*
-              (refresh-model-todos *sync-model-ref*))))
+            ;; Track progress and only refresh when done with initial batch
+            (when (> *sync-pending-count* 0)
+              (incf *sync-received-count*)
+              (when (>= *sync-received-count* *sync-pending-count*)
+                (llog:info "Initial sync complete" :count *sync-received-count*)
+                (when *sync-model-ref* (refresh-model-todos *sync-model-ref*))
+                (setf *sync-pending-count* 0 *sync-received-count* 0)))))
          (:delete-id
           (let ((todo-id (proto-change-delete-id change)))
             (llog:info "Received delete from server" :id todo-id)
