@@ -176,7 +176,8 @@ fun SwipeableTodoItem(
                 }
                 SwipeToDismissBoxValue.Settled -> true
             }
-        }
+        },
+        positionalThreshold = { totalDistance -> totalDistance * 0.75f }
     )
 
     SwipeToDismissBox(
