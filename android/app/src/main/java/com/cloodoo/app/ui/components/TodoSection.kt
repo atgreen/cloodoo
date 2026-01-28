@@ -31,9 +31,12 @@ enum class DateGroup(val displayName: String, val order: Int) {
     TODAY("Today", 1),
     TOMORROW("Tomorrow", 2),
     THIS_WEEK("This Week", 3),
-    LATER("Later", 4),
-    NO_DATE("No Date", 5),
-    COMPLETED("Completed", 6);
+    NEXT_30_DAYS("Next 30 Days", 4),
+    NEXT_60_DAYS("Next 60 Days", 5),
+    NEXT_90_DAYS("Next 90 Days", 6),
+    LATER("Later", 7),
+    NO_DATE("No Date", 8),
+    COMPLETED("Completed", 9);
 
     companion object {
         /**
@@ -73,12 +76,16 @@ enum class DateGroup(val displayName: String, val order: Int) {
             val date = parseToLocalDate(dateStr) ?: return NO_DATE
             val today = LocalDate.now()
             val endOfWeek = today.plusDays(7 - today.dayOfWeek.value.toLong())
+            val daysUntil = ChronoUnit.DAYS.between(today, date)
 
             return when {
                 date < today -> TODAY  // Past scheduled dates show as TODAY
                 date == today -> TODAY
                 date == today.plusDays(1) -> TOMORROW
                 date <= endOfWeek -> THIS_WEEK
+                daysUntil <= 30 -> NEXT_30_DAYS
+                daysUntil <= 60 -> NEXT_60_DAYS
+                daysUntil <= 90 -> NEXT_90_DAYS
                 else -> LATER
             }
         }
@@ -111,8 +118,8 @@ fun groupTodosByDate(todos: List<TodoEntity>): List<TodoGroupData> {
                         { it.scheduledDate ?: it.dueDate ?: "" }
                     )
                 ),
-                // Completed section starts collapsed
-                isExpanded = group != DateGroup.COMPLETED
+                // All groups start collapsed
+                isExpanded = false
             )
         }
         .sortedBy { it.group.order }

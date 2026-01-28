@@ -134,11 +134,15 @@
       (let ((primary-date (or scheduled due)))
         (if (null primary-date)
             :no-date
-            (cond
-              ((lt:timestamp< primary-date tomorrow) :today)
-              ((lt:timestamp< primary-date (lt:timestamp+ tomorrow 1 :day)) :tomorrow)
-              ((lt:timestamp< primary-date week-end) :this-week)
-              (t :later)))))))
+            (let ((days-until (lt:timestamp-difference primary-date today :day)))
+              (cond
+                ((lt:timestamp< primary-date tomorrow) :today)
+                ((lt:timestamp< primary-date (lt:timestamp+ tomorrow 1 :day)) :tomorrow)
+                ((lt:timestamp< primary-date week-end) :this-week)
+                ((<= days-until 30) :next-30-days)
+                ((<= days-until 60) :next-60-days)
+                ((<= days-until 90) :next-90-days)
+                (t :later))))))))
 
 (defun date-category-order (category)
   "Return sort order for date categories."
@@ -147,9 +151,12 @@
     (:today 1)
     (:tomorrow 2)
     (:this-week 3)
-    (:later 4)
-    (:no-date 5)
-    (otherwise 6)))
+    (:next-30-days 4)
+    (:next-60-days 5)
+    (:next-90-days 6)
+    (:later 7)
+    (:no-date 8)
+    (otherwise 9)))
 
 (defun date-category-label (category)
   "Return display label for date category."
@@ -159,6 +166,9 @@
                    (lt:format-timestring nil (local-today) :format '(:short-weekday))))
     (:tomorrow "TOMORROW")
     (:this-week "THIS WEEK")
+    (:next-30-days "NEXT 30 DAYS")
+    (:next-60-days "NEXT 60 DAYS")
+    (:next-90-days "NEXT 90 DAYS")
     (:later "LATER")
     (:no-date "UNSCHEDULED")
     (otherwise "OTHER")))
@@ -183,6 +193,9 @@
       (:today (tui:bold (tui:colored header :fg tui:*fg-yellow*)))
       (:tomorrow (tui:colored header :fg tui:*fg-cyan*))
       (:this-week (tui:colored header :fg tui:*fg-blue*))
+      (:next-30-days (tui:colored header :fg tui:*fg-green*))
+      (:next-60-days (tui:colored header :fg tui:*fg-bright-green*))
+      (:next-90-days (tui:colored header :fg tui:*fg-bright-blue*))
       (:later (tui:colored header :fg tui:*fg-magenta*))
       (:no-date (tui:colored header :fg tui:*fg-bright-black*))
       (otherwise header))))
