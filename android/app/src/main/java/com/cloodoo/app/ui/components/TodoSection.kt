@@ -31,12 +31,13 @@ enum class DateGroup(val displayName: String, val order: Int) {
     TODAY("Today", 1),
     TOMORROW("Tomorrow", 2),
     THIS_WEEK("This Week", 3),
-    NEXT_30_DAYS("Next 30 Days", 4),
-    NEXT_60_DAYS("Next 60 Days", 5),
-    NEXT_90_DAYS("Next 90 Days", 6),
-    LATER("Later", 7),
-    NO_DATE("No Date", 8),
-    COMPLETED("Completed", 9);
+    NEXT_WEEK("Next Week", 4),
+    NEXT_30_DAYS("Next 30 Days", 5),
+    NEXT_60_DAYS("Next 60 Days", 6),
+    NEXT_90_DAYS("Next 90 Days", 7),
+    LATER("Later", 8),
+    NO_DATE("No Date", 9),
+    COMPLETED("Completed", 10);
 
     companion object {
         /**
@@ -76,6 +77,7 @@ enum class DateGroup(val displayName: String, val order: Int) {
             val date = parseToLocalDate(dateStr) ?: return NO_DATE
             val today = LocalDate.now()
             val endOfWeek = today.plusDays(7 - today.dayOfWeek.value.toLong())
+            val endOfNextWeek = endOfWeek.plusWeeks(1)
             val daysUntil = ChronoUnit.DAYS.between(today, date)
 
             return when {
@@ -83,6 +85,7 @@ enum class DateGroup(val displayName: String, val order: Int) {
                 date == today -> TODAY
                 date == today.plusDays(1) -> TOMORROW
                 date <= endOfWeek -> THIS_WEEK
+                date <= endOfNextWeek -> NEXT_WEEK
                 daysUntil <= 30 -> NEXT_30_DAYS
                 daysUntil <= 60 -> NEXT_60_DAYS
                 daysUntil <= 90 -> NEXT_90_DAYS
