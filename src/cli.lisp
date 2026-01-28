@@ -452,39 +452,6 @@
                   (format t "~%-- ~D presets exported~%~%" (length presets))))
               (format t "COMMIT;~%"))))
 
-(defun make-server-command ()
-  "Create the 'server' subcommand."
-  (let ((port-opt (clingon:make-option
-                   :integer
-                   :short-name #\p
-                   :long-name "port"
-                   :key :port
-                   :initial-value 9876
-                   :description "Port to listen on"))
-        (bind-opt (clingon:make-option
-                   :string
-                   :short-name #\b
-                   :long-name "bind"
-                   :key :bind
-                   :initial-value "127.0.0.1"
-                   :description "Address to bind to (use 0.0.0.0 for Tailscale sync)")))
-    (clingon:make-command
-     :name "server"
-     :description "Start the API server for browser extension and sync"
-     :options (list port-opt bind-opt)
-     :handler (lambda (cmd)
-                (let ((port (clingon:getopt cmd :port))
-                      (address (clingon:getopt cmd :bind)))
-                  (start-server :port port :address address)
-                  ;; Keep running until interrupted
-                  (handler-case
-                      (loop (sleep 1))
-                    (#+sbcl sb-sys:interactive-interrupt
-                     #+ccl ccl:interrupt-signal-condition
-                     #-(or sbcl ccl) error ()
-                     (format t "~%Shutting down...~%")
-                     (stop-server))))))))
-
 (defun make-sync-server-command ()
   "Create the 'sync-server' subcommand for gRPC streaming sync."
   (let ((port-opt (clingon:make-option
@@ -684,7 +651,7 @@
                                                     do (format t "  ~A) ~A~A~%"
                                                                i ip
                                                                (if (str:starts-with-p "100." ip)
-                                                                   (tui:colored " (Tailscale)" :fg tui:*fg-cyan*)
+                                                                   (tui:colored " (VPN)" :fg tui:*fg-cyan*)
                                                                    "")))
                                               (format t "~%Select address [1]: ")
                                               (force-output)
@@ -1044,11 +1011,87 @@ URL format: http://HOST:PORT/pair/TOKEN"
           do (write-byte (char-code char) output-stream))
     (force-output output-stream)))
 
+(defun db-todo-exists-p (id)
+  "Check if a current (non-superseded) TODO with the given ID exists."
+  (with-db (db)
+    (let ((result (sqlite:execute-single db
+                    "SELECT 1 FROM todos WHERE id = ? AND valid_to IS NULL" id)))
+      (not (null result)))))
+
+(defun sync-push-todo (todo)
+  "Push a single todo to the sync server as a one-shot gRPC operation.
+   Connects, performs the SyncStream handshake, sends the upsert, and disconnects.
+   Used by the native host to immediately sync browser extension TODOs.
+   Returns T on success, NIL on failure.  Errors are logged but never propagated."
+  (handler-case
+      (multiple-value-bind (host port server-id) (find-paired-sync-config)
+        (unless host
+          (native-host-log "No sync config found, skipping sync push")
+          (return-from sync-push-todo nil))
+        (native-host-log "Sync push to ~A:~A" host port)
+        (let* ((cert-file (paired-client-cert-file server-id))
+               (key-file (paired-client-key-file server-id))
+               (use-tls (and (probe-file cert-file) (probe-file key-file)))
+               (channel nil)
+               (stream nil))
+          ;; Disable ENABLE_PUSH (deprecated in RFC 9113, gRPC doesn't use server push)
+          (let ((push-setting (assoc ag-http2::+settings-enable-push+
+                                     ag-http2::*default-settings*)))
+            (when push-setting
+              (setf (cdr push-setting) 0)))
+          (unwind-protect
+               (progn
+                 ;; Connect to sync server
+                 (setf channel
+                       (if use-tls
+                           (ag-grpc:make-channel host port
+                                                 :tls t
+                                                 :tls-client-certificate (namestring cert-file)
+                                                 :tls-client-key (namestring key-file))
+                           (ag-grpc:make-channel host port :tls nil)))
+                 (let ((stub (make-proto-todo-sync-stub channel)))
+                   (setf stream (proto-todo-sync-stream stub)))
+                 ;; Send SyncInit with since=now to minimize pending changes
+                 (let ((now (now-iso)))
+                   (ag-grpc:stream-send stream
+                     (make-sync-init-message (get-device-id) now now)))
+                 ;; Read SyncAck
+                 (let ((ack-msg (ag-grpc:stream-read-message stream)))
+                   (unless (and ack-msg (eq (proto-msg-case ack-msg) :ack))
+                     (native-host-log "Sync push: no ACK received")
+                     (return-from sync-push-todo nil))
+                   (let* ((ack (proto-msg-ack ack-msg))
+                          (error-msg (proto-ack-error ack))
+                          (pending (proto-ack-pending-changes ack)))
+                     (when (and error-msg (plusp (length error-msg)))
+                       (native-host-log "Sync push rejected: ~A" error-msg)
+                       (return-from sync-push-todo nil))
+                     ;; Drain any pending changes the server sends
+                     (dotimes (i pending)
+                       (ag-grpc:stream-read-message stream))))
+                 ;; Send the upsert
+                 (ag-grpc:stream-send stream
+                   (make-sync-upsert-message (get-device-id) todo))
+                 (native-host-log "Sync push: sent todo ~A" (todo-id todo))
+                 t)
+            ;; Cleanup
+            (when stream
+              (handler-case (ag-grpc:stream-close-send stream) (error () nil)))
+            (when channel
+              (handler-case (ag-grpc:channel-close channel) (error () nil))))))
+    (error (e)
+      (native-host-log "Sync push failed (non-fatal): ~A" e)
+      nil)))
+
 (defun handle-native-create-todo (message)
   "Handle a createTodo message from the browser extension.
-   Creates the TODO immediately and returns, then spawns background enrichment."
+   Creates the TODO immediately and returns, then spawns background enrichment.
+   If client_id is provided and a todo with that ID already exists, returns
+   success without creating a duplicate (idempotent)."
   (let* ((todo-data (gethash "todo" message))
          (title (gethash "title" todo-data))
+         (client-id (let ((cid (gethash "client_id" todo-data)))
+                      (when (and cid (stringp cid) (plusp (length cid))) cid)))
          (description (let ((d (gethash "description" todo-data)))
                         (unless (or (null d) (eq d 'null)) d)))
          (priority-str (or (gethash "priority" todo-data) "medium"))
@@ -1064,24 +1107,42 @@ URL format: http://HOST:PORT/pair/TOKEN"
                                  (coerce tags-raw 'list)))))
          (url (let ((u (gethash "url" todo-data)))
                 (unless (or (null u) (eq u 'null)) u))))
+    ;; Idempotency: if client_id provided and todo already exists, return success
+    (when (and client-id (db-todo-exists-p client-id))
+      (native-host-log "TODO already exists for client_id ~A, skipping" client-id)
+      (let ((response (make-hash-table :test #'equal)))
+        (setf (gethash "success" response) t)
+        (setf (gethash "duplicate" response) t)
+        (return-from handle-native-create-todo response)))
     (if title
         ;; Create TODO immediately with raw data, mark for async enrichment
         (let ((todo (make-todo title
-                              :description description
-                              :priority priority
-                              :due-date due-date
-                              :tags tags
-                              :url url)))
+                               :description description
+                               :priority priority
+                               :due-date due-date
+                               :tags tags
+                               :url url)))
+          ;; Use client-provided ID for idempotency instead of the generated one
+          (when client-id
+            (setf (todo-id todo) client-id))
           ;; Mark as needing enrichment
           (setf (todo-enriching-p todo) t)
           (save-todo todo)
           (native-host-log "Created TODO: ~A (pending enrichment)" title)
-          ;; Spawn background enrichment process
-          (let ((exe-path (get-cloodoo-executable)))
-            (native-host-log "Spawning enrichment: ~A enrich-pending" exe-path)
-            (uiop:launch-program (list exe-path "enrich-pending")
-                                 :output nil
-                                 :error-output nil))
+          ;; Push to sync server immediately (best-effort, non-fatal)
+          (sync-push-todo todo)
+          ;; Spawn background enrichment process (best-effort, must not
+          ;; prevent the success response from being sent — otherwise the
+          ;; extension thinks creation failed and retries every 5 minutes,
+          ;; creating duplicates)
+          (handler-case
+              (let ((exe-path (get-cloodoo-executable)))
+                (native-host-log "Spawning enrichment: ~A enrich-pending" exe-path)
+                (uiop:launch-program (list exe-path "enrich-pending")
+                                     :output nil
+                                     :error-output nil))
+            (error (e)
+              (native-host-log "Enrichment spawn failed (non-fatal): ~A" e)))
           ;; Return success immediately
           (let ((response (make-hash-table :test #'equal)))
             (setf (gethash "success" response) t)
@@ -1253,13 +1314,15 @@ URL format: http://HOST:PORT/pair/TOKEN"
 
 (defun get-cloodoo-executable ()
   "Get the path to the cloodoo executable."
-  ;; Try to find the executable
   (or
+   ;; Best option: the currently running executable (works when compiled)
+   (let ((self (namestring sb-ext:*runtime-pathname*)))
+     (when (and self (probe-file self)) self))
    ;; Check if we're running from a known location
    (let ((exe (merge-pathnames "cloodoo" (uiop:getcwd))))
      (when (probe-file exe) (namestring exe)))
-   ;; Check the git/cluedo build directory
-   (let ((exe (merge-pathnames "git/cluedo/cloodoo" (user-homedir-pathname))))
+   ;; Check the git/cloodoo build directory
+   (let ((exe (merge-pathnames "git/cloodoo/cloodoo" (user-homedir-pathname))))
      (when (probe-file exe) (namestring exe)))
    ;; Check common install locations
    (let ((exe "/usr/local/bin/cloodoo"))
@@ -1465,7 +1528,6 @@ URL format: http://HOST:PORT/pair/TOKEN"
                        (make-stats-command)
                        (make-dump-command)
                        (make-compact-command)
-                       (make-server-command)
                        (make-sync-server-command)
                        (make-sync-connect-command)
                        (make-cert-command)

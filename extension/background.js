@@ -19,12 +19,20 @@ async function savePendingTodos(todos) {
   await chrome.storage.local.set({ [PENDING_TODOS_KEY]: todos });
 }
 
+// Generate a stable client ID for idempotent creation
+function generateClientId() {
+  const ts = Date.now().toString(36);
+  const rnd = Math.random().toString(36).substr(2, 9);
+  return `ext-${ts}-${rnd}`;
+}
+
 // Add a TODO to the pending queue
 async function addPendingTodo(todo) {
   const pending = await getPendingTodos();
   const pendingTodo = {
     ...todo,
     _pendingId: Date.now().toString() + Math.random().toString(36).substr(2, 9),
+    _clientId: todo._clientId || generateClientId(),
     _createdAt: new Date().toISOString()
   };
   pending.push(pendingTodo);
@@ -95,10 +103,14 @@ async function createTodoNative(todoData) {
 // Try to create a TODO - uses native messaging, falls back to local queue
 async function createTodo(todoData) {
   console.log('createTodo called with:', todoData);
+  // Generate a stable client ID so that retries are idempotent
+  const clientId = generateClientId();
+  const todoWithClientId = { ...todoData, client_id: clientId };
+
   const nativeAvailable = await checkNativeMessaging();
   if (nativeAvailable) {
     try {
-      const result = await createTodoNative(todoData);
+      const result = await createTodoNative(todoWithClientId);
       console.log('Native messaging succeeded:', result);
       return { success: true, todo: result.todo, synced: true, method: 'native' };
     } catch (error) {
@@ -107,13 +119,17 @@ async function createTodo(todoData) {
   }
 
   // Store locally when native messaging is unavailable
-  const pendingTodo = await addPendingTodo(todoData);
+  const pendingTodo = await addPendingTodo({ ...todoData, _clientId: clientId });
   return { success: true, todo: pendingTodo, synced: false, pending: true };
 }
 
 // Sync a single pending TODO via native messaging
 async function syncOneTodo(todo) {
-  const { _pendingId, _createdAt, ...todoData } = todo;
+  const { _pendingId, _createdAt, _clientId, ...todoData } = todo;
+  // Include client_id for idempotent creation on the backend
+  if (_clientId) {
+    todoData.client_id = _clientId;
+  }
 
   const nativeAvailable = await checkNativeMessaging();
   if (nativeAvailable) {
@@ -129,27 +145,39 @@ async function syncOneTodo(todo) {
 }
 
 // Sync all pending TODOs
+// Uses atomic drain: clears queue first, then re-adds failures.
+// This prevents Manifest V3 service worker kills from leaving stale
+// entries that get re-sent every 5 minutes, creating duplicates.
 async function syncPendingTodos() {
   const pending = await getPendingTodos();
   if (pending.length === 0) {
     return { synced: 0, failed: 0, remaining: 0 };
   }
 
+  // Atomically clear the queue BEFORE processing.
+  // If the service worker dies mid-sync, we lose pending items rather
+  // than creating duplicates on every alarm cycle.
+  await savePendingTodos([]);
+
   let synced = 0;
-  let failed = 0;
+  const failedTodos = [];
 
   for (const todo of pending) {
     const success = await syncOneTodo(todo);
     if (success) {
-      await removePendingTodo(todo._pendingId);
       synced++;
     } else {
-      failed++;
+      failedTodos.push(todo);
     }
   }
 
-  const remaining = (await getPendingTodos()).length;
-  return { synced, failed, remaining };
+  // Re-add any that failed back to the queue
+  if (failedTodos.length > 0) {
+    const current = await getPendingTodos();
+    await savePendingTodos([...current, ...failedTodos]);
+  }
+
+  return { synced, failed: failedTodos.length, remaining: failedTodos.length };
 }
 
 // Handle messages from popup and content script

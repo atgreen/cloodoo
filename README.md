@@ -121,9 +121,9 @@ are running a sync server or not:
 
 - **Without a sync server**: the task goes into your local database
   and shows up in your TUI.
-- **With a sync server**: the task goes into your local database and,
-  because your TUI is connected to the sync server, it syncs to your
-  other devices automatically.
+- **With a sync server**: the task goes into your local database and
+  is pushed directly to the sync server, so it reaches your other
+  devices immediately.
 
 If native messaging isn't set up yet (you haven't run
 `./cloodoo setup-extension`), the extension queues tasks locally in
@@ -219,7 +219,6 @@ cloodoo list                List tasks (--status, --priority, --all)
 cloodoo done SEARCH         Mark a task completed
 cloodoo stats               Show counts and overdue tasks
 
-cloodoo server              Start REST API (default localhost:9876)
 cloodoo sync-server         Start gRPC sync server (default 0.0.0.0:50051)
 cloodoo sync-connect        Connect TUI to a remote sync server
 
@@ -315,27 +314,7 @@ The extension lives in `extension/`. Supports Chrome and Firefox
 
 The extension extracts email subject, sender, date, and body snippet to
 pre-fill the TODO form. Tasks can be created even when offline and will
-sync when the server becomes available.
-
-## REST API
-
-Start the HTTP server:
-
-```sh
-./cloodoo server                  # localhost:9876
-./cloodoo server --port 8080      # custom port
-```
-
-| Method | Path | Description |
-|---|---|---|
-| `GET` | `/api/health` | Health check |
-| `GET` | `/api/todos` | List all current tasks |
-| `POST` | `/api/todos` | Create a task |
-| `GET` | `/api/device` | Device ID and server time |
-| `GET` | `/api/sync?since=TS` | Changes since timestamp |
-| `POST` | `/api/sync` | Merge remote changes |
-| `GET` | `/pair/:token` | Pairing request info |
-| `POST` | `/pair/:token/pem` | Download certificates (passphrase required) |
+sync when the native host becomes available.
 
 ## AI enrichment
 
@@ -394,7 +373,7 @@ src/
   view.lisp          TUI rendering
   components.lisp    Reusable UI components
   update.lisp        TUI event handling and keybindings
-  server.lisp        REST API (Hunchentoot)
+  server.lisp        HTTP server for certificate pairing
   sync.lisp          gRPC bidirectional sync server and client
   grpc-proto.lisp    Protocol buffer definitions
   certs.lisp         Certificate authority and mTLS

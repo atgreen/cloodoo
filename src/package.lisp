@@ -43,10 +43,6 @@
    #:ensure-config-directory
    #:ensure-cache-directory
 
-   ;; Server
-   #:start-server
-   #:stop-server
-
    ;; Application
    #:+version+
    #:start-tui

@@ -123,7 +123,7 @@
 (defun init-server-cert (&key (days 365) hosts)
   "Initialize the server certificate.
    HOSTS is a list of hostnames/IPs for the SAN extension.
-   If not provided, uses localhost, 127.0.0.1, and tries to detect Tailscale IP."
+   If not provided, uses localhost, 127.0.0.1, and tries to detect local network IPs."
   (unless (ca-initialized-p)
     (error "CA not initialized. Run 'cloodoo cert init' first."))
 
@@ -316,7 +316,7 @@
            (find #\: string))))  ; IPv6
 
 (defun detect-local-ips ()
-  "Detect local IP addresses including Tailscale."
+  "Detect local IP addresses including VPN interfaces."
   (let ((ips nil))
     (handler-case
         (multiple-value-bind (out err code)
@@ -334,7 +334,7 @@
                                      (find #\: ip)
                                      (str:starts-with-p "169.254." ip)))
                                ips)))
-      ;; Prefer Tailscale IPs (100.x.x.x) first
+      ;; Prefer VPN IPs (100.x.x.x CGNAT range) first
       (stable-sort (copy-list filtered)
                     (lambda (a b)
                       (declare (ignore b))

@@ -153,14 +153,8 @@ document.addEventListener('DOMContentLoaded', async () => {
       const response = await chrome.runtime.sendMessage({ action: 'checkHealth' });
       serverOnline = response.healthy;
       if (response.healthy) {
-        // Show connection method
-        if (response.method === 'native') {
-          statusEl.textContent = 'Native';
-          statusEl.className = 'status native';
-        } else {
-          statusEl.textContent = 'HTTP';
-          statusEl.className = 'status connected';
-        }
+        statusEl.textContent = 'Connected';
+        statusEl.className = 'status native';
         hideError();
       } else {
         statusEl.textContent = 'Offline';

@@ -42,24 +42,14 @@ header h1 {
   border-radius: 12px;
 }
 
-.status.connected {
-  background: #e6f4ea;
-  color: #137333;
-}
-
-.status.disconnected {
-  background: #fce8e6;
-  color: #c5221f;
+.status.native {
+  background: #e8f5e9;
+  color: #2e7d32;
 }
 
 .status.offline {
   background: #fef7e0;
   color: #b06000;
-}
-
-.status.native {
-  background: #e8f5e9;
-  color: #2e7d32;
 }
 
 .pending-banner {
