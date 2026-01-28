@@ -2,6 +2,9 @@ syntax = "proto3";
 
 package cloodoo;
 
+option java_package = "com.cloodoo.app.proto";
+option java_outer_classname = "CloodooSync";
+
 // Location information for a todo
 message LocationInfo {
   string name = 1;

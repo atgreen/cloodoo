@@ -16,7 +16,7 @@ ag-protoc: ocicl/ag-gRPC-*/ag-proto-cli/*.lisp ocicl/ag-gRPC-*/ag-proto/*.lisp
 
 # Generate Lisp code from Protocol Buffer definition
 # Uses ag-protoc with --class-prefix PROTO- to avoid conflicts with model classes
-src/grpc-proto.lisp: ag-protoc android/app/src/main/proto/cloodoo_sync.proto
+src/grpc-proto.lisp: ag-protoc android/app/src/main/proto/cloodoo_sync.proto proto/cloodoo_sync.proto
 	@echo "Generating src/grpc-proto.lisp from proto file..."
 	@./ag-protoc \
 		-p cloodoo \
