@@ -43,7 +43,7 @@ gnome-extensions enable cloodoo-screenshot@moxielogic.com
 From the cloodoo project root:
 
 ```bash
-make install-extension
+make install-gnome-extension
 ```
 
 ## Usage

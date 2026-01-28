@@ -1,4 +1,4 @@
-.PHONY: android android-install install-extension clean
+.PHONY: android android-install install-gnome-extension clean
 
 # Default target: build the TUI application
 cloodoo: src/grpc-proto.lisp src/*.lisp *.asd
@@ -52,7 +52,7 @@ android-install: android
 	fi
 
 # Install GNOME Shell extension
-install-extension:
+install-gnome-extension:
 	@echo "Installing GNOME Shell extension..."
 	@cd gnome-extension && glib-compile-schemas schemas/
 	@mkdir -p ~/.local/share/gnome-shell/extensions/cloodoo-screenshot@moxielogic.com

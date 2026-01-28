@@ -239,7 +239,7 @@ sudo apt install gnome-screenshot zenity  # Ubuntu
 
 ```bash
 # From cloodoo project root
-make install-extension
+make install-gnome-extension
 
 # Restart GNOME Shell
 # X11: Alt+F2, type 'r', Enter
@@ -409,7 +409,7 @@ Alternative considered: Native GTK dialog
 - `gnome-extension/README.md` - User documentation
 
 ### Build System (Modified)
-- `Makefile` - Added install-extension target
+- `Makefile` - Added install-gnome-extension target
 
 ### Documentation (New)
 - `GNOME_EXTENSION.md` - This file
