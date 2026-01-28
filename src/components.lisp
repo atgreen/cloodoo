@@ -8,6 +8,13 @@
 
 ;;── UI Components ──────────────────────────────────────────────────────────────
 
+;;; Title sanitization
+(defun sanitize-title-for-display (title)
+  "Strip newlines and collapse whitespace in todo titles for display."
+  (str:collapse-whitespaces
+   (str:replace-all (string #\Newline) " "
+    (str:replace-all (string #\Return) " " title))))
+
 ;;; Priority formatting
 (defun priority-string (priority)
   "Return priority indicator."
@@ -134,7 +141,7 @@
       (let ((primary-date (or scheduled due)))
         (if (null primary-date)
             :no-date
-            (let ((days-until (lt:timestamp-difference primary-date today :day))
+            (let ((days-until (truncate (lt:timestamp-difference primary-date today) 86400))
                   (next-week-end (lt:timestamp+ week-end 7 :day)))
               (cond
                 ((lt:timestamp< primary-date tomorrow) :today)
@@ -224,7 +231,7 @@
   "Render a single TODO line in retro style."
   (let* ((status (status-colored (todo-status todo)))
          (priority (priority-colored (todo-priority todo)))
-         (title (todo-title todo))
+         (title (sanitize-title-for-display (todo-title todo)))
          (due (format-due-date (todo-due-date todo)))
          (completed-p (eq (todo-status todo) :completed))
          ;; Calculate widths
@@ -412,29 +419,6 @@
                      :fg tui:*fg-bright-black*))))))
 
 ;;── Subtask Progress Formatting ───────────────────────────────────────────────
-
-(defun format-subtask-progress (progress)
-  "Format subtask progress (completed . total) for display.
-   Returns nil if no progress to show."
-  (when progress
-    (let* ((completed (car progress))
-           (total (cdr progress))
-           (text (format nil "~D/~D" completed total)))
-      (cond
-        ((= completed total)
-         (tui:colored text :fg tui:*fg-green*))
-        ((> completed 0)
-         (tui:colored text :fg tui:*fg-yellow*))
-        (t
-         (tui:colored text :fg tui:*fg-bright-black*))))))
-
-(defun format-collapse-indicator (collapsed-p has-children-p)
-  "Return collapse/expand indicator for a todo with children.
-   Returns nil if todo has no children."
-  (when has-children-p
-    (if collapsed-p
-        (tui:colored "▶" :fg tui:*fg-cyan*)
-        (tui:colored "▼" :fg tui:*fg-cyan*))))
 
 ;;── Pager-style Header (like Charm's bubbletea) ────────────────────────────────
 

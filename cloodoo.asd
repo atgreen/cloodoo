@@ -34,6 +34,7 @@
                 :components ((:file "package")
                              (:file "model")
                              (:file "grpc-proto")
+                             (:file "proto-helpers")
                              (:file "storage")
                              (:file "db")
                              (:file "certs")

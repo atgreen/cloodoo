@@ -223,8 +223,6 @@
                                                 :website (gethash "website" ht))))))
                    :url (let ((u (gethash "url" ht)))
                           (unless (or (null u) (eq u 'null)) u))
-                   :parent-id (let ((p (gethash "parent_id" ht)))
-                                (unless (or (null p) (eq p 'null)) p))
                    :device-id (gethash "device_id" ht)
                    :repeat-interval (let ((i (gethash "repeat_interval" ht)))
                                       (unless (or (null i) (eq i 'null)) i))
@@ -454,8 +452,8 @@
                         (ag-grpc:make-channel host port :tls nil)))
 
               ;; Create stub and stream
-              (let ((stub (make-proto-todo-sync-stub *sync-client-channel*)))
-                (setf *sync-client-stream* (proto-todo-sync-stream stub)))
+              (let ((stub (make-todo-sync-stub *sync-client-channel*)))
+                (setf *sync-client-stream* (todo-sync-sync-stream stub)))
 
               ;; Send init message
               (let* ((client-time (now-iso))
@@ -475,9 +473,16 @@
                                (llog:info "Sync stream ended")
                                (return))))))
           (error (e)
-            (llog:error "Sync connection error" :error (princ-to-string e))
-            (update-sync-status :error (princ-to-string e))
-            (notify-tui-refresh)))
+            (let ((error-msg (princ-to-string e)))
+              ;; Check if this is a deliberate shutdown, not an actual error
+              (if (search "sync client shutting down" error-msg)
+                  (progn
+                    (llog:info "Sync client shutdown signal received")
+                    (return))
+                  (progn
+                    (llog:error "Sync connection error" :error error-msg)
+                    (update-sync-status :error error-msg)
+                    (notify-tui-refresh))))))
 
         ;; Cleanup before retry
         (cleanup-sync-client)

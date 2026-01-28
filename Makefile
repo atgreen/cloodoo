@@ -1,3 +1,9 @@
+.PHONY: android android-install clean
+
+# Default target: build the TUI application
+cloodoo: src/grpc-proto.lisp src/*.lisp *.asd
+	sbcl --eval "(asdf:make :cloodoo)" --quit
+
 # Build ag-protoc tool from ag-gRPC
 ag-protoc: ocicl/ag-gRPC-*/ag-proto-cli/*.lisp ocicl/ag-gRPC-*/ag-proto/*.lisp
 	@echo "Building ag-protoc tool..."
@@ -17,11 +23,6 @@ src/grpc-proto.lisp: ag-protoc android/app/src/main/proto/cloodoo_sync.proto
 		--class-prefix PROTO- \
 		-o $@ \
 		android/app/src/main/proto/cloodoo_sync.proto
-
-.PHONY: android android-install clean
-
-cloodoo: src/grpc-proto.lisp src/*.lisp *.asd
-	sbcl --eval "(asdf:make :cloodoo)" --quit
 
 # Build Android app (output: android/app/build/outputs/apk/debug/app-debug.apk)
 android:

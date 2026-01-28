@@ -9,9 +9,8 @@ gRPC bidirectional streaming with mTLS, and optional LLM enrichment.
 
 ## Features
 
-- **Terminal UI** with vim-style navigation, mouse support, hierarchical
-  tasks, inline editing, tag sidebar, calendar date picker, and
-  collapsible subtrees
+- **Terminal UI** with vim-style navigation, mouse support, inline
+  editing, tag sidebar, and calendar date picker
 - **Real-time sync** across devices via gRPC bidirectional streaming
   with mutual TLS authentication
 - **Android app** (Jetpack Compose, Material 3) with offline sync
@@ -148,8 +147,7 @@ Press `?` in the TUI for the full help overlay.
 
 | Key | Action |
 |---|---|
-| `a` | Add sibling task |
-| `A` | Add child task |
+| `a` | Add task |
 | `e` | Edit task |
 | `Space` | Cycle status (pending / in-progress / completed / waiting / cancelled) |
 | `Del` / `d` | Delete task |
@@ -159,9 +157,6 @@ Press `?` in the TUI for the full help overlay.
 
 | Key | Action |
 |---|---|
-| `>` / `Tab` | Indent (make child) |
-| `<` / `Shift+Tab` | Outdent |
-| `z` | Collapse / expand children |
 | `Shift+Up` / `Shift+Down` | Increase / decrease priority |
 | `B` / `C` | Set priority to medium / low |
 | `S` | Set scheduled date |

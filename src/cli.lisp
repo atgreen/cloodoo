@@ -432,7 +432,7 @@
                               (if (or (null estimated-minutes) (eq estimated-minutes :null)) "NULL" estimated-minutes)
                               (sql-escape-string location-info)
                               (sql-escape-string url)
-                              (sql-escape-string parent-id)
+                              "NULL"  ; parent-id no longer used
                               (sql-escape-string created-at)
                               (sql-escape-string completed-at)
                               (sql-escape-string valid-from)
@@ -929,10 +929,9 @@ URL format: http://HOST:PORT/pair/TOKEN"
                   (init-enrichment)
                   (dolist (todo pending)
                     (handler-case
-                        (let* ((parent-context (build-parent-context (todo-parent-id todo) todos))
-                               (enriched (enrich-todo-input (todo-title todo)
+                        (let* ((enriched (enrich-todo-input (todo-title todo)
                                                             (todo-description todo)
-                                                            parent-context)))
+                                                            nil)))
                           (when enriched
                             (when (getf enriched :title)
                               (setf (todo-title todo) (getf enriched :title)))
@@ -1049,8 +1048,8 @@ URL format: http://HOST:PORT/pair/TOKEN"
                                                  :tls-client-certificate (namestring cert-file)
                                                  :tls-client-key (namestring key-file))
                            (ag-grpc:make-channel host port :tls nil)))
-                 (let ((stub (make-proto-todo-sync-stub channel)))
-                   (setf stream (proto-todo-sync-stream stub)))
+                 (let ((stub (make-todo-sync-stub channel)))
+                   (setf stream (todo-sync-sync-stream stub)))
                  ;; Send SyncInit with since=now to minimize pending changes
                  (let ((now (now-iso)))
                    (ag-grpc:stream-send stream

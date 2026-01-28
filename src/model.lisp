@@ -103,12 +103,6 @@
     :accessor todo-enriching-p
     :type boolean
     :documentation "True if this TODO is currently being enriched by the LLM.")
-   (parent-id
-    :initarg :parent-id
-    :initform nil
-    :accessor todo-parent-id
-    :type (or null string)
-    :documentation "ID of parent TODO, nil for top-level items.")
    (device-id
     :initarg :device-id
     :initform nil
@@ -157,7 +151,7 @@
        (nreverse result)))
     (t nil)))
 
-(defun make-todo (title &key description priority scheduled-date due-date tags estimated-minutes location-info url parent-id device-id repeat-interval repeat-unit)
+(defun make-todo (title &key description priority scheduled-date due-date tags estimated-minutes location-info url device-id repeat-interval repeat-unit)
   "Create a new TODO item with the given properties."
   (make-instance 'todo
                  :id (generate-id)
@@ -170,7 +164,6 @@
                  :estimated-minutes estimated-minutes
                  :location-info location-info
                  :url url
-                 :parent-id parent-id
                  :device-id device-id
                  :repeat-interval repeat-interval
                  :repeat-unit repeat-unit
@@ -182,55 +175,6 @@
             (todo-id todo)
             (todo-priority todo)
             (todo-title todo))))
-
-;;── Nested Task Helper Functions ──────────────────────────────────────────────
-
-(defun get-children (todos parent-id)
-  "Return list of todos that have the given parent-id."
-  (remove-if-not (lambda (todo)
-                   (equal (todo-parent-id todo) parent-id))
-                 todos))
-
-(defun get-todo-depth (todos todo)
-  "Return nesting depth of TODO (0 for top-level items)."
-  (let ((depth 0)
-        (current-parent-id (todo-parent-id todo)))
-    (loop while current-parent-id
-          do (let ((parent (find current-parent-id todos
-                                 :key #'todo-id :test #'equal)))
-               (if parent
-                   (progn
-                     (incf depth)
-                     (setf current-parent-id (todo-parent-id parent)))
-                   (setf current-parent-id nil))))
-    depth))
-
-(defun count-subtask-progress (todos parent-id)
-  "Return (completed . total) count for direct children of parent-id."
-  (let ((children (get-children todos parent-id)))
-    (if (null children)
-        nil
-        (let ((completed (count-if (lambda (todo)
-                                     (eq (todo-status todo) +status-completed+))
-                                   children))
-              (total (length children)))
-          (cons completed total)))))
-
-(defun has-children-p (todos todo)
-  "Return T if TODO has any children."
-  (some (lambda (t2)
-          (equal (todo-parent-id t2) (todo-id todo)))
-        todos))
-
-(defun get-descendants (todos parent-id)
-  "Return all descendants of a todo (children, grandchildren, etc.)."
-  (let ((result nil))
-    (labels ((collect (pid)
-               (dolist (child (get-children todos pid))
-                 (push child result)
-                 (collect (todo-id child)))))
-      (collect parent-id))
-    (nreverse result)))
 
 ;;── Repeating Task Helpers ────────────────────────────────────────────────────
 

@@ -294,7 +294,7 @@
                        location-info url parent-id created-at completed-at
                        valid-from valid-to device-id
                        &optional repeat-interval repeat-unit enriching-p) row
-    (declare (ignore row-id valid-from valid-to))
+    (declare (ignore row-id valid-from valid-to parent-id))
     (make-instance 'todo
                    :id id
                    :title title
@@ -316,7 +316,6 @@
                                               :map-url (gethash "map_url" ht)
                                               :website (gethash "website" ht)))))
                    :url (unless (eq url :null) url)
-                   :parent-id (unless (eq parent-id :null) parent-id)
                    :device-id (unless (eq device-id :null) device-id)
                    :repeat-interval (unless (or (null repeat-interval) (eq repeat-interval :null))
                                       repeat-interval)
@@ -398,7 +397,7 @@
                     "website" (getf loc :website))
               :test #'equal))))
         (todo-url todo)
-        (todo-parent-id todo)
+        nil  ; parent-id removed - nested TODOs no longer supported
         (lt:format-rfc3339-timestring nil (todo-created-at todo))
         (when (todo-completed-at todo)
           (lt:format-rfc3339-timestring nil (todo-completed-at todo)))
@@ -695,7 +694,7 @@
       (setf (gethash "estimated_minutes" ht) (db-null-to-json-null estimated-minutes))
       (setf (gethash "location_info" ht) (db-null-to-json-null location-info))
       (setf (gethash "url" ht) (db-null-to-json-null url))
-      (setf (gethash "parent_id" ht) (db-null-to-json-null parent-id))
+      (setf (gethash "parent_id" ht) 'null)  ; parent-id no longer used
       (setf (gethash "created_at" ht) created-at)
       (setf (gethash "completed_at" ht) (db-null-to-json-null completed-at))
       (setf (gethash "valid_from" ht) valid-from)

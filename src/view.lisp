@@ -271,24 +271,14 @@
                 (format c "~A" (date-category-colored category list-width))
                 (dolist (todo group-todos)
                   (format c "~%")
-                  (let* ((all-todos (model-todos model))
-                         (selected-p (and (not (model-sidebar-focused model))
+                  (let* ((selected-p (and (not (model-sidebar-focused model))
                                           (= current-idx (model-cursor model))))
-                         ;; Calculate depth for indentation (2 spaces per level)
-                         (depth (get-todo-depth all-todos todo))
-                         (depth-indent (make-string (* 2 depth) :initial-element #\Space))
-                         ;; Check if this todo has children and its collapse state
-                         (has-kids (has-children-p all-todos todo))
-                         (is-collapsed (todo-collapsed-p model todo))
-                         ;; Progress indicator for items with children
-                         (progress (count-subtask-progress all-todos (todo-id todo)))
                          (indent "  ")
-                         (tags-str (org-tags-string (get-effective-tags todo all-todos))))
+                         (tags-str (org-tags-string (todo-tags todo))))
                     ;; Build line differently based on selection state
                     (if selected-p
                         ;; SELECTED: Plain text with strong contrast highlight
-                        (let* ((collapse-ind (if has-kids (if is-collapsed "▶" "▼") " "))
-                               (status-text (if (todo-enriching-p todo)
+                        (let* ((status-text (if (todo-enriching-p todo)
                                                 (tui.spinner:spinner-view
                                                  (model-enrichment-spinner model))
                                                 (case (todo-status todo)
@@ -306,19 +296,14 @@
                                (schedule-text (format-schedule-info-plain
                                                (todo-scheduled-date todo)
                                                (todo-due-date todo)))
-                               (progress-str (when progress
-                                               (format nil "~D/~D" (car progress) (cdr progress))))
-                               (prefix (format nil "~A~A~A~A~A ~A "
-                                               depth-indent indent collapse-ind
-                                               schedule-text status-text priority-text))
+                               (prefix (format nil "~A~A~A ~A "
+                                               indent schedule-text status-text priority-text))
                                (prefix-len (tui:visible-length prefix))
                                (tags-len (tui:visible-length tags-str))
-                               (progress-len (if progress-str (+ 1 (tui:visible-length progress-str)) 0))
-                               (suffix-len (+ tags-len progress-len
-                                              (if (and (> tags-len 0) (> progress-len 0)) 1 0)))
+                               (suffix-len tags-len)
                                (avail (max 0 (- list-width prefix-len
                                                 (if (> suffix-len 0) (+ suffix-len 1) 0))))
-                               (title-text (todo-title todo))
+                               (title-text (sanitize-title-for-display (todo-title todo)))
                                (trunc-title (if (> (tui:visible-length title-text) avail)
                                                 (concatenate 'string
                                                              (subseq title-text 0 (max 0 (- avail 2)))
@@ -326,12 +311,7 @@
                                                 title-text))
                                (base (format nil "~A~A" prefix trunc-title))
                                (base-len (tui:visible-length base))
-                               (suffix (cond
-                                         ((and progress-str (> tags-len 0))
-                                          (format nil "~A ~A" progress-str tags-str))
-                                         (progress-str progress-str)
-                                         ((> tags-len 0) tags-str)
-                                         (t "")))
+                               (suffix (if (> tags-len 0) tags-str ""))
                                (suffix-actual-len (tui:visible-length suffix))
                                (pad (max 0 (- list-width base-len suffix-actual-len)))
                                (line-content (format nil "~A~A~A" base
@@ -356,9 +336,7 @@
                                                     :bg tui:*bg-cyan*
                                                     :fg tui:*fg-black*)))))
                         ;; NOT SELECTED: Normal colored rendering
-                        (let* ((collapse-ind (format-collapse-indicator is-collapsed has-kids))
-                               (progress-str (format-subtask-progress progress))
-                               (status-indicator (if (todo-enriching-p todo)
+                        (let* ((status-indicator (if (todo-enriching-p todo)
                                                      (tui:colored
                                                       (tui.spinner:spinner-view
                                                        (model-enrichment-spinner model))
@@ -371,17 +349,14 @@
                                (tags-colored (if (> (length tags-str) 0)
                                                  (tui:colored tags-str :fg tui:*fg-yellow*)
                                                  ""))
-                               (prefix (format nil "~A~A~A~A~A ~A "
-                                               depth-indent indent (or collapse-ind " ")
-                                               schedule-info status-indicator priority-str))
+                               (prefix (format nil "~A~A~A ~A "
+                                               indent schedule-info status-indicator priority-str))
                                (prefix-len (tui:visible-length prefix))
                                (tags-len (tui:visible-length tags-colored))
-                               (progress-len (if progress-str (+ 1 (tui:visible-length progress-str)) 0))
-                               (suffix-len (+ tags-len progress-len
-                                              (if (and (> tags-len 0) (> progress-len 0)) 1 0)))
+                               (suffix-len tags-len)
                                (avail (max 0 (- list-width prefix-len
                                                 (if (> suffix-len 0) (+ suffix-len 1) 0))))
-                               (title-text (todo-title todo))
+                               (title-text (sanitize-title-for-display (todo-title todo)))
                                (trunc-title (if (> (length title-text) avail)
                                                 (concatenate 'string
                                                              (subseq title-text 0 (max 0 (- avail 2)))
@@ -396,12 +371,7 @@
                                                  trunc-title))
                                (base (format nil "~A~A" prefix styled-title))
                                (base-len (tui:visible-length base))
-                               (suffix (cond
-                                         ((and progress-str (> tags-len 0))
-                                          (format nil "~A ~A" progress-str tags-colored))
-                                         (progress-str progress-str)
-                                         ((> tags-len 0) tags-colored)
-                                         (t "")))
+                               (suffix (if (> tags-len 0) tags-colored ""))
                                (suffix-actual-len (tui:visible-length suffix))
                                (pad (if (> suffix-actual-len 0)
                                         (max 1 (- list-width base-len suffix-actual-len))
@@ -545,8 +515,8 @@
                                              (tui:render-styled
                                               (tui:make-style :strikethrough t
                                                               :foreground tui:*fg-bright-black*)
-                                              (todo-title todo))
-                                             (tui:bold (todo-title todo)))))
+                                              (sanitize-title-for-display (todo-title todo)))
+                                             (tui:bold (sanitize-title-for-display (todo-title todo))))))
                          (format s "~A" (tui:wrap-text title-text content-width)))
 
                        ;; Scheduled date
@@ -825,7 +795,7 @@
                         do (format c "~%  ~A ~A ~A"
                                   (org-status-colored (todo-status todo))
                                   (org-priority-colored (todo-priority todo))
-                                  (todo-title todo)))
+                                  (sanitize-title-for-display (todo-title todo))))
                   (when (> (length todos) 5)
                     (format c "~%  ~A"
                             (tui:colored (format nil "... and ~D more" (- (length todos) 5))
@@ -856,7 +826,7 @@
                         (format c "~A~%~%"
                                 (tui:bold "Delete this item?"))
                         (format c "~A~%~%"
-                                (todo-title todo))
+                                (sanitize-title-for-display (todo-title todo)))
                         (format c "~A"
                                 (tui:colored "y:confirm  any other key:cancel"
                                             :fg tui:*fg-bright-black*)))
@@ -996,7 +966,7 @@
            (with-output-to-string (c)
              ;; Show todo title context
              (when todo
-               (let ((todo-title (todo-title todo)))
+               (let ((todo-title (sanitize-title-for-display (todo-title todo))))
                  (format c "~A~%~%"
                          (tui:colored
                           (if (> (length todo-title) (- modal-width 6))
@@ -1212,7 +1182,7 @@
                  (find (model-edit-todo-id model) todos :key #'todo-id :test #'string=)))
          (edit-tags (model-edit-tags model))
          (title (if todo
-                    (let ((t-title (todo-title todo)))
+                    (let ((t-title (sanitize-title-for-display (todo-title todo))))
                       (if (> (length t-title) 40)
                           (concatenate 'string (subseq t-title 0 38) "..")
                           t-title))
@@ -1334,7 +1304,7 @@
          (modal-width 50)
          (title (if (eq date-type :scheduled) "SET SCHEDULED DATE" "SET DEADLINE"))
          (todo-title (if todo
-                        (let ((t-title (todo-title todo)))
+                        (let ((t-title (sanitize-title-for-display (todo-title todo))))
                           (subseq t-title 0 (min (length t-title) (- modal-width 6))))
                         "(no task selected)"))
          (current-str (if current-date

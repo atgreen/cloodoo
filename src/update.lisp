@@ -116,14 +116,6 @@
     :initform nil
     :accessor model-enrichment-spinner
     :documentation "Spinner for enriching items.")
-   (collapsed-ids
-    :initform (make-hash-table :test #'equal)
-    :accessor model-collapsed-ids
-    :documentation "Hash table of todo IDs that are collapsed.")
-   (pending-parent-id
-    :initform nil
-    :accessor model-pending-parent-id
-    :documentation "Parent ID for new todo being added as child.")
    ;; Sidebar state
    (selected-tags
     :initform (make-hash-table :test #'equal)
@@ -238,30 +230,6 @@
 
 ;;── Collapse State Management ─────────────────────────────────────────────────
 
-(defun todo-collapsed-p (model todo)
-  "Check if a todo item is collapsed."
-  (gethash (todo-id todo) (model-collapsed-ids model)))
-
-(defun toggle-collapse (model todo)
-  "Toggle the collapse state of a todo."
-  (let* ((id (todo-id todo))
-         (collapsed-ids (model-collapsed-ids model)))
-    (if (gethash id collapsed-ids)
-        (remhash id collapsed-ids)
-        (setf (gethash id collapsed-ids) t))))
-
-(defun any-ancestor-collapsed-p (model todos todo)
-  "Check if any ancestor of this todo is collapsed."
-  (let ((parent-id (todo-parent-id todo)))
-    (loop while parent-id
-          do (when (gethash parent-id (model-collapsed-ids model))
-               (return-from any-ancestor-collapsed-p t))
-             (let ((parent (find parent-id todos :key #'todo-id :test #'equal)))
-               (if parent
-                   (setf parent-id (todo-parent-id parent))
-                   (setf parent-id nil))))
-    nil))
-
 ;;── Tag Collection ────────────────────────────────────────────────────────────
 
 (defun collect-all-tags (todos)
@@ -279,50 +247,18 @@
 
 ;;── Tag Filtering ─────────────────────────────────────────────────────────────
 
-(defun filter-todos-by-tags (todos selected-tags all-todos)
-  "Filter todos to those matching ANY selected tag (using effective tags for children).
+(defun filter-todos-by-tags (todos selected-tags)
+  "Filter todos to those matching ANY selected tag.
    Empty selection = show all."
   (if (zerop (hash-table-count selected-tags))
       todos
       (remove-if-not
        (lambda (todo)
          (some (lambda (tag) (gethash tag selected-tags))
-               (get-effective-tags todo all-todos)))
+               (todo-tags todo)))
        todos)))
 
 ;;── Child Task Helpers ────────────────────────────────────────────────────────
-
-(defun editing-child-p (model)
-  "Return T if currently editing or adding a child task."
-  (or (model-pending-parent-id model)
-      (and (model-edit-todo-id model)
-           (let ((todo (find (model-edit-todo-id model) (model-todos model)
-                             :key #'todo-id :test #'equal)))
-             (and todo (todo-parent-id todo))))))
-
-(defun get-effective-tags (todo all-todos)
-  "Get the effective tags for a todo. For children, returns parent's tags."
-  (if (todo-parent-id todo)
-      ;; Child task - get tags from parent (walking up if needed)
-      (let ((parent (find (todo-parent-id todo) all-todos :key #'todo-id :test #'equal)))
-        (if parent
-            (get-effective-tags parent all-todos)
-            nil))
-      ;; Top-level task - return its own tags
-      (todo-tags todo)))
-
-(defun build-parent-context (parent-id all-todos)
-  "Build a list of (title . description) pairs for the parent chain.
-   Returns list from immediate parent to root, or NIL if no parent."
-  (when parent-id
-    (let ((result nil)
-          (current-id parent-id))
-      (loop while current-id
-            for parent = (find current-id all-todos :key #'todo-id :test #'equal)
-            while parent
-            do (push (cons (todo-title parent) (todo-description parent)) result)
-               (setf current-id (todo-parent-id parent)))
-      (nreverse result))))
 
 ;;── Tag Autocomplete Helpers ──────────────────────────────────────────────────
 
@@ -433,53 +369,16 @@
         sorted
         (reverse sorted))))
 
-(defun order-todos-hierarchically (todos)
-  "Order todos so that children appear immediately after their parents.
-   Returns a flat list with proper parent-child ordering."
-  (let ((result nil)
-        (processed (make-hash-table :test #'equal)))
-    (labels ((add-with-children (todo)
-               (unless (gethash (todo-id todo) processed)
-                 (setf (gethash (todo-id todo) processed) t)
-                 (push todo result)
-                 ;; Add all children immediately after
-                 (dolist (child (get-children todos (todo-id todo)))
-                   (add-with-children child)))))
-      ;; Start with top-level items (no parent)
-      (dolist (todo todos)
-        (when (null (todo-parent-id todo))
-          (add-with-children todo)))
-      ;; Also add any orphans (parent not in list)
-      (dolist (todo todos)
-        (unless (gethash (todo-id todo) processed)
-          (add-with-children todo))))
-    (nreverse result)))
-
 (defun invalidate-visible-todos-cache (model)
   "Mark the visible todos cache as dirty so it will be regenerated."
   (setf (model-visible-todos-dirty model) t))
-
-(defun add-parent-chain-to-group (todo all-todos group-set)
-  "Add the parent chain of TODO to GROUP-SET (a hash table of todo-ids).
-   Returns list of parent todos added (for ordering purposes)."
-  (let ((added nil)
-        (parent-id (todo-parent-id todo)))
-    (loop while parent-id
-          for parent = (find parent-id all-todos :key #'todo-id :test #'equal)
-          while parent
-          unless (gethash (todo-id parent) group-set)
-          do (setf (gethash (todo-id parent) group-set) parent)
-             (push parent added)
-          do (setf parent-id (todo-parent-id parent)))
-    added))
 
 (defun compute-visible-todos-grouped (model)
   "Compute the grouped list of visible todos after filtering, sorting, and collapsing.
    Returns an alist of (category . todo-ids) preserving display order.
    When children appear in a group, their parent chain is included for context."
   (let* ((all-todos (model-todos model))
-         ;; Apply tag filter first (using all-todos for effective tags lookup)
-         (tag-filtered (filter-todos-by-tags all-todos (model-selected-tags model) all-todos))
+         (tag-filtered (filter-todos-by-tags all-todos (model-selected-tags model)))
          (filtered (filter-todos tag-filtered
                                  :status (model-filter-status model)
                                  :priority (model-filter-priority model)
@@ -490,33 +389,11 @@
     (dolist (group groups)
       (let* ((category (car group))
              (group-todos (cdr group))
-             ;; Build a set of todos in this group, then add parent chains
-             (group-set (make-hash-table :test #'equal)))
-        ;; First add all todos that belong to this group by date
-        (dolist (todo group-todos)
-          (setf (gethash (todo-id todo) group-set) todo))
-        ;; Then add parent chains for any children in the group
-        (dolist (todo group-todos)
-          (when (todo-parent-id todo)
-            (add-parent-chain-to-group todo all-todos group-set)))
-        ;; Collect all todos now in the group
-        (let ((expanded-group nil))
-          (maphash (lambda (id todo)
-                     (declare (ignore id))
-                     (push todo expanded-group))
-                   group-set)
-          ;; Sort top-level items by priority, then order hierarchically
-          (let* ((top-level (remove-if #'todo-parent-id expanded-group))
-                 (children (remove-if-not #'todo-parent-id expanded-group))
-                 (sorted-top (sort-todos top-level :priority t))
-                 (ordered (order-todos-hierarchically (append sorted-top children)))
-                 (visible-ids nil))
-            (dolist (todo ordered)
-              ;; Skip if any ancestor is collapsed
-              (unless (any-ancestor-collapsed-p model all-todos todo)
-                (push (todo-id todo) visible-ids)))
-            (when visible-ids
-              (push (cons category (nreverse visible-ids)) result))))))
+             ;; Sort by priority within group
+             (sorted (sort-todos group-todos :priority t))
+             (visible-ids (mapcar #'todo-id sorted)))
+        (when visible-ids
+          (push (cons category visible-ids) result))))
     (nreverse result)))
 
 (defun get-visible-todos-grouped (model)
@@ -545,19 +422,13 @@
           append todos)))
 
 (defun reorder-todos (todos sort-by descending)
-  "Reorder todos by date category, then sort within each group, preserving hierarchy."
+  "Reorder todos by date category, then sort within each group."
   (let* ((groups (group-todos-by-date todos))
          (result nil))
     (dolist (group groups)
       (let* ((group-todos (cdr group))
-             ;; Sort only top-level items in the group
-             (top-level (remove-if #'todo-parent-id group-todos))
-             (sorted-top (sort-todos top-level sort-by descending))
-             ;; Order hierarchically to keep children with parents
-             (ordered (order-todos-hierarchically
-                       (append sorted-top
-                               (remove-if-not #'todo-parent-id group-todos)))))
-        (dolist (todo ordered)
+             (sorted (sort-todos group-todos sort-by descending)))
+        (dolist (todo sorted)
           (push todo result))))
     (nreverse result)))
 
@@ -994,8 +865,6 @@
        (setf (model-edit-todo-id model) nil)
        (setf (model-edit-priority model) :medium)
        (setf (model-active-field model) :title)
-       ;; Clear pending parent - this is a sibling add
-       (setf (model-pending-parent-id model) nil)
        ;; Clear date and repeat fields
        (setf (model-edit-scheduled-date model) nil)
        (setf (model-edit-due-date model) nil)
@@ -1050,75 +919,6 @@
        (when (find-if (lambda (todo) (eq (todo-status todo) +status-completed+))
                       (model-todos model))
          (setf (model-view-state model) :delete-done-confirm))
-       (values model nil))
-
-      ;; Toggle collapse (z)
-      ((and (characterp key) (char= key #\z))
-       (when (< (model-cursor model) (length todos))
-         (let* ((todo (nth (model-cursor model) todos))
-                (all-todos (model-todos model)))
-           ;; Only toggle if has children
-           (when (has-children-p all-todos todo)
-             (toggle-collapse model todo)
-             (invalidate-visible-todos-cache model))))
-       (values model nil))
-
-      ;; Indent: make child of previous sibling (Tab or >)
-      ((or (eq key :tab) (and (characterp key) (char= key #\>)))
-       (when (and (> (model-cursor model) 0)
-                  (< (model-cursor model) (length todos)))
-         (let* ((todo (nth (model-cursor model) todos))
-                (prev-todo (nth (1- (model-cursor model)) todos))
-                (all-todos (model-todos model)))
-           ;; Can only indent if prev todo has same parent (sibling) or is potential parent
-           (when (equal (todo-parent-id todo) (todo-parent-id prev-todo))
-             ;; Make todo a child of prev-todo
-             (setf (todo-parent-id todo) (todo-id prev-todo))
-             (save-todo todo)
-             (invalidate-visible-todos-cache model))))
-       (values model nil))
-
-      ;; Outdent: move to parent's level (Shift+Tab or <)
-      ((or (eq key :backtab) (and (characterp key) (char= key #\<)))
-       (when (< (model-cursor model) (length todos))
-         (let* ((todo (nth (model-cursor model) todos))
-                (all-todos (model-todos model))
-                (parent-id (todo-parent-id todo)))
-           (when parent-id
-             ;; Find parent and get grandparent's id
-             (let ((parent (find parent-id all-todos :key #'todo-id :test #'equal)))
-               (when parent
-                 (setf (todo-parent-id todo) (todo-parent-id parent))
-                 (save-todo todo)
-                 (invalidate-visible-todos-cache model))))))
-       (values model nil))
-
-      ;; Add child to selected item (Shift+A)
-      ((and (characterp key) (char= key #\A))
-       (when (< (model-cursor model) (length todos))
-         (let ((parent-todo (nth (model-cursor model) todos)))
-           (llog:info "Add child TODO triggered" :parent-id (todo-id parent-todo))
-           (setf (model-view-state model) :add)
-           (setf (model-edit-todo-id model) nil)
-           (setf (model-edit-priority model) :medium)
-           (setf (model-active-field model) :title)
-           ;; Store parent-id for the new todo
-           (setf (model-pending-parent-id model) (todo-id parent-todo))
-           ;; Clear scheduled date but inherit due date from parent
-           (setf (model-edit-scheduled-date model) nil)
-           (setf (model-edit-due-date model) (todo-due-date parent-todo))
-           (setf (model-edit-repeat-interval model) nil)
-           (setf (model-edit-repeat-unit model) nil)
-           ;; Child tasks don't have their own tags - they inherit from parent
-           (setf (model-edit-tags model) nil)
-           (tui.textinput:textinput-set-value (model-tags-input model) "")
-           (setf (model-tag-dropdown-visible model) nil)
-           (setf (model-tag-dropdown-cursor model) 0)
-           ;; Reset inputs
-           (tui.textinput:textinput-set-value (model-title-input model) "")
-           (tui.textinput:textinput-set-value (model-description-input model) "")
-           (tui.textinput:textinput-focus (model-title-input model))
-           (tui.textinput:textinput-blur (model-description-input model))))
        (values model nil))
 
       ;; Search
@@ -1272,20 +1072,18 @@
        (when (< (model-cursor model) (length todos))
          (let ((todo (nth (model-cursor model) todos)))
            (unless (todo-enriching-p todo)
-             (let ((parent-context (build-parent-context (todo-parent-id todo) (model-todos model))))
-               (llog:info "Re-triggering enrichment"
-                          :todo-id (todo-id todo)
-                          :title (todo-title todo)
-                          :has-parent-context (if parent-context "yes" "no"))
-               (setf (todo-enriching-p todo) t)
-               (save-todo todo)
-               (return-from handle-list-keys
-                 (values model (list (make-enrichment-cmd (todo-id todo)
-                                                          (todo-title todo)
-                                                          (todo-description todo)
-                                                          parent-context)
-                                     (make-spinner-start-cmd
-                                      (model-enrichment-spinner model)))))))))
+             (llog:info "Re-triggering enrichment"
+                        :todo-id (todo-id todo)
+                        :title (todo-title todo))
+             (setf (todo-enriching-p todo) t)
+             (save-todo todo)
+             (return-from handle-list-keys
+               (values model (list (make-enrichment-cmd (todo-id todo)
+                                                        (todo-title todo)
+                                                        (todo-description todo)
+                                                        nil)  ; No parent context
+                                   (make-spinner-start-cmd
+                                    (model-enrichment-spinner model))))))))
        (values model nil))
 
       ;; Import org-mode file (i)
@@ -1337,15 +1135,9 @@
          (:due
           (setf (model-active-field model) :repeat))
          (:repeat
-          ;; Skip tags for child tasks (they inherit from parent)
-          (if (editing-child-p model)
-              (progn
-                (setf (model-active-field model) :title)
-                (tui.textinput:textinput-focus (model-title-input model)))
-              (progn
-                (setf (model-active-field model) :tags)
-                (tui.textinput:textinput-focus (model-tags-input model))
-                (update-tag-dropdown model))))
+          (setf (model-active-field model) :tags)
+          (tui.textinput:textinput-focus (model-tags-input model))
+          (update-tag-dropdown model))
          (:tags
           ;; Tab in tags field: complete tag if input present, else move to next field
           (let* ((query (tui.textinput:textinput-value (model-tags-input model)))
@@ -1377,12 +1169,9 @@
          (:title
           ;; Skip tags for child tasks (they inherit from parent)
           (tui.textinput:textinput-blur (model-title-input model))
-          (if (editing-child-p model)
-              (setf (model-active-field model) :repeat)
-              (progn
-                (setf (model-active-field model) :tags)
-                (tui.textinput:textinput-focus (model-tags-input model))
-                (update-tag-dropdown model))))
+          (setf (model-active-field model) :tags)
+          (tui.textinput:textinput-focus (model-tags-input model))
+          (update-tag-dropdown model))
          (:description
           (setf (model-active-field model) :title)
           (tui.textinput:textinput-blur (model-description-input model))
@@ -1560,9 +1349,8 @@
                    ;; Save repeat settings
                    (setf (todo-repeat-interval todo) (model-edit-repeat-interval model))
                    (setf (todo-repeat-unit todo) (model-edit-repeat-unit model))
-                   ;; Save tags (but not for child tasks - they inherit from parent)
-                   (unless (todo-parent-id todo)
-                     (setf (todo-tags todo) (reverse (model-edit-tags model))))
+                   ;; Save tags
+                   (setf (todo-tags todo) (reverse (model-edit-tags model)))
                    (save-todo todo)
                    ;; Refresh tags cache since tags may have changed
                    (refresh-tags-cache model))
@@ -1571,7 +1359,6 @@
                ;; Create new TODO with async LLM enrichment
                (let* ((desc-input (tui.textinput:textinput-value (model-description-input model)))
                       (desc-value (when (> (length desc-input) 0) desc-input))
-                      (parent-id (model-pending-parent-id model))
                       (tags (reverse (model-edit-tags model)))
                       ;; Create todo immediately with raw data, mark as enriching
                       (new-todo (make-todo title
@@ -1580,8 +1367,7 @@
                                           :scheduled-date (model-edit-scheduled-date model)
                                           :due-date (model-edit-due-date model)
                                           :repeat-interval (model-edit-repeat-interval model)
-                                          :repeat-unit (model-edit-repeat-unit model)
-                                          :parent-id parent-id)))
+                                          :repeat-unit (model-edit-repeat-unit model))))
                  ;; Set tags if provided
                  (when tags
                    (setf (todo-tags new-todo) tags))
@@ -1593,24 +1379,18 @@
                  (invalidate-visible-todos-cache model)
                  ;; Refresh tags cache since new tags may have been added
                  (refresh-tags-cache model)
-                 ;; Clear pending parent-id
-                 (setf (model-pending-parent-id model) nil)
                  (setf (model-view-state model) :list)
-                 ;; Build parent context for enrichment
-                 (let ((parent-context (build-parent-context parent-id (model-todos model))))
-                   (llog:info "Created todo, starting async enrichment"
-                              :todo-id (todo-id new-todo)
-                              :title title
-                              :parent-id parent-id
-                              :has-parent-context (if parent-context "yes" "no"))
-                   ;; Return command for async enrichment
-                   (return-from handle-add-edit-keys
-                     (values model (list (make-enrichment-cmd (todo-id new-todo)
-                                                              title
-                                                              desc-input
-                                                              parent-context)
-                                         (make-spinner-start-cmd
-                                          (model-enrichment-spinner model))))))))))
+                 (llog:info "Created todo, starting async enrichment"
+                            :todo-id (todo-id new-todo)
+                            :title title)
+                 ;; Return command for async enrichment
+                 (return-from handle-add-edit-keys
+                   (values model (list (make-enrichment-cmd (todo-id new-todo)
+                                                            title
+                                                            desc-input
+                                                            nil)  ; No parent context
+                                       (make-spinner-start-cmd
+                                        (model-enrichment-spinner model)))))))
        (values model nil))
 
       ;; Pass key to active text input
@@ -2598,3 +2378,5 @@
                                        (when (probe-file temp-file)
                                          (delete-file temp-file))
                                        nil))))))
+)
+)
