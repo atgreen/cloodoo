@@ -36,24 +36,31 @@
   "Create a SyncMessage with TodoChange(upsert) payload."
   (make-sync-upsert-message-with-timestamp device-id todo (now-iso)))
 
+(defun timestamp-to-string (ts)
+  "Convert a local-time timestamp to ISO string, or return empty string if nil."
+  (if ts
+      (lt:format-timestring nil ts)
+      ""))
+
 (defun make-sync-upsert-message-with-timestamp (device-id todo timestamp)
   "Create a SyncMessage with TodoChange(upsert) payload and explicit timestamp."
   (let* ((todo-data (make-instance 'proto-todo-data
                                    :id (todo-id todo)
                                    :title (todo-title todo)
                                    :description (or (todo-description todo) "")
-                                   :priority (todo-priority todo)
-                                   :status (todo-status todo)
-                                   :scheduled-date (or (todo-scheduled-date todo) "")
-                                   :due-date (or (todo-due-date todo) "")
+                                   :priority (string-downcase (symbol-name (todo-priority todo)))
+                                   :status (string-downcase (symbol-name (todo-status todo)))
+                                   :scheduled-date (timestamp-to-string (todo-scheduled-date todo))
+                                   :due-date (timestamp-to-string (todo-due-date todo))
                                    :tags (or (todo-tags todo) '())
                                    :estimated-minutes (or (todo-estimated-minutes todo) 0)
                                    :url (or (todo-url todo) "")
-                                   :created-at (todo-created-at todo)
-                                   :completed-at (or (todo-completed-at todo) "")
+                                   :created-at (timestamp-to-string (todo-created-at todo))
+                                   :completed-at (timestamp-to-string (todo-completed-at todo))
                                    :parent-id ""
                                    :repeat-interval (or (todo-repeat-interval todo) 0)
-                                   :repeat-unit (or (todo-repeat-unit todo) "")
+                                   :repeat-unit (let ((ru (todo-repeat-unit todo)))
+                                                     (if ru (string-downcase (symbol-name ru)) ""))
                                    :attachment-hashes (or (todo-attachment-hashes todo) '())))
          (change (make-instance 'proto-todo-change
                                 :device-id device-id
