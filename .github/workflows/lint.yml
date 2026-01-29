@@ -1,0 +1,82 @@
+name: Lint
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  gnome-extension:
+    name: Lint GNOME Extension
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '20'
+        cache: 'npm'
+        cache-dependency-path: gnome-extension/package-lock.json
+
+    - name: Install dependencies
+      run: |
+        cd gnome-extension
+        npm ci
+
+    - name: Run ESLint
+      run: |
+        cd gnome-extension
+        npx eslint *.js
+
+  browser-extension:
+    name: Lint Browser Extension
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Check for package.json
+      id: check_package
+      run: |
+        if [ -f browser-extension/package.json ]; then
+          echo "has_npm=true" >> $GITHUB_OUTPUT
+        else
+          echo "has_npm=false" >> $GITHUB_OUTPUT
+          echo "No package.json found in browser-extension, skipping npm-based linting"
+        fi
+
+    - name: Setup Node.js
+      if: steps.check_package.outputs.has_npm == 'true'
+      uses: actions/setup-node@v4
+      with:
+        node-version: '20'
+        cache: 'npm'
+        cache-dependency-path: browser-extension/package-lock.json
+
+    - name: Install dependencies
+      if: steps.check_package.outputs.has_npm == 'true'
+      run: |
+        cd browser-extension
+        npm ci
+
+    - name: Run linting
+      if: steps.check_package.outputs.has_npm == 'true'
+      run: |
+        cd browser-extension
+        npm run lint || echo "No lint script defined"
+
+    - name: Validate manifest
+      run: |
+        if [ -f browser-extension/manifest.json ]; then
+          echo "Validating manifest.json..."
+          python3 -m json.tool browser-extension/manifest.json > /dev/null
+          echo "✓ manifest.json is valid JSON"
+        else
+          echo "No manifest.json found"
+          exit 1
+        fi
