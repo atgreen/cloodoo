@@ -30,7 +30,7 @@
     :initarg :view-state
    :initform :list
    :accessor model-view-state
-    :documentation "Current view: :list, :detail, :add, :edit, :help, :search, :delete-confirm, :delete-done-confirm, :import, :edit-date, :add-scheduled-date, :add-due-date.")
+    :documentation "Current view: :list, :detail, :add, :edit, :help, :search, :delete-confirm, :delete-done-confirm, :import, :edit-date, :add-scheduled-date, :add-due-date.") ; lint:suppress max-line-length
    (detail-urls
     :initform nil
     :accessor model-detail-urls

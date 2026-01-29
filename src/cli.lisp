@@ -330,9 +330,8 @@
      :description "Remove old versions from the database to reclaim space"
      :options (list yes-opt)
      :handler (lambda (cmd)
-                (block nil
-                  (let ((skip-confirm (clingon:getopt cmd :yes)))
-                    (ensure-db-initialized)
+                (let ((skip-confirm (clingon:getopt cmd :yes)))
+                  (ensure-db-initialized)
                   (with-db (db)
                     ;; Count before
                     (let ((before (caar (sqlite:execute-to-list db "SELECT COUNT(*) FROM todos")))
@@ -436,7 +435,7 @@
                                          scheduled-date due-date tags estimated-minutes
                                          location-info url parent-id created-at completed-at
                                          valid-from valid-to device-id repeat-interval repeat-unit enriching-p) row
-                      (format t "INSERT INTO todos (id, title, description, priority, status, scheduled_date, due_date, tags, estimated_minutes, location_info, url, parent_id, created_at, completed_at, valid_from, valid_to, device_id, repeat_interval, repeat_unit, enriching_p) VALUES (~A, ~A, ~A, ~A, ~A, ~A, ~A, ~A, ~A, ~A, ~A, ~A, ~A, ~A, ~A, ~A, ~A, ~A, ~A, ~A);~%"
+                      (format t "INSERT INTO todos (id, title, description, priority, status, scheduled_date, due_date, tags, estimated_minutes, location_info, url, parent_id, created_at, completed_at, valid_from, valid_to, device_id, repeat_interval, repeat_unit, enriching_p) VALUES (~A, ~A, ~A, ~A, ~A, ~A, ~A, ~A, ~A, ~A, ~A, ~A, ~A, ~A, ~A, ~A, ~A, ~A, ~A, ~A);~%" ; lint:suppress max-line-length
                               (sql-escape-string id)
                               (sql-escape-string title)
                               (sql-escape-string description)

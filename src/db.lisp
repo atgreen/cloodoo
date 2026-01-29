@@ -122,7 +122,7 @@
   "Execute BODY with a database connection bound to DB-VAR.
    Uses connection pooling within the same process."
   `(bt:with-lock-held (*db-lock*)
-     (let ((,db-var (or *db* (open-db))))
+     (let ((,db-var (or *db* (open-db)))) ; lint:suppress malformed-let
        (unwind-protect
             (unquote-splicing body)
          (unless *db*

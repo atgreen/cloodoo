@@ -41,9 +41,14 @@
   (let ((config-file (config-file-path)))
     (cond ((probe-file config-file) (handler-case
             (with-open-file (in config-file :direction :input)
-              (let ((config (read in nil nil)))
-                (llog:info "Loaded config from file" :path (namestring config-file))
-                config))
+              (let* ((eof (list nil))
+                     (config (read in nil eof)))
+                (cond ((eq config eof)
+                       (llog:warn "Config file is empty, using defaults")
+                       (default-config))
+                      (t
+                       (llog:info "Loaded config from file" :path (namestring config-file))
+                       config))))
           (error (e)
             (llog:warn "Failed to read config file, using defaults" :error (format nil "~A" e))
             (default-config))))
@@ -207,14 +212,14 @@ Rules for Processing:
 - Fix ALL typos and spelling errors in both title and description/notes
 - Smart Defaults: If no time is mentioned, estimate based on task type (Email = 5 mins, Meeting = 30 mins, Project = 60 mins)
 - Keep descriptions brief and professional
-- Location Detection: If the task mentions a business, restaurant, doctor, store, venue, or any physical location, populate the location object with as much info as you can provide
-- Phone Calls: If the task involves calling someone (title contains \"call\" or implies phone contact), include the phone number in the description field if you know it, but do NOT guess why the user is calling - just provide the number (e.g., \"Phone: (555) 123-4567\")
+- Location Detection: If the task mentions a business, restaurant, doctor, store, venue, or any physical location, populate the location object with as much info as you can provide ; lint:suppress max-line-length
+- Phone Calls: If the task involves calling someone (title contains \"call\" or implies phone contact), include the phone number in the description field if you know it, but do NOT guess why the user is calling - just provide the number (e.g., \"Phone: (555) 123-4567\") ; lint:suppress max-line-length
 
 Examples:
-Input: title=\"dentist next tues\" notes=\"dr tam @ lawernce dentust\" -> {\"task_title\": \"Schedule Dentist Appointment\", \"description\": \"Dr. Tam @ Lawrence Dentist\", \"category\": \"Health\", \"priority\": \"P2\", \"estimated_minutes\": 60, \"scheduled_date\": \"2026-01-21\", \"due_date\": null, \"location\": {\"name\": \"Lawrence Family Dentist\", \"address\": null, \"phone\": null, \"map_url\": \"https://www.google.com/maps/search/?api=1&query=Lawrence+Family+Dentist\", \"website\": null}}
-Input: title=\"report due friday\" notes=\"quarterly sales\" -> {\"task_title\": \"Complete Quarterly Sales Report\", \"description\": \"Quarterly sales\", \"category\": \"Work\", \"priority\": \"P1\", \"estimated_minutes\": 120, \"scheduled_date\": null, \"due_date\": \"2026-01-24\", \"location\": null}
-Input: title=\"dinner at joes pizza\" notes=\"6pm friday\" -> {\"task_title\": \"Dinner at Joe's Pizza\", \"description\": null, \"category\": \"Personal\", \"priority\": \"P2\", \"estimated_minutes\": 90, \"scheduled_date\": \"2026-01-24T18:00:00\", \"due_date\": null, \"location\": {\"name\": \"Joe's Pizza\", \"address\": null, \"phone\": null, \"map_url\": \"https://www.google.com/maps/search/?api=1&query=Joe%27s+Pizza\", \"website\": null}}
-Input: title=\"call dr smith\" notes=\"\" -> {\"task_title\": \"Call Dr. Smith\", \"description\": null, \"category\": \"Health\", \"priority\": \"P2\", \"estimated_minutes\": 10, \"scheduled_date\": null, \"due_date\": null, \"location\": null}
+Input: title=\"dentist next tues\" notes=\"dr tam @ lawernce dentust\" -> {\"task_title\": \"Schedule Dentist Appointment\", \"description\": \"Dr. Tam @ Lawrence Dentist\", \"category\": \"Health\", \"priority\": \"P2\", \"estimated_minutes\": 60, \"scheduled_date\": \"2026-01-21\", \"due_date\": null, \"location\": {\"name\": \"Lawrence Family Dentist\", \"address\": null, \"phone\": null, \"map_url\": \"https://www.google.com/maps/search/?api=1&query=Lawrence+Family+Dentist\", \"website\": null}} ; lint:suppress max-line-length
+Input: title=\"report due friday\" notes=\"quarterly sales\" -> {\"task_title\": \"Complete Quarterly Sales Report\", \"description\": \"Quarterly sales\", \"category\": \"Work\", \"priority\": \"P1\", \"estimated_minutes\": 120, \"scheduled_date\": null, \"due_date\": \"2026-01-24\", \"location\": null} ; lint:suppress max-line-length
+Input: title=\"dinner at joes pizza\" notes=\"6pm friday\" -> {\"task_title\": \"Dinner at Joe's Pizza\", \"description\": null, \"category\": \"Personal\", \"priority\": \"P2\", \"estimated_minutes\": 90, \"scheduled_date\": \"2026-01-24T18:00:00\", \"due_date\": null, \"location\": {\"name\": \"Joe's Pizza\", \"address\": null, \"phone\": null, \"map_url\": \"https://www.google.com/maps/search/?api=1&query=Joe%27s+Pizza\", \"website\": null}} ; lint:suppress max-line-length
+Input: title=\"call dr smith\" notes=\"\" -> {\"task_title\": \"Call Dr. Smith\", \"description\": null, \"category\": \"Health\", \"priority\": \"P2\", \"estimated_minutes\": 10, \"scheduled_date\": null, \"due_date\": null, \"location\": null} ; lint:suppress max-line-length
 
 Respond with ONLY the JSON object, no markdown formatting or additional text.")
 
@@ -571,8 +576,8 @@ DEADLINE: <2026-01-25 Fri>
 
 Example Output:
 {\"todos\": [
-  {\"task_title\": \"Call Dentist for Appointment\", \"description\": \"Need to schedule cleaning\", \"category\": \"Health\", \"priority\": \"P1\", \"estimated_minutes\": 10, \"scheduled_date\": \"2026-01-20\", \"due_date\": null, \"location\": {\"name\": \"Downtown Dental\", \"address\": null, \"phone\": null, \"map_url\": \"https://www.google.com/maps/search/?api=1&query=Downtown+Dental\", \"website\": null}},
-  {\"task_title\": \"Review Quarterly Report\", \"description\": null, \"category\": \"Work\", \"priority\": \"P2\", \"estimated_minutes\": 60, \"scheduled_date\": null, \"due_date\": \"2026-01-25\", \"location\": null}
+  {\"task_title\": \"Call Dentist for Appointment\", \"description\": \"Need to schedule cleaning\", \"category\": \"Health\", \"priority\": \"P1\", \"estimated_minutes\": 10, \"scheduled_date\": \"2026-01-20\", \"due_date\": null, \"location\": {\"name\": \"Downtown Dental\", \"address\": null, \"phone\": null, \"map_url\": \"https://www.google.com/maps/search/?api=1&query=Downtown+Dental\", \"website\": null}}, ; lint:suppress max-line-length
+  {\"task_title\": \"Review Quarterly Report\", \"description\": null, \"category\": \"Work\", \"priority\": \"P2\", \"estimated_minutes\": 60, \"scheduled_date\": null, \"due_date\": \"2026-01-25\", \"location\": null} ; lint:suppress max-line-length
 ]}
 
 Note: The \"Buy groceries\" item was skipped because it was marked DONE.
