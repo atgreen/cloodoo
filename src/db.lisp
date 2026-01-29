@@ -70,6 +70,29 @@
   (or *device-id*
       (setf *device-id* (load-device-id))))
 
+;;── Last Sync Timestamp Management ────────────────────────────────────────────
+
+(defun last-sync-file ()
+  "Return the path to the last sync timestamp file."
+  (merge-pathnames "last-sync" (data-directory)))
+
+(defun load-last-sync-timestamp ()
+  "Load the last sync timestamp, or return empty string if none."
+  (let ((file (last-sync-file)))
+    (if (probe-file file)
+        (string-trim '(#\Space #\Newline #\Tab #\Return)
+                     (uiop:read-file-string file))
+        "")))
+
+(defun save-last-sync-timestamp (timestamp)
+  "Save the last sync timestamp."
+  (ensure-data-directory)
+  (with-open-file (stream (last-sync-file)
+                          :direction :output
+                          :if-exists :supersede
+                          :if-does-not-exist :create)
+    (write-string timestamp stream)))
+
 ;;── Database Connection ───────────────────────────────────────────────────────
 
 (defvar *db* nil
@@ -473,12 +496,13 @@
         (when (todo-attachment-hashes todo)
           (jzon:stringify (coerce (todo-attachment-hashes todo) 'vector)))))
 
-(defun db-save-todo (todo)
+(defun db-save-todo (todo &key valid-from)
   "Save a TODO to the database using append-only semantics.
    If the TODO already exists (by ID), the old version is marked as superseded.
-   Large text fields (description, location_info) are stored in the blobs table."
+   Large text fields (description, location_info) are stored in the blobs table.
+   VALID-FROM can be specified for sync operations to preserve original timestamp."
   (with-db (db)
-    (let ((now (now-iso))
+    (let ((now (or valid-from (now-iso)))
           (values (todo-to-db-values todo))
           (committed nil))
       ;; Store large text fields as blobs

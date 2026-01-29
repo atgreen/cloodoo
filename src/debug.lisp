@@ -50,6 +50,7 @@
          sb-unix:sigquit
          (lambda (signal info context)
            (declare (ignore signal info context))
+           (ensure-cache-directory)
            (let* ((timestamp (lt:format-timestring nil (lt:now) :format '(:year "-" :month "-" :day "T" :hour ":" :min ":" :sec)))
                   (filename (format nil "~A/cloodoo-threaddump-~A.txt"
                                   (cache-directory) timestamp)))

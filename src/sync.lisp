@@ -174,9 +174,13 @@
                            (:upsert
                             ;; Client is sending an upsert
                             (let* ((proto-data (proto-change-upsert change))
+                                   (origin-device-id (proto-change-device-id change))
+                                   (change-timestamp (proto-change-timestamp change))
                                    (todo (proto-to-todo proto-data)))
-                              ;; Save to local database
-                              (db-save-todo todo)
+                              ;; Set device-id from the change envelope (not from local server)
+                              (setf (todo-device-id todo) origin-device-id)
+                              ;; Save to local database with original timestamp
+                              (db-save-todo todo :valid-from change-timestamp)
                               ;; Broadcast to other connected clients
                               (broadcast-change msg device-id)))
                            (:delete-id
@@ -463,11 +467,14 @@
               (let ((stub (make-todo-sync-stub *sync-client-channel*)))
                 (setf *sync-client-stream* (todo-sync-sync-stream stub)))
 
-              ;; Send init message
+              ;; Send init message with last known sync timestamp
               (let* ((client-time (now-iso))
-                     (init-msg (make-sync-init-message (get-device-id) "" client-time)))
+                     (since (load-last-sync-timestamp))
+                     (init-msg (make-sync-init-message (get-device-id) since client-time)))
                 (ag-grpc:stream-send *sync-client-stream* init-msg)
-                (llog:info "Sent sync init" :device-id (get-device-id) :client-time client-time))
+                (llog:info "Sent sync init" :device-id (get-device-id)
+                           :since (if (zerop (length since)) "(full sync)" since)
+                           :client-time client-time))
 
               ;; Reset backoff on successful connection
               (setf backoff-delay 1)
@@ -573,6 +580,9 @@
            (progn
              (llog:info "Sync connected" :server-time server-time :pending pending)
              (update-sync-status :connected)
+             ;; Save server time for next reconnect (avoid full resync)
+             (when (and server-time (plusp (length server-time)))
+               (save-last-sync-timestamp server-time))
              (setf *sync-pending-count* pending)
              (setf *sync-received-count* 0)
              (llog:info "Expecting pending changes" :count pending)

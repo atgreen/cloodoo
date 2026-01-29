@@ -792,6 +792,18 @@
                       (format t "Usage: cloodoo cert pair URL~%~%")
                       (format t "Example: cloodoo cert pair http://192.168.1.100:9876/pair/abc123~%")))))))
 
+(defun sanitize-device-id (device-id)
+  "Sanitize a device ID to prevent path traversal attacks.
+   Removes path separators and parent directory references."
+  (unless device-id
+    (error "Server did not return a device_id"))
+  (let ((sanitized (str:replace-all "/" "" (str:replace-all "\\" "" device-id))))
+    ;; Also reject if it contains .. or is empty after sanitization
+    (when (or (zerop (length sanitized))
+              (search ".." sanitized))
+      (error "Invalid device_id received from server: ~A" device-id))
+    sanitized))
+
 (defun http-get (url)
   "GET a URL, returning (values body status-code) without signaling on HTTP errors."
   (handler-bind ((dex:http-request-failed
@@ -853,11 +865,11 @@ URL format: http://HOST:PORT/pair/TOKEN"
 
           ;; Step 2: Get server device ID for storage path
           (multiple-value-bind (dev-body dev-status)
-              (http-get (format nil "~A/api/device" base-url))
+              (http-get (format nil "~A/api/pair/status" base-url))
             (unless (= dev-status 200)
               (error "Failed to get server device info (HTTP ~A)" dev-status))
             (let* ((dev-info (jzon:parse dev-body))
-                   (server-device-id (gethash "device_id" dev-info)))
+                   (server-device-id (sanitize-device-id (gethash "device_id" dev-info))))
 
               ;; Step 3: Prompt for passphrase
               (format t "Enter passphrase: ")
