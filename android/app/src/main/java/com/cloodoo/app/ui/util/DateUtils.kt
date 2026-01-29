@@ -1,3 +1,9 @@
+// DateUtils.kt
+//
+// SPDX-License-Identifier: MIT
+//
+// Copyright (C) 2026 Anthony Green <green@moxielogic.com>
+
 package com.cloodoo.app.ui.util
 
 import java.time.Instant

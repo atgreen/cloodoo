@@ -1,3 +1,9 @@
+// extension.js
+//
+// SPDX-License-Identifier: MIT
+//
+// Copyright (C) 2026 Anthony Green <green@moxielogic.com>
+
 import GLib from 'gi://GLib';
 import Gio from 'gi://Gio';
 import Shell from 'gi://Shell';

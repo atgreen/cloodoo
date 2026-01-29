@@ -1,3 +1,9 @@
+// PriorityColors.kt
+//
+// SPDX-License-Identifier: MIT
+//
+// Copyright (C) 2026 Anthony Green <green@moxielogic.com>
+
 package com.cloodoo.app.ui.theme
 
 import androidx.compose.material3.MaterialTheme

@@ -1,3 +1,9 @@
+// prefs.js
+//
+// SPDX-License-Identifier: MIT
+//
+// Copyright (C) 2026 Anthony Green <green@moxielogic.com>
+
 import Adw from 'gi://Adw';
 import {ExtensionPreferences} from 'resource:///org/gnome/Shell/Extensions/js/extensions/prefs.js';
 

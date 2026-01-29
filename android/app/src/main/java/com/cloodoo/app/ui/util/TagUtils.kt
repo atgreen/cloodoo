@@ -1,3 +1,9 @@
+// TagUtils.kt
+//
+// SPDX-License-Identifier: MIT
+//
+// Copyright (C) 2026 Anthony Green <green@moxielogic.com>
+
 package com.cloodoo.app.ui.util
 
 import com.google.gson.Gson
