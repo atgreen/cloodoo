@@ -44,7 +44,7 @@ jobs:
           --eval "(asdf:load-system :fiveam)" \
           --eval "(asdf:load-system :cloodoo)" \
           --load tests/tests.lisp \
-          --eval "(let ((results (fiveam:run 'cloodoo-tests:cloodoo-tests))) (unless (fiveam:results-status results) (uiop:quit 1)))"
+          --eval "(cloodoo-tests:run-tests)"
 
     - name: Build executable
       run: make cloodoo
