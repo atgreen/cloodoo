@@ -197,7 +197,7 @@
 
   (let ((client-key-path (namestring (client-key-file name)))
         (client-cert-path (namestring (client-cert-file name)))
-        (passphrase (generate-passphrase 3)))
+        (passphrase (generate-passphrase 4)))
 
     ;; Load CA key for signing
     (multiple-value-bind (ca-n ca-e ca-d)

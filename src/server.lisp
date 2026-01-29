@@ -17,6 +17,51 @@
 (defvar *default-address* "127.0.0.1"
   "Default bind address for the pairing server.")
 
+;;── Passphrase-based Encryption ──────────────────────────────────────────────
+
+(defun derive-key-from-passphrase (passphrase salt)
+  "Derive a 256-bit AES key from PASSPHRASE and SALT using PBKDF2-SHA256.
+   SALT should be a byte vector (16 bytes recommended).
+   Returns a 32-byte key as a byte vector."
+  (let ((passphrase-bytes (ironclad:ascii-string-to-byte-array passphrase)))
+    (ironclad:derive-key
+     (ironclad:make-kdf 'ironclad:pbkdf2 :digest 'ironclad:sha256)
+     passphrase-bytes
+     salt
+     100000  ; iterations
+     32)))   ; key length (256 bits)
+
+(defun encrypt-with-passphrase (plaintext passphrase)
+  "Encrypt PLAINTEXT string using PASSPHRASE.
+   Returns a hash table with :encrypted, :iv, and :salt (all base64 encoded)."
+  (let* ((salt (ironclad:random-data 16))
+         (iv (ironclad:random-data 12))  ; 96-bit IV for GCM
+         (key (derive-key-from-passphrase passphrase salt))
+         (plaintext-bytes (flexi-streams:string-to-octets plaintext :external-format :utf-8))
+         (aad (ironclad:ascii-string-to-byte-array "cloodoo-pairing"))
+         (cipher (ironclad:make-authenticated-encryption-mode
+                  :gcm :cipher-name 'ironclad:aes :key key :initialization-vector iv))
+         (ciphertext (ironclad:encrypt-message cipher plaintext-bytes
+                                               :associated-data aad))
+         (tag (make-array 16 :element-type '(unsigned-byte 8))))
+    ;; Get authentication tag
+    (ironclad:produce-tag cipher :tag tag)
+    ;; Return base64-encoded components (append tag to ciphertext)
+    (let ((result (make-hash-table :test #'equal))
+          (ciphertext-with-tag (concatenate '(vector (unsigned-byte 8)) ciphertext tag)))
+      (setf (gethash "encrypted" result) (base64-encode ciphertext-with-tag))
+      (setf (gethash "iv" result) (base64-encode iv))
+      (setf (gethash "salt" result) (base64-encode salt))
+      result)))
+
+(defun bytes-to-base64 (bytes)
+  "Convert byte vector to base64 string."
+  (cl-base64:usb8-array-to-base64-string bytes))
+
+(defun base64-encode (bytes)
+  "Encode byte vector as base64 string."
+  (cl-base64:usb8-array-to-base64-string bytes))
+
 ;;── Pairing API Routes ─────────────────────────────────────────────────────────
 
 (easy-routes:defroute api-pair-info ("/pair/:token" :method :get) ()
@@ -37,10 +82,11 @@
           (jzon:stringify response)))))
 
 (easy-routes:defroute api-pair-download-pem ("/pair/:token/pem" :method :post) ()
-  "Download the certificate and key as PEM text for a pairing token.
+  "Download the certificate and key as encrypted payload for a pairing token.
    Requires passphrase in request body: {passphrase: string}.
    This consumes the token (single-use).
-   Returns JSON: {cert: PEM, key: PEM, device_name: string}."
+   Returns JSON: {encrypted: base64, iv: base64, salt: base64}.
+   The encrypted payload contains: {cert: PEM, key: PEM, ca_cert: PEM, device_name: string}."
   (setf (hunchentoot:content-type*) "application/json")
   (let ((request (get-pairing-request token)))
     (if request
@@ -50,25 +96,31 @@
                (expected-passphrase (pairing-request-passphrase request)))
           (if (and provided-passphrase
                    (string= provided-passphrase expected-passphrase))
-              ;; Passphrase matches - consume token and serve certs
+              ;; Passphrase matches - consume token and serve encrypted certs
               (progn
                 (consume-pairing-request token)
                 (let ((device-name (pairing-request-device-name request))
-                      (response (make-hash-table :test #'equal)))
+                      (payload (make-hash-table :test #'equal)))
                   (let ((cert-path (client-cert-file device-name))
                         (key-path (client-key-file device-name))
                         (ca-path (ca-cert-file)))
                     (if (and (probe-file cert-path) (probe-file key-path))
                         (progn
-                          (setf (gethash "cert" response)
+                          ;; Build the payload to encrypt
+                          (setf (gethash "cert" payload)
                                 (uiop:read-file-string cert-path))
-                          (setf (gethash "key" response)
+                          (setf (gethash "key" payload)
                                 (uiop:read-file-string key-path))
                           (when (probe-file ca-path)
-                            (setf (gethash "ca_cert" response)
+                            (setf (gethash "ca_cert" payload)
                                   (uiop:read-file-string ca-path)))
-                          (setf (gethash "device_name" response) device-name)
-                          (jzon:stringify response))
+                          (setf (gethash "device_name" payload) device-name)
+                          ;; Encrypt the payload with the passphrase
+                          (let ((encrypted-response
+                                  (encrypt-with-passphrase
+                                   (jzon:stringify payload)
+                                   provided-passphrase)))
+                            (jzon:stringify encrypted-response)))
                         (progn
                           (setf (hunchentoot:return-code*) 500)
                           (jzon:stringify (alexandria:plist-hash-table

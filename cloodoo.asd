@@ -28,7 +28,10 @@
                :ag-grpc
                :ag-proto
                :cl-x509
-               :cl-qrencode)
+               :cl-qrencode
+               :ironclad
+               :cl-base64
+               :flexi-streams)
   :serial t
   :components ((:module "src"
                 :components ((:file "package")
