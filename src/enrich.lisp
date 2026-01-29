@@ -39,16 +39,20 @@
 (defun load-config ()
   "Load configuration from config file or return defaults."
   (let ((config-file (config-file-path)))
-    (if (probe-file config-file)
-        (handler-case
+    (cond ((probe-file config-file) (handler-case
             (with-open-file (in config-file :direction :input)
-              (let ((config (read in nil nil)))
-                (llog:info "Loaded config from file" :path (namestring config-file))
-                config))
+              (let* ((eof (list nil))
+                     (config (read in nil eof)))
+                (cond ((eq config eof)
+                       (llog:warn "Config file is empty, using defaults")
+                       (default-config))
+                      (t
+                       (llog:info "Loaded config from file" :path (namestring config-file))
+                       config))))
           (error (e)
             (llog:warn "Failed to read config file, using defaults" :error (format nil "~A" e))
-            (default-config)))
-        (progn
+            (default-config))))
+      (t
           (llog:info "No config file found, creating default" :path (namestring config-file))
           (save-config (default-config))
           (default-config)))))
@@ -136,7 +140,7 @@
   ;; Check if we have what we need for the selected provider
   (cond
     ;; Ollama doesn't need an API key
-    ((eq *llm-provider* :ollama)
+    ((eql *llm-provider* :ollama)
      (llog:info "Using Ollama provider (no API key required)"
                 :model *llm-model*
                 :endpoint (or *llm-endpoint* "http://localhost:11434")))
@@ -208,14 +212,14 @@ Rules for Processing:
 - Fix ALL typos and spelling errors in both title and description/notes
 - Smart Defaults: If no time is mentioned, estimate based on task type (Email = 5 mins, Meeting = 30 mins, Project = 60 mins)
 - Keep descriptions brief and professional
-- Location Detection: If the task mentions a business, restaurant, doctor, store, venue, or any physical location, populate the location object with as much info as you can provide
-- Phone Calls: If the task involves calling someone (title contains \"call\" or implies phone contact), include the phone number in the description field if you know it, but do NOT guess why the user is calling - just provide the number (e.g., \"Phone: (555) 123-4567\")
+- Location Detection: If the task mentions a business, restaurant, doctor, store, venue, or any physical location, populate the location object with as much info as you can provide ; lint:suppress max-line-length
+- Phone Calls: If the task involves calling someone (title contains \"call\" or implies phone contact), include the phone number in the description field if you know it, but do NOT guess why the user is calling - just provide the number (e.g., \"Phone: (555) 123-4567\") ; lint:suppress max-line-length
 
 Examples:
-Input: title=\"dentist next tues\" notes=\"dr tam @ lawernce dentust\" -> {\"task_title\": \"Schedule Dentist Appointment\", \"description\": \"Dr. Tam @ Lawrence Dentist\", \"category\": \"Health\", \"priority\": \"P2\", \"estimated_minutes\": 60, \"scheduled_date\": \"2026-01-21\", \"due_date\": null, \"location\": {\"name\": \"Lawrence Family Dentist\", \"address\": null, \"phone\": null, \"map_url\": \"https://www.google.com/maps/search/?api=1&query=Lawrence+Family+Dentist\", \"website\": null}}
-Input: title=\"report due friday\" notes=\"quarterly sales\" -> {\"task_title\": \"Complete Quarterly Sales Report\", \"description\": \"Quarterly sales\", \"category\": \"Work\", \"priority\": \"P1\", \"estimated_minutes\": 120, \"scheduled_date\": null, \"due_date\": \"2026-01-24\", \"location\": null}
-Input: title=\"dinner at joes pizza\" notes=\"6pm friday\" -> {\"task_title\": \"Dinner at Joe's Pizza\", \"description\": null, \"category\": \"Personal\", \"priority\": \"P2\", \"estimated_minutes\": 90, \"scheduled_date\": \"2026-01-24T18:00:00\", \"due_date\": null, \"location\": {\"name\": \"Joe's Pizza\", \"address\": null, \"phone\": null, \"map_url\": \"https://www.google.com/maps/search/?api=1&query=Joe%27s+Pizza\", \"website\": null}}
-Input: title=\"call dr smith\" notes=\"\" -> {\"task_title\": \"Call Dr. Smith\", \"description\": null, \"category\": \"Health\", \"priority\": \"P2\", \"estimated_minutes\": 10, \"scheduled_date\": null, \"due_date\": null, \"location\": null}
+Input: title=\"dentist next tues\" notes=\"dr tam @ lawernce dentust\" -> {\"task_title\": \"Schedule Dentist Appointment\", \"description\": \"Dr. Tam @ Lawrence Dentist\", \"category\": \"Health\", \"priority\": \"P2\", \"estimated_minutes\": 60, \"scheduled_date\": \"2026-01-21\", \"due_date\": null, \"location\": {\"name\": \"Lawrence Family Dentist\", \"address\": null, \"phone\": null, \"map_url\": \"https://www.google.com/maps/search/?api=1&query=Lawrence+Family+Dentist\", \"website\": null}} ; lint:suppress max-line-length
+Input: title=\"report due friday\" notes=\"quarterly sales\" -> {\"task_title\": \"Complete Quarterly Sales Report\", \"description\": \"Quarterly sales\", \"category\": \"Work\", \"priority\": \"P1\", \"estimated_minutes\": 120, \"scheduled_date\": null, \"due_date\": \"2026-01-24\", \"location\": null} ; lint:suppress max-line-length
+Input: title=\"dinner at joes pizza\" notes=\"6pm friday\" -> {\"task_title\": \"Dinner at Joe's Pizza\", \"description\": null, \"category\": \"Personal\", \"priority\": \"P2\", \"estimated_minutes\": 90, \"scheduled_date\": \"2026-01-24T18:00:00\", \"due_date\": null, \"location\": {\"name\": \"Joe's Pizza\", \"address\": null, \"phone\": null, \"map_url\": \"https://www.google.com/maps/search/?api=1&query=Joe%27s+Pizza\", \"website\": null}} ; lint:suppress max-line-length
+Input: title=\"call dr smith\" notes=\"\" -> {\"task_title\": \"Call Dr. Smith\", \"description\": null, \"category\": \"Health\", \"priority\": \"P2\", \"estimated_minutes\": 10, \"scheduled_date\": null, \"due_date\": null, \"location\": null} ; lint:suppress max-line-length
 
 Respond with ONLY the JSON object, no markdown formatting or additional text.")
 
@@ -357,8 +361,7 @@ Respond with ONLY the JSON object, no markdown formatting or additional text.")
                     :json-length (length json-str)
                     :json-content json-str)
         (let ((data (jzon:parse json-str)))
-          (if (hash-table-p data)
-              (let* ((location-info (parse-location-info (gethash "location" data)))
+          (cond ((hash-table-p data) (let* ((location-info (parse-location-info (gethash "location" data)))
                      (scheduled-date (parse-iso-date (json-null-to-nil (gethash "scheduled_date" data))))
                      (due-date (parse-iso-date (json-null-to-nil (gethash "due_date" data))))
                      (raw-repeat-interval (json-null-to-nil (gethash "repeat_interval" data)))
@@ -400,8 +403,8 @@ Respond with ONLY the JSON object, no markdown formatting or additional text.")
                               :location-address (getf location-info :address)
                               :location-phone (getf location-info :phone)
                               :location-map-url (getf location-info :map-url)))
-                result)
-              (progn
+                result))
+      (t
                 (llog:warn "Parsed data is not a hash table"
                            :data-type (type-of data))
                 nil))))
@@ -427,7 +430,7 @@ Respond with ONLY the JSON object, no markdown formatting or additional text.")
 
   ;; Check preconditions - Ollama doesn't need API key, others do
   (unless (and *enrichment-enabled*
-               (or (eq *llm-provider* :ollama) *llm-api-key*)
+               (or (eql *llm-provider* :ollama) *llm-api-key*)
                (> (length raw-title) 0))
     (llog:debug "Enrichment skipped - preconditions not met"
                 :enabled *enrichment-enabled*
@@ -573,8 +576,8 @@ DEADLINE: <2026-01-25 Fri>
 
 Example Output:
 {\"todos\": [
-  {\"task_title\": \"Call Dentist for Appointment\", \"description\": \"Need to schedule cleaning\", \"category\": \"Health\", \"priority\": \"P1\", \"estimated_minutes\": 10, \"scheduled_date\": \"2026-01-20\", \"due_date\": null, \"location\": {\"name\": \"Downtown Dental\", \"address\": null, \"phone\": null, \"map_url\": \"https://www.google.com/maps/search/?api=1&query=Downtown+Dental\", \"website\": null}},
-  {\"task_title\": \"Review Quarterly Report\", \"description\": null, \"category\": \"Work\", \"priority\": \"P2\", \"estimated_minutes\": 60, \"scheduled_date\": null, \"due_date\": \"2026-01-25\", \"location\": null}
+  {\"task_title\": \"Call Dentist for Appointment\", \"description\": \"Need to schedule cleaning\", \"category\": \"Health\", \"priority\": \"P1\", \"estimated_minutes\": 10, \"scheduled_date\": \"2026-01-20\", \"due_date\": null, \"location\": {\"name\": \"Downtown Dental\", \"address\": null, \"phone\": null, \"map_url\": \"https://www.google.com/maps/search/?api=1&query=Downtown+Dental\", \"website\": null}}, ; lint:suppress max-line-length
+  {\"task_title\": \"Review Quarterly Report\", \"description\": null, \"category\": \"Work\", \"priority\": \"P2\", \"estimated_minutes\": 60, \"scheduled_date\": null, \"due_date\": \"2026-01-25\", \"location\": null} ; lint:suppress max-line-length
 ]}
 
 Note: The \"Buy groceries\" item was skipped because it was marked DONE.
@@ -598,10 +601,8 @@ Respond with ONLY the JSON object, no markdown formatting or additional text.")
         (llog:debug "Extracted JSON for import"
                     :json-length (length json-str))
         (let ((data (jzon:parse json-str)))
-          (if (hash-table-p data)
-              (let ((todos-array (gethash "todos" data)))
-                (if (and todos-array (vectorp todos-array))
-                    (let ((result nil))
+          (cond ((hash-table-p data) (let ((todos-array (gethash "todos" data)))
+                (cond ((and todos-array (vectorp todos-array)) (let ((result nil))
                       (loop for item across todos-array
                             when (hash-table-p item)
                             do (let* ((location-info (parse-location-info (gethash "location" item)))
@@ -626,11 +627,11 @@ Respond with ONLY the JSON object, no markdown formatting or additional text.")
                                  (push todo-data result)))
                       (llog:info "Parsed import response"
                                  :num-todos (length result))
-                      (nreverse result))
-                    (progn
+                      (nreverse result)))
+      (t
                       (llog:warn "No todos array in import response")
-                      nil)))
-              (progn
+                      nil))))
+      (t
                 (llog:warn "Import response is not a hash table")
                 nil))))
     (error (e)
@@ -646,7 +647,7 @@ Respond with ONLY the JSON object, no markdown formatting or additional text.")
 
   ;; Check preconditions - Ollama doesn't need API key, others do
   (unless (and *enrichment-enabled*
-               (or (eq *llm-provider* :ollama) *llm-api-key*))
+               (or (eql *llm-provider* :ollama) *llm-api-key*))
     (llog:warn "Import requires enrichment to be enabled with valid provider config")
     (return-from import-org-file nil))
 
@@ -656,7 +657,7 @@ Respond with ONLY the JSON object, no markdown formatting or additional text.")
                     :filename filename
                     :content-length (length file-content))
 
-        (when (= (length file-content) 0)
+        (when (zerop (length file-content))
           (llog:warn "Org file is empty" :filename filename)
           (return-from import-org-file nil))
 

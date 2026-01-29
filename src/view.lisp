@@ -74,7 +74,7 @@
                            (let* ((line (format nil "~A~A" prefix modal-line))
                                   (pad (max 0 (- term-width (tui:visible-length line)))))
                              (format s "~A~A" line (make-string pad :initial-element #\Space))))
-                         (let* ((pad (max 0 (- term-width (tui:visible-length modal-line)))))
+                         (let ((pad (max 0 (- term-width (tui:visible-length modal-line)))))
                            (format s "~A~A" modal-line (make-string pad :initial-element #\Space)))))
                    ;; Just use background line
                    (format s "~A" bg-line))))))
@@ -214,7 +214,7 @@
 
     ;; "All" option (row 0) - selected when no tags are filtered
     (let* ((all-selected (zerop (hash-table-count selected)))
-           (is-cursor (and focused (= cursor 0)))
+           (is-cursor (and focused (zerop cursor)))
            (checkbox (if all-selected "[x]" "[ ]"))
            (text (format nil "~A All" checkbox))
            (padded (pad-to-width text w)))
@@ -263,8 +263,8 @@
           (let ((current-idx 0)
                 (first-line t))
             (dolist (group groups)
-              (let ((category (car group))
-                    (group-todos (cdr group)))
+              (let ((category (first group))
+                    (group-todos (rest group)))
                 (unless first-line (format c "~%"))
                 (setf first-line nil)
                 ;; Render pager-style section header (multi-line)
@@ -302,7 +302,7 @@
                                (tags-len (tui:visible-length tags-str))
                                (suffix-len tags-len)
                                (avail (max 0 (- list-width prefix-len
-                                                (if (> suffix-len 0) (+ suffix-len 1) 0))))
+                                                (if (> suffix-len 0) (1+ suffix-len) 0))))
                                (title-text (sanitize-title-for-display (todo-title todo)))
                                (trunc-title (if (> (tui:visible-length title-text) avail)
                                                 (concatenate 'string
@@ -355,7 +355,7 @@
                                (tags-len (tui:visible-length tags-colored))
                                (suffix-len tags-len)
                                (avail (max 0 (- list-width prefix-len
-                                                (if (> suffix-len 0) (+ suffix-len 1) 0))))
+                                                (if (> suffix-len 0) (1+ suffix-len) 0))))
                                (title-text (sanitize-title-for-display (todo-title todo)))
                                (trunc-title (if (> (length title-text) avail)
                                                 (concatenate 'string
@@ -625,11 +625,11 @@
   "Format repeat interval and unit as a display string."
   (cond
     ((or (null interval) (null unit)) "None")
-    ((and (= interval 1) (eq unit :day)) "Daily")
-    ((and (= interval 1) (eq unit :week)) "Weekly")
-    ((and (= interval 2) (eq unit :week)) "Biweekly")
-    ((and (= interval 1) (eq unit :month)) "Monthly")
-    ((and (= interval 1) (eq unit :year)) "Yearly")
+    ((and (= interval 1) (eql unit :day)) "Daily")
+    ((and (= interval 1) (eql unit :week)) "Weekly")
+    ((and (= interval 2) (eql unit :week)) "Biweekly")
+    ((and (= interval 1) (eql unit :month)) "Monthly")
+    ((and (= interval 1) (eql unit :year)) "Yearly")
     (t (format nil "Every ~D ~A~P" interval
                (string-downcase (symbol-name unit)) interval))))
 
@@ -651,30 +651,30 @@
            (with-output-to-string (c)
              ;; Title input
              (format c "~A ~A"
-                     (if (eq (model-active-field model) :title)
+                     (if (eql (model-active-field model) :title)
                          (tui:colored ">" :fg tui:*fg-cyan*)
                          " ")
                      (tui.textinput:textinput-view (model-title-input model)))
 
              ;; Notes input
              (format c "~%~A ~A"
-                     (if (eq (model-active-field model) :description)
+                     (if (eql (model-active-field model) :description)
                          (tui:colored ">" :fg tui:*fg-cyan*)
                          " ")
                      (tui.textinput:textinput-view (model-description-input model)))
 
              ;; Priority
              (format c "~%~%~A Priority: ~A ~A ~A"
-                     (if (eq (model-active-field model) :priority)
+                     (if (eql (model-active-field model) :priority)
                          (tui:colored ">" :fg tui:*fg-cyan*)
                          " ")
-                     (if (eq (model-edit-priority model) :high)
+                     (if (eql (model-edit-priority model) :high)
                          (tui:bold (tui:colored "[#A]" :fg tui:*fg-red*))
                          (tui:colored " #A " :fg tui:*fg-bright-black*))
-                     (if (eq (model-edit-priority model) :medium)
+                     (if (eql (model-edit-priority model) :medium)
                          (tui:bold (tui:colored "[#B]" :fg tui:*fg-yellow*))
                          (tui:colored " #B " :fg tui:*fg-bright-black*))
-                     (if (eq (model-edit-priority model) :low)
+                     (if (eql (model-edit-priority model) :low)
                          (tui:bold (tui:colored "[#C]" :fg tui:*fg-green*))
                          (tui:colored " #C " :fg tui:*fg-bright-black*)))
 
@@ -685,13 +685,13 @@
                                                          :format '(:short-month " " :day ", " :year))
                                    "Not set")))
                (format c "~%~A Scheduled: ~A~A"
-                       (if (eq (model-active-field model) :scheduled)
+                       (if (eql (model-active-field model) :scheduled)
                            (tui:colored ">" :fg tui:*fg-cyan*)
                            " ")
                        (if sched-date
                            (tui:colored (format nil "[~A]" sched-str) :fg tui:*fg-cyan*)
                            (tui:colored (format nil "[~A]" sched-str) :fg tui:*fg-bright-black*))
-                       (if (eq (model-active-field model) :scheduled)
+                       (if (eql (model-active-field model) :scheduled)
                            (tui:colored "  (Space)" :fg tui:*fg-bright-black*)
                            "")))
 
@@ -702,13 +702,13 @@
                                                        :format '(:short-month " " :day ", " :year))
                                  "Not set")))
                (format c "~%~A Due:       ~A~A"
-                       (if (eq (model-active-field model) :due)
+                       (if (eql (model-active-field model) :due)
                            (tui:colored ">" :fg tui:*fg-cyan*)
                            " ")
                        (if due-date
                            (tui:colored (format nil "[~A]" due-str) :fg tui:*fg-red*)
                            (tui:colored (format nil "[~A]" due-str) :fg tui:*fg-bright-black*))
-                       (if (eq (model-active-field model) :due)
+                       (if (eql (model-active-field model) :due)
                            (tui:colored "  (Space)" :fg tui:*fg-bright-black*)
                            "")))
 
@@ -717,13 +717,13 @@
                                 (model-edit-repeat-interval model)
                                 (model-edit-repeat-unit model))))
                (format c "~%~A Repeat:    ~A~A"
-                       (if (eq (model-active-field model) :repeat)
+                       (if (eql (model-active-field model) :repeat)
                            (tui:colored ">" :fg tui:*fg-cyan*)
                            " ")
                        (if (model-edit-repeat-interval model)
                            (tui:colored (format nil "[~A]" repeat-str) :fg tui:*fg-magenta*)
                            (tui:colored (format nil "[~A]" repeat-str) :fg tui:*fg-bright-black*))
-                       (if (eq (model-active-field model) :repeat)
+                       (if (eql (model-active-field model) :repeat)
                            (tui:colored "  (←/→)" :fg tui:*fg-bright-black*)
                            "")))
 
@@ -734,7 +734,7 @@
                          (tui:colored "(inherited from parent)" :fg tui:*fg-bright-black*))
                  ;; Non-child tasks: editable labels
                  (let* ((edit-tags (model-edit-tags model))
-                        (tags-focused (eq (model-active-field model) :tags)))
+                        (tags-focused (eql (model-active-field model) :tags)))
                    (format c "~%~A Labels:    "
                            (if tags-focused
                                (tui:colored ">" :fg tui:*fg-cyan*)
@@ -924,7 +924,7 @@
                 (format c "~A~%~%"
                         (tui.textinput:textinput-view (model-import-input model)))
                 (cond
-                  ((= (length filename) 0)
+                  ((zerop (length filename))
                    (format c "~A"
                            (tui:colored "Enter a file path above" :fg tui:*fg-bright-black*)))
                   (file-exists
@@ -956,7 +956,7 @@
          (todo (when (< (model-cursor model) (length todos))
                  (nth (model-cursor model) todos)))
          (background (render-list-view model))
-         (title (if (eq date-type :scheduled) "SET SCHEDULED DATE" "SET DEADLINE"))
+         (title (if (eql date-type :scheduled) "SET SCHEDULED DATE" "SET DEADLINE"))
          (current-date (case date-type
                          (:scheduled (when todo (todo-scheduled-date todo)))
                          (:deadline (when todo (todo-due-date todo)))))
@@ -976,7 +976,7 @@
 
              ;; Current date status
              (format c "~A ~A~%"
-                     (tui:bold (if (eq date-type :scheduled) "Current:" "Current:"))
+                     (tui:bold (if (eql date-type :scheduled) "Current:" "Current:"))
                      (if current-date
                          (tui:colored
                           (lt:format-timestring nil current-date
@@ -1014,8 +1014,8 @@
   (with-output-to-string (s)
     (format s "~A~%" (tui:bold (tui:colored title :fg tui:*fg-cyan*)))
     (dolist (entry entries)
-      (let ((key (car entry))
-            (desc (cdr entry)))
+      (let ((key (first entry))
+            (desc (rest entry)))
         (if (string= key "")
             ;; Empty key = section header or blank line
             (if (string= desc "")
@@ -1031,7 +1031,7 @@
   (and p
        (listp p)
        (not (eq p 'null))
-       (not (eq p :null))
+       (not (eql p :null))
        (> (length p) 0)
        (stringp (first p))))
 
@@ -1232,7 +1232,7 @@
          (date-type (model-editing-date-type model))
          (is-edit (model-edit-todo-id model))
          (title (format nil " SET ~A DATE (~A) "
-                        (if (eq date-type :scheduled) "SCHEDULED" "DUE")
+                        (if (eql date-type :scheduled) "SCHEDULED" "DUE")
                         (if is-edit "Edit" "New")))
          (current-date (case date-type
                          (:scheduled (model-edit-scheduled-date model))
@@ -1240,7 +1240,7 @@
          (selected (tui.datepicker:datepicker-selected picker)))
     (with-output-to-string (s)
       ;; Title bar
-      (let* ((pad (max 0 (- term-width (length title)))))
+      (let ((pad (max 0 (- term-width (length title)))))
         (format s "~A~%"
                 (tui:bold (tui:colored
                           (format nil "~A~A" title (make-string pad :initial-element #\─))
@@ -1248,7 +1248,7 @@
 
       ;; Current date status
       (format s "~%~A ~A~%"
-              (tui:bold (if (eq date-type :scheduled) "SCHEDULED:" "DUE:"))
+              (tui:bold (if (eql date-type :scheduled) "SCHEDULED:" "DUE:"))
               (if current-date
                   (tui:colored
                    (lt:format-timestring nil current-date
@@ -1302,7 +1302,7 @@
                            (:deadline (todo-due-date todo)))))
          (cursor-date (tui.datepicker:datepicker-time picker))
          (modal-width 50)
-         (title (if (eq date-type :scheduled) "SET SCHEDULED DATE" "SET DEADLINE"))
+         (title (if (eql date-type :scheduled) "SET SCHEDULED DATE" "SET DEADLINE"))
          (todo-title (if todo
                         (let ((t-title (sanitize-title-for-display (todo-title todo))))
                           (subseq t-title 0 (min (length t-title) (- modal-width 6))))

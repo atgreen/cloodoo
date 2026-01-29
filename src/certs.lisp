@@ -385,11 +385,10 @@
   (bt:with-lock-held (*pairing-lock*)
     (let ((request (gethash token *pending-pairings*)))
       (when request
-        (if (> (get-universal-time) (pairing-request-expires-at request))
-            (progn
+        (cond ((> (get-universal-time) (pairing-request-expires-at request))
               (remhash token *pending-pairings*)
               nil)
-            request)))))
+      (t request))))))
 
 (defun consume-pairing-request (token)
   "Get and remove a pairing request (single-use).
@@ -439,7 +438,7 @@
   (let ((paired-dir (paired-directory)))
     (when (probe-file paired-dir)
       (dolist (dir (uiop:subdirectories paired-dir))
-        (let* ((server-id (car (last (pathname-directory dir))))
+        (let* ((server-id (first (last (pathname-directory dir))))
                (config-path (merge-pathnames "sync.json" dir)))
           (when (probe-file config-path)
             (handler-case

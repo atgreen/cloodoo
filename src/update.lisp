@@ -30,7 +30,7 @@
     :initarg :view-state
    :initform :list
    :accessor model-view-state
-    :documentation "Current view: :list, :detail, :add, :edit, :help, :search, :delete-confirm, :delete-done-confirm, :import, :edit-date, :add-scheduled-date, :add-due-date.")
+    :documentation "Current view: :list, :detail, :add, :edit, :help, :search, :delete-confirm, :delete-done-confirm, :import, :edit-date, :add-scheduled-date, :add-due-date.") ; lint:suppress max-line-length
    (detail-urls
     :initform nil
     :accessor model-detail-urls
@@ -266,7 +266,7 @@
   "Filter tags containing query substring (case-insensitive).
    Excludes tags that are already selected."
   (let ((q (string-downcase (or query ""))))
-    (if (= (length q) 0)
+    (if (zerop (length q))
         ;; No query - show all unselected tags
         (remove-if (lambda (tag) (member tag already-selected :test #'string=)) all-tags)
         ;; Filter by query substring
@@ -314,7 +314,7 @@
   (let ((result todos))
     ;; Always exclude deleted items
     (setf result (remove-if (lambda (todo)
-                              (eq (todo-status todo) :deleted))
+                              (eql (todo-status todo) :deleted))
                             result))
     (when status
       (setf result (remove-if-not (lambda (todo)
@@ -387,8 +387,8 @@
          (result nil))
     ;; Build result with todo IDs (not objects) to allow status changes
     (dolist (group groups)
-      (let* ((category (car group))
-             (group-todos (cdr group))
+      (let* ((category (first group))
+             (group-todos (rest group))
              ;; Sort by priority within group
              (sorted (sort-todos group-todos :priority t))
              (visible-ids (mapcar #'todo-id sorted)))
@@ -426,7 +426,7 @@
   (let* ((groups (group-todos-by-date todos))
          (result nil))
     (dolist (group groups)
-      (let* ((group-todos (cdr group))
+      (let* ((group-todos (rest group))
              (sorted (sort-todos group-todos sort-by descending)))
         (dolist (todo sorted)
           (push todo result))))
@@ -441,7 +441,7 @@
     (dolist (group groups)
       ;; Header takes +header-lines+ lines (pager-style box)
       (incf line-idx +header-lines+)
-      (dolist (todo (cdr group))
+      (dolist (todo (rest group))
         (when (= current cursor)
           (return-from list-line-index-for-cursor line-idx))
         (incf current)
@@ -456,7 +456,7 @@
       (let ((header-start line-idx))
         ;; Skip header lines
         (incf line-idx +header-lines+)
-        (dolist (todo (cdr group))
+        (dolist (todo (rest group))
           (when (= current cursor)
             (return-from header-start-line-for-cursor header-start))
           (incf current)
@@ -472,7 +472,7 @@
       (when (< line-idx (+ line +header-lines+))
         (return-from cursor-index-for-line nil))
       (incf line +header-lines+)
-      (dolist (todo (cdr group))
+      (dolist (todo (rest group))
         (when (= line-idx line)
           (return-from cursor-index-for-line current))
         (incf current)
@@ -538,8 +538,8 @@
   (tui:set-terminal-title "cloodoo")
   (let ((size (tui:get-terminal-size)))
     (when size
-      (setf (model-term-width model) (car size))
-      (setf (model-term-height model) (cdr size))))
+      (setf (model-term-width model) (first size))
+      (setf (model-term-height model) (rest size))))
   ;; Initialize text inputs
   (setf (model-title-input model)
         (tui.textinput:make-textinput
@@ -598,19 +598,19 @@
          (max-cursor (length tags)))  ; 0=All, 1..n=tags
     (cond
       ;; Tab - return focus to main list
-      ((eq key :tab)
+      ((eql key :tab)
        (setf (model-sidebar-focused model) nil)
        (values model nil))
 
       ;; Move up
-      ((or (eq key :up)
+      ((or (eql key :up)
            (and (characterp key) (or (char= key #\k) (char= key #\p))))
        (when (> (model-sidebar-cursor model) 0)
          (decf (model-sidebar-cursor model)))
        (values model nil))
 
       ;; Move down
-      ((or (eq key :down)
+      ((or (eql key :down)
            (and (characterp key) (or (char= key #\j) (char= key #\n))))
        (when (< (model-sidebar-cursor model) max-cursor)
          (incf (model-sidebar-cursor model)))
@@ -620,7 +620,7 @@
       ((and (characterp key) (char= key #\Space))
        (let ((cursor (model-sidebar-cursor model))
              (selected (model-selected-tags model)))
-         (if (= cursor 0)
+         (if (zerop cursor)
              ;; "All" selected - clear all filters
              (clrhash selected)
              ;; Toggle specific tag
@@ -660,15 +660,15 @@
        (values model nil))
 
       ;; Escape or q - return to list without changes
-      ((or (eq key :escape) (and (characterp key) (char= key #\q)))
+      ((or (eql key :escape) (and (characterp key) (char= key #\q)))
        (setf (model-sidebar-focused model) nil)
        (values model nil))
 
       ;; Delete - delete the selected tag (not available for "All")
-      ((or (eq key :delete) (eq key :backspace)
+      ((or (eql key :delete) (eql key :backspace)
            (and (characterp key) (char= key #\d)))
        (let ((cursor (model-sidebar-cursor model)))
-         (if (= cursor 0)
+         (if (zerop cursor)
              ;; "All" is selected - can't delete
              (values model nil)
              ;; Delete specific tag
@@ -708,7 +708,7 @@
 
       ;; Focus sidebar (Tab when sidebar is visible and not at a todo for indenting)
       ;; Note: Tab for indent is handled separately below with the > key
-      ((and (eq key :tab) (model-sidebar-visible model) (not (model-sidebar-focused model)))
+      ((and (eql key :tab) (model-sidebar-visible model) (not (model-sidebar-focused model)))
        (setf (model-sidebar-focused model) t)
        (values model nil))
 
@@ -737,21 +737,21 @@
        (values model nil))
 
       ;; Move up (p/k/up - org uses p for previous)
-      ((or (eq key :up)
+      ((or (eql key :up)
            (and (characterp key) (or (char= key #\k) (char= key #\p))))
        (when (> (model-cursor model) 0)
          (decf (model-cursor model)))
        (values model nil))
 
       ;; Move down (n/j/down - org uses n for next)
-      ((or (eq key :down)
+      ((or (eql key :down)
            (and (characterp key) (or (char= key #\j) (char= key #\n))))
        (when (< (model-cursor model) (1- (length todos)))
          (incf (model-cursor model)))
        (values model nil))
 
       ;; Page up (Ctrl+U or Page Up key)
-      ((or (eq key :page-up)
+      ((or (eql key :page-up)
            (and ctrl (characterp key) (char= key #\u)))
        (let* ((page-size (max 1 (- (model-term-height model) 6)))
               (new-pos (max 0 (- (model-cursor model) page-size))))
@@ -759,7 +759,7 @@
        (values model nil))
 
       ;; Page down (Ctrl+D or Page Down key)
-      ((or (eq key :page-down)
+      ((or (eql key :page-down)
            (and ctrl (characterp key) (char= key #\d)))
        (let* ((page-size (max 1 (- (model-term-height model) 6)))
               (max-pos (max 0 (1- (length todos))))
@@ -768,7 +768,7 @@
        (values model nil))
 
       ;; Increase priority (Shift+Up)
-      ((eq key :shift-up)
+      ((eql key :shift-up)
        (when (< (model-cursor model) (length todos))
          (let ((todo (nth (model-cursor model) todos)))
            (setf (todo-priority todo)
@@ -780,7 +780,7 @@
        (values model nil))
 
       ;; Decrease priority (Shift+Down)
-      ((eq key :shift-down)
+      ((eql key :shift-down)
        (when (< (model-cursor model) (length todos))
          (let ((todo (nth (model-cursor model) todos)))
            (setf (todo-priority todo)
@@ -792,12 +792,12 @@
        (values model nil))
 
       ;; Go to top
-      ((or (eq key :home) (and (characterp key) (char= key #\g)))
+      ((or (eql key :home) (and (characterp key) (char= key #\g)))
        (setf (model-cursor model) 0)
        (values model nil))
 
       ;; Go to bottom
-      ((or (eq key :end) (and (characterp key) (char-equal key #\G)))
+      ((or (eql key :end) (and (characterp key) (char-equal key #\G)))
        (setf (model-cursor model) (max 0 (1- (length todos))))
        (values model nil))
 
@@ -809,9 +809,7 @@
            (case (todo-status todo)
              ((:pending :in-progress)
               ;; Check if this is a repeating task
-              (if (and (todo-repeat-interval todo) (todo-repeat-unit todo))
-                  ;; Auto-reschedule: calculate next occurrence and stay pending
-                  (let ((next-date (calculate-next-occurrence todo)))
+              (cond ((and (todo-repeat-interval todo) (todo-repeat-unit todo)) (let ((next-date (calculate-next-occurrence todo)))
                     (when next-date
                       (setf (todo-scheduled-date todo) next-date)
                       ;; Adjust due-date if it was set (shift by same interval)
@@ -831,9 +829,8 @@
                     (setf (model-status-message model)
                           (format nil "Rescheduled to ~A"
                                   (lt:format-timestring nil next-date
-                                                       :format '(:short-month " " :day)))))
-                  ;; Non-repeating: mark as completed
-                  (progn
+                                                       :format '(:short-month " " :day))))))
+      (t
                     (setf (todo-status todo) +status-completed+)
                     (setf (todo-completed-at todo) (lt:now)))))
              (:completed
@@ -853,7 +850,7 @@
        (values model nil))
 
       ;; View details (Enter)
-      ((eq key :enter)
+      ((eql key :enter)
        (when (< (model-cursor model) (length todos))
          (setf (model-view-state model) :detail))
        (values model nil))
@@ -909,7 +906,7 @@
        (values model nil))
 
       ;; Delete selected TODO (DEL key)
-      ((eq key :delete)
+      ((eql key :delete)
        (when (< (model-cursor model) (length todos))
          (setf (model-view-state model) :delete-confirm))
        (values model nil))
@@ -975,11 +972,10 @@
                 (scheduled (todo-scheduled-date todo))
                 (picker (model-date-picker model)))
            ;; Initialize datepicker with current scheduled date or today
-           (if scheduled
-               (let ((utime (lt:timestamp-to-universal scheduled)))
+           (cond (scheduled (let ((utime (lt:timestamp-to-universal scheduled)))
                  (tui.datepicker:datepicker-set-time picker utime)
-                 (setf (tui.datepicker:datepicker-selected picker) utime))
-               (progn
+                 (setf (tui.datepicker:datepicker-selected picker) utime)))
+      (t
                  (tui.datepicker:datepicker-set-time picker (get-universal-time))
                  (tui.datepicker:datepicker-unselect picker)))
            (tui.datepicker:datepicker-focus picker)
@@ -994,11 +990,10 @@
                 (deadline (todo-due-date todo))
                 (picker (model-date-picker model)))
            ;; Initialize datepicker with current deadline or today
-           (if deadline
-               (let ((utime (lt:timestamp-to-universal deadline)))
+           (cond (deadline (let ((utime (lt:timestamp-to-universal deadline)))
                  (tui.datepicker:datepicker-set-time picker utime)
-                 (setf (tui.datepicker:datepicker-selected picker) utime))
-               (progn
+                 (setf (tui.datepicker:datepicker-selected picker) utime)))
+      (t
                  (tui.datepicker:datepicker-set-time picker (get-universal-time))
                  (tui.datepicker:datepicker-unselect picker)))
            (tui.datepicker:datepicker-focus picker)
@@ -1104,7 +1099,7 @@
         (ctrl (tui:key-msg-ctrl msg)))
     (cond
       ;; Cancel with Escape
-      ((eq key :escape)
+      ((eql key :escape)
        (setf (model-view-state model) :list)
        (values model nil))
 
@@ -1119,7 +1114,7 @@
          (values model (make-editor-cmd current-text))))
 
       ;; Tab to next field: title → description → priority → scheduled → due → repeat → tags → title
-      ((eq key :tab)
+      ((eql key :tab)
        (case (model-active-field model)
          (:title
           (setf (model-active-field model) :description)
@@ -1146,17 +1141,14 @@
                  (has-completion (or (and (model-tag-dropdown-visible model)
                                           (> (length filtered) 0))
                                      (> (length query) 0))))
-            (if has-completion
-                ;; Complete the tag (same logic as Enter)
-                (progn
+            (cond (has-completion
                   (cond
                     ((and (model-tag-dropdown-visible model) (> (length filtered) 0))
                      (add-tag-to-edit-tags model (nth cursor filtered)))
                     ((> (length query) 0)
                      (add-tag-to-edit-tags model query)))
                   (update-tag-dropdown model))
-                ;; No input - move to next field
-                (progn
+      (t
                   (setf (model-active-field model) :title)
                   (tui.textinput:textinput-blur (model-tags-input model))
                   (setf (model-tag-dropdown-visible model) nil)
@@ -1164,7 +1156,7 @@
        (values model nil))
 
       ;; Shift+Tab to previous field
-      ((eq key :backtab)
+      ((eql key :backtab)
        (case (model-active-field model)
          (:title
           ;; Skip tags for child tasks (they inherit from parent)
@@ -1192,7 +1184,7 @@
        (values model nil))
 
       ;; Priority selection when in priority field (A/B/C org-style)
-      ((and (eq (model-active-field model) :priority)
+      ((and (eql (model-active-field model) :priority)
             (characterp key)
             (member key '(#\a #\A #\b #\B #\c #\C) :test #'char=))
        (setf (model-edit-priority model)
@@ -1203,15 +1195,14 @@
        (values model nil))
 
       ;; Space to open datepicker for scheduled date
-      ((and (eq (model-active-field model) :scheduled)
+      ((and (eql (model-active-field model) :scheduled)
             (characterp key) (char= key #\Space))
        (let ((picker (model-date-picker model))
              (current (model-edit-scheduled-date model)))
-         (if current
-             (let ((utime (lt:timestamp-to-universal current)))
+         (cond (current (let ((utime (lt:timestamp-to-universal current)))
                (tui.datepicker:datepicker-set-time picker utime)
-               (setf (tui.datepicker:datepicker-selected picker) utime))
-             (progn
+               (setf (tui.datepicker:datepicker-selected picker) utime)))
+      (t
                (tui.datepicker:datepicker-set-time picker (get-universal-time))
                (tui.datepicker:datepicker-unselect picker)))
          (tui.datepicker:datepicker-focus picker)
@@ -1220,15 +1211,14 @@
        (values model nil))
 
       ;; Space to open datepicker for due date
-      ((and (eq (model-active-field model) :due)
+      ((and (eql (model-active-field model) :due)
             (characterp key) (char= key #\Space))
        (let ((picker (model-date-picker model))
              (current (model-edit-due-date model)))
-         (if current
-             (let ((utime (lt:timestamp-to-universal current)))
+         (cond (current (let ((utime (lt:timestamp-to-universal current)))
                (tui.datepicker:datepicker-set-time picker utime)
-               (setf (tui.datepicker:datepicker-selected picker) utime))
-             (progn
+               (setf (tui.datepicker:datepicker-selected picker) utime)))
+      (t
                (tui.datepicker:datepicker-set-time picker (get-universal-time))
                (tui.datepicker:datepicker-unselect picker)))
          (tui.datepicker:datepicker-focus picker)
@@ -1238,15 +1228,15 @@
 
       ;; Backspace to clear dates
       ((and (member (model-active-field model) '(:scheduled :due))
-            (eq key :backspace))
+            (eql key :backspace))
        (case (model-active-field model)
          (:scheduled (setf (model-edit-scheduled-date model) nil))
          (:due (setf (model-edit-due-date model) nil)))
        (values model nil))
 
       ;; Repeat field: Left/h for previous preset, Right/l for next preset
-      ((and (eq (model-active-field model) :repeat)
-            (or (eq key :left) (eq key :right)
+      ((and (eql (model-active-field model) :repeat)
+            (or (eql key :left) (eql key :right)
                 (and (characterp key) (or (char= key #\h) (char= key #\l)))))
        (let* ((presets '(nil                       ; None
                          (1 . :day)                ; Daily
@@ -1257,27 +1247,26 @@
               (current (cons (model-edit-repeat-interval model)
                              (model-edit-repeat-unit model)))
               (idx (or (position current presets :test #'equal) 0))
-              (direction (if (or (eq key :left)
+              (direction (if (or (eql key :left)
                                  (and (characterp key) (char= key #\h)))
                              -1 1))
               (new-idx (mod (+ idx direction) (length presets)))
               (new-val (nth new-idx presets)))
-         (if new-val
-             (progn
-               (setf (model-edit-repeat-interval model) (car new-val))
-               (setf (model-edit-repeat-unit model) (cdr new-val)))
-             (progn
+         (cond (new-val
+               (setf (model-edit-repeat-interval model) (first new-val))
+               (setf (model-edit-repeat-unit model) (rest new-val)))
+      (t
                (setf (model-edit-repeat-interval model) nil)
                (setf (model-edit-repeat-unit model) nil))))
        (values model nil))
 
       ;; Tags field: Up/Down to navigate dropdown
-      ((and (eq (model-active-field model) :tags)
-            (or (eq key :up) (eq key :down)))
+      ((and (eql (model-active-field model) :tags)
+            (or (eql key :up) (eql key :down)))
        (let* ((filtered (model-tag-dropdown-filtered model))
               (max-idx (max 0 (1- (length filtered)))))
          (when (and (model-tag-dropdown-visible model) (> (length filtered) 0))
-           (if (eq key :up)
+           (if (eql key :up)
                (setf (model-tag-dropdown-cursor model)
                      (max 0 (1- (model-tag-dropdown-cursor model))))
                (setf (model-tag-dropdown-cursor model)
@@ -1286,8 +1275,8 @@
 
       ;; Tags field: Enter to select from dropdown OR create new tag
       ;; If nothing to complete, fall through to form submit
-      ((and (eq (model-active-field model) :tags)
-            (eq key :enter)
+      ((and (eql (model-active-field model) :tags)
+            (eql key :enter)
             (let ((query (tui.textinput:textinput-value (model-tags-input model)))
                   (filtered (model-tag-dropdown-filtered model)))
               (or (and (model-tag-dropdown-visible model) (> (length filtered) 0))
@@ -1306,10 +1295,10 @@
        (values model nil))
 
       ;; Tags field: Backspace with empty input removes last tag
-      ((and (eq (model-active-field model) :tags)
-            (eq key :backspace))
+      ((and (eql (model-active-field model) :tags)
+            (eql key :backspace))
        (let ((query (tui.textinput:textinput-value (model-tags-input model))))
-         (if (= (length query) 0)
+         (if (zerop (length query))
              ;; Empty input - remove last tag
              (remove-last-tag-from-edit-tags model)
              ;; Non-empty - pass to text input
@@ -1321,7 +1310,7 @@
        (values model nil))
 
       ;; Tags field: Other keys pass to text input
-      ((eq (model-active-field model) :tags)
+      ((eql (model-active-field model) :tags)
        (multiple-value-bind (new-input cmd)
            (tui.textinput:textinput-update (model-tags-input model) msg)
          (declare (ignore cmd))
@@ -1330,7 +1319,7 @@
        (values model nil))
 
       ;; Save on Enter (when not in text field or when in priority field)
-      ((eq key :enter)
+      ((eql key :enter)
        (let ((title (tui.textinput:textinput-value (model-title-input model))))
          (when (> (length title) 0)
            (if (model-edit-todo-id model)
@@ -1415,12 +1404,12 @@
   (let ((key (tui:key-msg-key msg)))
     (cond
       ;; Cancel with Escape
-      ((eq key :escape)
+      ((eql key :escape)
        (setf (model-view-state model) :list)
        (values model nil))
 
       ;; Apply search with Enter
-      ((eq key :enter)
+      ((eql key :enter)
        (setf (model-search-query model)
              (tui.textinput:textinput-value (model-search-input model)))
        (invalidate-visible-todos-cache model)
@@ -1448,7 +1437,7 @@
   (let ((key (tui:key-msg-key msg)))
     (cond
       ;; Escape - save tags and close
-      ((eq key :escape)
+      ((eql key :escape)
        (let ((todo (find (model-edit-todo-id model) (model-todos model)
                         :key #'todo-id :test #'string=)))
          (when todo
@@ -1460,11 +1449,11 @@
        (values model nil))
 
       ;; Up/Down - navigate dropdown
-      ((or (eq key :up) (eq key :down))
+      ((or (eql key :up) (eql key :down))
        (let* ((filtered (model-tag-dropdown-filtered model))
               (max-idx (max 0 (1- (length filtered)))))
          (when (and (model-tag-dropdown-visible model) (> (length filtered) 0))
-           (if (eq key :up)
+           (if (eql key :up)
                (setf (model-tag-dropdown-cursor model)
                      (max 0 (1- (model-tag-dropdown-cursor model))))
                (setf (model-tag-dropdown-cursor model)
@@ -1472,7 +1461,7 @@
        (values model nil))
 
       ;; Enter - add tag from dropdown or input, or save and close if empty
-      ((eq key :enter)
+      ((eql key :enter)
        (let* ((query (tui.textinput:textinput-value (model-tags-input model)))
               (filtered (model-tag-dropdown-filtered model))
               (cursor (model-tag-dropdown-cursor model)))
@@ -1500,9 +1489,9 @@
             (values model nil)))))
 
       ;; Backspace - remove last tag if input empty, else pass to input
-      ((eq key :backspace)
+      ((eql key :backspace)
        (let ((query (tui.textinput:textinput-value (model-tags-input model))))
-         (if (= (length query) 0)
+         (if (zerop (length query))
              (remove-last-tag-from-edit-tags model)
              (multiple-value-bind (new-input cmd)
                  (tui.textinput:textinput-update (model-tags-input model) msg)
@@ -1527,23 +1516,22 @@
   (let ((key (tui:key-msg-key msg)))
     (cond
       ;; Cancel with Escape
-      ((eq key :escape)
+      ((eql key :escape)
        (setf (model-view-state model) :list)
        (values model nil))
 
       ;; Start import with Enter
-      ((eq key :enter)
+      ((eql key :enter)
        (let ((filename (tui.textinput:textinput-value (model-import-input model))))
-         (if (and (> (length filename) 0)
+         (cond ((and (> (length filename) 0)
                   (probe-file filename))
-             (progn
                (llog:info "Starting org-mode import" :filename filename)
                (setf (model-view-state model) :list)
                ;; Return command to perform async import
                (values model (list (make-import-cmd model filename)
                                    (make-spinner-start-cmd
                                     (model-enrichment-spinner model)))))
-             (progn
+      (t
                (llog:warn "Import file not found" :filename filename)
                ;; Stay in import view - file doesn't exist
                (values model nil)))))
@@ -1663,9 +1651,9 @@
         (todos (get-visible-todos model)))
     (cond
       ;; Back to list with Escape, q, or Enter
-      ((or (eq key :escape)
+      ((or (eql key :escape)
            (and (characterp key) (char= key #\q))
-           (eq key :enter))
+           (eql key :enter))
        (setf (model-view-state model) :list)
        (values model nil))
 
@@ -1696,11 +1684,10 @@
                 (scheduled (todo-scheduled-date todo))
                 (picker (model-date-picker model)))
            ;; Initialize datepicker with current scheduled date or today
-           (if scheduled
-               (let ((utime (lt:timestamp-to-universal scheduled)))
+           (cond (scheduled (let ((utime (lt:timestamp-to-universal scheduled)))
                  (tui.datepicker:datepicker-set-time picker utime)
-                 (setf (tui.datepicker:datepicker-selected picker) utime))
-               (progn
+                 (setf (tui.datepicker:datepicker-selected picker) utime)))
+      (t
                  (tui.datepicker:datepicker-set-time picker (get-universal-time))
                  (tui.datepicker:datepicker-unselect picker)))
            (tui.datepicker:datepicker-focus picker)
@@ -1715,11 +1702,10 @@
                 (deadline (todo-due-date todo))
                 (picker (model-date-picker model)))
            ;; Initialize datepicker with current deadline or today
-           (if deadline
-               (let ((utime (lt:timestamp-to-universal deadline)))
+           (cond (deadline (let ((utime (lt:timestamp-to-universal deadline)))
                  (tui.datepicker:datepicker-set-time picker utime)
-                 (setf (tui.datepicker:datepicker-selected picker) utime))
-               (progn
+                 (setf (tui.datepicker:datepicker-selected picker) utime)))
+      (t
                  (tui.datepicker:datepicker-set-time picker (get-universal-time))
                  (tui.datepicker:datepicker-unselect picker)))
            (tui.datepicker:datepicker-focus picker)
@@ -1758,13 +1744,13 @@
         (picker (model-date-picker model)))
     (cond
       ;; Cancel with Escape or Ctrl+C - go back to list view
-      ((or (eq key :escape)
+      ((or (eql key :escape)
            (and ctrl (characterp key) (char= key #\c)))
        (setf (model-view-state model) :list)
        (values model nil))
 
       ;; Confirm with Enter - save the current cursor date and go back to list
-      ((eq key :enter)
+      ((eql key :enter)
        (when (< (model-cursor model) (length todos))
          (let* ((todo (nth (model-cursor model) todos))
                 ;; Use cursor position (datepicker-time), not selection
@@ -1784,7 +1770,7 @@
        (values model nil))
 
       ;; Clear date with Backspace or Delete
-      ((or (eq key :backspace) (eq key :delete))
+      ((or (eql key :backspace) (eql key :delete))
        (when (< (model-cursor model) (length todos))
          (let ((todo (nth (model-cursor model) todos)))
            (case (model-editing-date-type model)
@@ -1815,13 +1801,13 @@
         (picker (model-date-picker model)))
     (cond
       ;; Cancel with Escape or Ctrl+C - go back to detail view
-      ((or (eq key :escape)
+      ((or (eql key :escape)
            (and ctrl (characterp key) (char= key #\c)))
        (setf (model-view-state model) :detail)
        (values model nil))
 
       ;; Confirm with Enter - save the cursor date and go back
-      ((eq key :enter)
+      ((eql key :enter)
        (when (< (model-cursor model) (length todos))
          (let* ((todo (nth (model-cursor model) todos))
                 (current-date (tui.datepicker:datepicker-time picker))
@@ -1838,7 +1824,7 @@
        (values model nil))
 
       ;; Clear date with Backspace or Delete
-      ((or (eq key :backspace) (eq key :delete))
+      ((or (eql key :backspace) (eql key :delete))
        (when (< (model-cursor model) (length todos))
          (let ((todo (nth (model-cursor model) todos)))
            (case (model-editing-date-type model)
@@ -1866,35 +1852,35 @@
          (date-type (model-editing-date-type model)))
     (cond
       ;; Cancel with Escape or Ctrl+C - go back to add/edit view without saving
-      ((or (eq key :escape)
+      ((or (eql key :escape)
            (and ctrl (characterp key) (char= key #\c)))
        (setf (model-view-state model) return-view)
-       (setf (model-active-field model) (if (eq date-type :scheduled) :scheduled :due))
+       (setf (model-active-field model) (if (eql date-type :scheduled) :scheduled :due))
        (values model nil))
 
       ;; Confirm with Enter - save the cursor date to form state and go back
-      ((eq key :enter)
+      ((eql key :enter)
        (let* ((current-date (when picker (tui.datepicker:datepicker-time picker)))
               (timestamp (when current-date
                            (lt:universal-to-timestamp current-date))))
          ;; Save the date to form state based on which type we're editing
          (cond
-           ((eq date-type :scheduled)
+           ((eql date-type :scheduled)
             (setf (model-edit-scheduled-date model) timestamp)
             (setf (model-active-field model) :scheduled))
-           ((eq date-type :due)
+           ((eql date-type :due)
             (setf (model-edit-due-date model) timestamp)
             (setf (model-active-field model) :due))))
        (setf (model-view-state model) return-view)
        (values model nil))
 
       ;; Clear date with Backspace or Delete
-      ((or (eq key :backspace) (eq key :delete))
+      ((or (eql key :backspace) (eql key :delete))
        (cond
-         ((eq date-type :scheduled)
+         ((eql date-type :scheduled)
           (setf (model-edit-scheduled-date model) nil)
           (setf (model-active-field model) :scheduled))
-         ((eq date-type :due)
+         ((eql date-type :due)
           (setf (model-edit-due-date model) nil)
           (setf (model-active-field model) :due)))
        (setf (model-view-state model) return-view)
@@ -1946,7 +1932,7 @@
     ((:add-scheduled-date :add-due-date) (handle-form-date-edit-keys model msg))
     (:help (handle-help-keys model msg))
     (:context-info (handle-context-info-keys model msg))
-    (t (values model nil))))
+    (otherwise (values model nil))))
 
 (defmethod tui:update-message ((model app-model) (msg tui:window-size-msg))
   "Handle window resize."
@@ -1960,7 +1946,7 @@
 
 (defmethod tui:update-message ((model app-model) (msg tui:mouse-scroll-event))
   "Handle mouse scroll by scrolling the viewport."
-  (when (eq (model-view-state model) :list)
+  (when (eql (model-view-state model) :list)
     (let* ((direction (tui:mouse-scroll-direction msg))
            (count (tui:mouse-scroll-count msg))
            (todos (get-visible-todos model))
@@ -1972,7 +1958,7 @@
            (new-offset (case direction
                          (:up (max 0 (- offset count)))
                          (:down (min max-offset (+ offset count)))
-                         (t offset))))
+                         (otherwise offset))))
       (setf (model-scroll-offset model) new-offset)
       ;; Move cursor into visible viewport so adjust-scroll won't override
       (let* ((cursor (model-cursor model))
@@ -1998,7 +1984,7 @@
         (button (tui:mouse-event-button msg)))
     (cond
       ;; List view click handling
-      ((eq view-state :list)
+      ((eql view-state :list)
        (let* ((screen-x (1- (tui:mouse-event-x msg)))  ; Convert to 0-based
               (screen-line (- (tui:mouse-event-y msg) 2))
               (list-line (- screen-line +list-top-lines+))
@@ -2016,7 +2002,7 @@
          (cond
            ;; Click in sidebar area
            ((and sidebar-visible-effective (< screen-x sidebar-width)
-                 (eq button :left))
+                 (eql button :left))
             ;; Sidebar rows: 0=header, 1=separator, 2="All", 3+=tags
             (let* ((sidebar-item (- screen-line 2))
                    (tags (model-all-tags-cache model))
@@ -2026,7 +2012,7 @@
                 (setf (model-sidebar-focused model) t
                       (model-sidebar-cursor model) sidebar-item)
                 (let ((selected (model-selected-tags model)))
-                  (if (= sidebar-item 0)
+                  (if (zerop sidebar-item)
                       ;; "All" - clear all filters
                       (clrhash selected)
                       ;; Toggle specific tag
@@ -2039,12 +2025,12 @@
                 (setf (model-cursor model) 0))))
            ;; Left-click on scrollbar: start dragging
            ((and (>= list-line 0) (< list-line available-height)
-                 (eq button :left) (= screen-x scrollbar-col))
+                 (eql button :left) (= screen-x scrollbar-col))
             (setf (model-scrollbar-dragging model) t)
             (scroll-to-y-position model list-line available-height))
            ;; Left-click on list: select item
            ((and (>= list-line 0) (< list-line available-height)
-                 (eq button :left))
+                 (eql button :left))
             (let* ((line-idx (+ (model-scroll-offset model) list-line))
                    (groups (get-visible-todos-grouped model))
                    (cursor (cursor-index-for-line groups line-idx)))
@@ -2053,7 +2039,7 @@
                       (model-sidebar-focused model) nil))))
            ;; Right-click on list: select item and show details
            ((and (>= list-line 0) (< list-line available-height)
-                 (eq button :right))
+                 (eql button :right))
             (let* ((line-idx (+ (model-scroll-offset model) list-line))
                    (groups (get-visible-todos-grouped model))
                    (cursor (cursor-index-for-line groups line-idx)))
@@ -2063,8 +2049,8 @@
                       (model-view-state model) :detail)))))))
       ;; Detail view: click on URL to open it
       ;; URLs appear in the lower section; we check Y position and URL presence
-      ((eq view-state :detail)
-       (when (eq button :left)
+      ((eql view-state :detail)
+       (when (eql button :left)
          (let* ((screen-y (- (tui:mouse-event-y msg) 2))
                 (todos (get-visible-todos model))
                 (todo (when (< (model-cursor model) (length todos))
@@ -2079,7 +2065,7 @@
 
 (defmethod tui:update-message ((model app-model) (msg tui:mouse-drag-event))
   "Handle mouse drag for scrollbar."
-  (when (and (eq (model-view-state model) :list)
+  (when (and (eql (model-view-state model) :list)
              (model-scrollbar-dragging model))
     (let* ((screen-line (- (tui:mouse-event-y msg) 2))
            (list-line (- screen-line +list-top-lines+))

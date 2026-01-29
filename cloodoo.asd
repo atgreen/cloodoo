@@ -4,7 +4,7 @@
 ;;;
 ;;; Copyright (C) 2026 Anthony Green <green@moxielogic.com>
 
-(asdf:defsystem #:cloodoo
+(asdf:defsystem "cloodoo"
   :description "Personal TODO system with a retro TUI"
   :author      "Anthony Green <green@moxielogic.com>"
   :license     "MIT"

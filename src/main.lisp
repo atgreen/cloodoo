@@ -37,7 +37,7 @@
                           (signal e))))
     ;; Force use of /dev/tty to avoid TWO-WAY-STREAM issues in TUI
     (handler-case
-        (let ((tty (open "/dev/tty" :direction :io :if-does-not-exist nil)))
+        (let ((tty (open "/dev/tty" :direction :io :if-does-not-exist nil))) ; lint:suppress use-with-open-file
           (when tty
             (setf *terminal-io* tty
                   *standard-input* tty

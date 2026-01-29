@@ -1,4 +1,4 @@
-.PHONY: android android-install lint-gnome-extension install-gnome-extension clean
+.PHONY: android android-install lint lint-gnome-extension install-gnome-extension clean
 
 # Default target: build the TUI application
 cloodoo: src/grpc-proto.lisp src/*.lisp *.asd
@@ -23,6 +23,8 @@ src/grpc-proto.lisp: ag-protoc android/app/src/main/proto/cloodoo_sync.proto pro
 		--class-prefix PROTO- \
 		-o $@ \
 		android/app/src/main/proto/cloodoo_sync.proto
+	@# Fix ag-protoc bug: it doesn't apply --class-prefix to response types in stub methods
+	@sed -i "s/'CLOODOO::SYNCMESSAGE/'CLOODOO::PROTO-SYNC-MESSAGE/g" $@
 
 # Build Android app (output: android/app/build/outputs/apk/debug/app-debug.apk)
 android:
@@ -50,6 +52,11 @@ android-install: android
 		echo "No Android device connected"; \
 		exit 1; \
 	fi
+
+# Lint Common Lisp code with ocicl
+lint:
+	@echo "Linting Common Lisp code..."
+	@ocicl lint cloodoo.asd
 
 # Lint GNOME Shell extension with ESLint
 lint-gnome-extension:
