@@ -1,6 +1,7 @@
 package com.cloodoo.app.ui.screens
 
 import android.Manifest
+import android.util.Base64
 import android.util.Log
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -29,6 +30,11 @@ import com.google.mlkit.vision.barcode.common.Barcode
 import com.google.mlkit.vision.common.InputImage
 import kotlinx.coroutines.launch
 import java.util.concurrent.Executors
+import javax.crypto.Cipher
+import javax.crypto.SecretKeyFactory
+import javax.crypto.spec.GCMParameterSpec
+import javax.crypto.spec.PBEKeySpec
+import javax.crypto.spec.SecretKeySpec
 
 /**
  * Screen for pairing with a Cloodoo server using QR code or manual entry.
@@ -159,7 +165,7 @@ fun PairingScreen(
                                 value = passphrase,
                                 onValueChange = { passphrase = it },
                                 label = { Text("Passphrase") },
-                                placeholder = { Text("tiger-blue-forest") },
+                                placeholder = { Text("tiger-blue-forest-alpha") },
                                 modifier = Modifier.fillMaxWidth(),
                                 singleLine = true,
                                 visualTransformation = PasswordVisualTransformation()
@@ -213,7 +219,7 @@ fun PairingScreen(
                         value = passphrase,
                         onValueChange = { passphrase = it },
                         label = { Text("Passphrase") },
-                        placeholder = { Text("tiger-blue-forest") },
+                        placeholder = { Text("tiger-blue-forest-alpha") },
                         modifier = Modifier.fillMaxWidth(),
                         singleLine = true,
                         visualTransformation = PasswordVisualTransformation()
@@ -365,7 +371,37 @@ private data class PairingResult(
 )
 
 /**
+ * Derive AES-256 key from passphrase using PBKDF2-SHA256.
+ * Must match server parameters: 100000 iterations, 32-byte key.
+ */
+private fun deriveKeyFromPassphrase(passphrase: String, salt: ByteArray): SecretKeySpec {
+    val factory = SecretKeyFactory.getInstance("PBKDF2WithHmacSHA256")
+    val spec = PBEKeySpec(passphrase.toCharArray(), salt, 100000, 256)
+    val keyBytes = factory.generateSecret(spec).encoded
+    return SecretKeySpec(keyBytes, "AES")
+}
+
+/**
+ * Decrypt the encrypted certificate payload using AES-256-GCM.
+ * The ciphertext includes the 16-byte auth tag appended at the end.
+ */
+private fun decryptPayload(
+    encryptedWithTag: ByteArray,
+    iv: ByteArray,
+    key: SecretKeySpec
+): String {
+    val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+    val gcmSpec = GCMParameterSpec(128, iv) // 128-bit tag
+    cipher.init(Cipher.DECRYPT_MODE, key, gcmSpec)
+    // Add the same AAD as the server
+    cipher.updateAAD("cloodoo-pairing".toByteArray(Charsets.US_ASCII))
+    val plaintext = cipher.doFinal(encryptedWithTag)
+    return String(plaintext, Charsets.UTF_8)
+}
+
+/**
  * Download the certificate from the pairing URL using the PEM endpoint.
+ * The response is encrypted with AES-256-GCM using a key derived from the passphrase.
  */
 private suspend fun downloadCertificate(
     url: String,
@@ -411,10 +447,31 @@ private suspend fun downloadCertificate(
             connection.disconnect()
 
             val json = org.json.JSONObject(responseBody)
-            val certPem = json.getString("cert")
-            val keyPem = json.getString("key")
-            val caCertPem = if (json.has("ca_cert") && !json.isNull("ca_cert")) json.getString("ca_cert") else null
-            val deviceName = json.getString("device_name")
+
+            // Response is encrypted: {encrypted: base64, iv: base64, salt: base64}
+            val encryptedB64 = json.getString("encrypted")
+            val ivB64 = json.getString("iv")
+            val saltB64 = json.getString("salt")
+
+            val encryptedWithTag = Base64.decode(encryptedB64, Base64.DEFAULT)
+            val iv = Base64.decode(ivB64, Base64.DEFAULT)
+            val salt = Base64.decode(saltB64, Base64.DEFAULT)
+
+            Log.d("PairingScreen", "Received encrypted payload, deriving key...")
+
+            // Derive the decryption key from passphrase
+            val key = deriveKeyFromPassphrase(passphrase, salt)
+
+            // Decrypt the payload
+            val decryptedJson = decryptPayload(encryptedWithTag, iv, key)
+            Log.d("PairingScreen", "Payload decrypted successfully")
+
+            // Parse the decrypted JSON
+            val payload = org.json.JSONObject(decryptedJson)
+            val certPem = payload.getString("cert")
+            val keyPem = payload.getString("key")
+            val caCertPem = if (payload.has("ca_cert") && !payload.isNull("ca_cert")) payload.getString("ca_cert") else null
+            val deviceName = payload.getString("device_name")
 
             Log.d("PairingScreen", "Received cert for device: $deviceName, has ca_cert: ${caCertPem != null}")
 
@@ -426,6 +483,9 @@ private suspend fun downloadCertificate(
                 caCertPem = caCertPem,
                 deviceName = deviceName
             ))
+        } catch (e: javax.crypto.AEADBadTagException) {
+            Log.e("PairingScreen", "Decryption failed - wrong passphrase?", e)
+            Result.failure(Exception("Decryption failed - check passphrase"))
         } catch (e: Exception) {
             Log.e("PairingScreen", "Failed to download certificate", e)
             Result.failure(Exception("${e.javaClass.simpleName}: ${e.message}"))
