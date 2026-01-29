@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<schemalist>
+  <schema id="org.gnome.shell.extensions.cloodoo" path="/org/gnome/shell/extensions/cloodoo/">
+    <key name="capture-todo-screenshot" type="as">
+      <default>["&lt;Super&gt;&lt;Shift&gt;t"]</default>
+      <summary>Keyboard shortcut to capture screenshot and create todo</summary>
+    </key>
+
+    <key name="cloodoo-path" type="s">
+      <default>"cloodoo"</default>
+      <summary>Path to cloodoo executable</summary>
+    </key>
+  </schema>
+</schemalist>

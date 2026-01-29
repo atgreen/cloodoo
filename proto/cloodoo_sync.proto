@@ -1,0 +1,78 @@
+syntax = "proto3";
+
+package cloodoo;
+
+option java_package = "com.cloodoo.app.proto";
+option java_outer_classname = "CloodooSync";
+
+// Location information for a todo
+message LocationInfo {
+  string name = 1;
+  string address = 2;
+  string phone = 3;
+  string map_url = 4;
+  string website = 5;
+}
+
+// Complete todo data
+message TodoData {
+  string id = 1;
+  string title = 2;
+  string description = 3;
+  string priority = 4;      // "high", "medium", "low"
+  string status = 5;        // "pending", "in-progress", "completed", "waiting", "cancelled"
+  string scheduled_date = 6; // ISO 8601 or empty
+  string due_date = 7;       // ISO 8601 or empty
+  repeated string tags = 8;
+  int32 estimated_minutes = 9;
+  LocationInfo location_info = 10;
+  string url = 11;
+  string created_at = 12;    // ISO 8601
+  string completed_at = 13;  // ISO 8601 or empty
+  string parent_id = 14;
+  int32 repeat_interval = 15;
+  string repeat_unit = 16;   // "day", "week", "month", "year" or empty
+  repeated string attachment_hashes = 17;  // SHA256 hashes
+}
+
+// A change event sent in either direction
+message TodoChange {
+  string device_id = 1;
+  string timestamp = 2;  // When this change occurred (ISO 8601)
+
+  oneof change {
+    TodoData upsert = 3;  // Create or update
+    string delete_id = 4; // ID of deleted todo
+  }
+}
+
+// Sent by client to initiate sync
+message SyncInit {
+  string device_id = 1;
+  string since = 2;       // Get changes since this timestamp (ISO 8601)
+  string client_time = 3; // Client's current time (ISO 8601) for clock skew check
+}
+
+// Server acknowledgment with current time
+message SyncAck {
+  string server_time = 1;
+  int32 pending_changes = 2;  // How many changes server will send
+  string error = 3;           // Error message if connection rejected (e.g., clock skew)
+}
+
+// Wrapper for stream messages (allows different message types)
+message SyncMessage {
+  oneof msg {
+    SyncInit init = 1;
+    SyncAck ack = 2;
+    TodoChange change = 3;
+  }
+}
+
+// Bidirectional sync service
+service TodoSync {
+  // Bidirectional streaming for real-time sync
+  // Client sends: SyncMessage(init) first, then SyncMessage(change) for local changes
+  // Server sends: SyncMessage(ack) first, then SyncMessage(change) for remote changes
+  rpc SyncStream(stream SyncMessage) returns (stream SyncMessage);
+}

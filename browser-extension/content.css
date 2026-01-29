@@ -1,0 +1,21 @@
+/* Cloodoo Browser Extension - Content Styles */
+/* SPDX-License-Identifier: MIT */
+/* Copyright (C) 2026 Anthony Green <green@moxielogic.com> */
+
+.cloodoo-quick-add {
+  margin-left: 8px;
+}
+
+.cloodoo-quick-add .T-I {
+  color: #5f6368;
+  transition: color 0.2s ease;
+}
+
+.cloodoo-quick-add .T-I:hover {
+  color: #1a73e8;
+  background-color: rgba(26, 115, 232, 0.04);
+}
+
+.cloodoo-quick-add svg {
+  vertical-align: middle;
+}

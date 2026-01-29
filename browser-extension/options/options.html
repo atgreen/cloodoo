@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Cloodoo - Settings</title>
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      font-size: 14px;
+      color: #333;
+      background: #f5f5f5;
+      padding: 24px;
+    }
+
+    .container {
+      max-width: 500px;
+      margin: 0 auto;
+      background: #fff;
+      border-radius: 8px;
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+      padding: 24px;
+    }
+
+    h1 {
+      font-size: 24px;
+      color: #1a73e8;
+      margin-bottom: 8px;
+    }
+
+    .subtitle {
+      color: #5f6368;
+      margin-bottom: 24px;
+    }
+
+    .status-section {
+      margin-bottom: 20px;
+    }
+
+    .help-text {
+      font-size: 12px;
+      color: #5f6368;
+      margin-top: 4px;
+    }
+
+    .btn {
+      padding: 10px 20px;
+      border: none;
+      border-radius: 4px;
+      font-size: 14px;
+      font-weight: 500;
+      cursor: pointer;
+      margin-right: 8px;
+    }
+
+    .btn-secondary {
+      background: #f1f3f4;
+      color: #5f6368;
+    }
+
+    .btn-secondary:hover {
+      background: #e8eaed;
+    }
+
+    .connection-status {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      margin-left: 16px;
+    }
+
+    .connection-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+    }
+
+    .connection-dot.connected {
+      background: #34a853;
+    }
+
+    .connection-dot.disconnected {
+      background: #ea4335;
+    }
+
+    .connection-dot.testing {
+      background: #fbbc04;
+      animation: pulse 1s infinite;
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.5; }
+    }
+
+    .install-instructions {
+      margin-top: 16px;
+      padding: 12px;
+      border-radius: 4px;
+      background: #fce8e6;
+      color: #c5221f;
+      display: none;
+    }
+
+    .install-instructions.visible {
+      display: block;
+    }
+
+    .install-instructions code {
+      background: rgba(0, 0, 0, 0.08);
+      padding: 2px 6px;
+      border-radius: 3px;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>Cloodoo Settings</h1>
+    <p class="subtitle">Configure your Cloodoo extension</p>
+
+    <div class="status-section">
+      <button type="button" id="test-btn" class="btn btn-secondary">Test Connection</button>
+      <span class="connection-status">
+        <span id="connection-dot" class="connection-dot disconnected"></span>
+        <span id="connection-text">Not tested</span>
+      </span>
+      <div id="install-help" class="install-instructions">
+        Native messaging host not found. Run
+        <code>cloodoo setup-extension</code>
+        and restart the browser.
+      </div>
+    </div>
+  </div>
+
+  <script src="options.js"></script>
+</body>
+</html>

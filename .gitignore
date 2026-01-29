@@ -1,0 +1,10 @@
+.env
+*~
+cache/
+ocicl/
+PRD.md
+STATUS.md
+/cloodoo
+/ag-protoc
+dump.sql
+src/grpc-proto.lisp

@@ -1,0 +1,16 @@
+# Build artifacts
+*.zip
+*.xpi
+*.crx
+web-ext-artifacts/
+dist/
+build/
+
+# Development
+node_modules/
+package-lock.json
+*.log
+
+# OS files
+.DS_Store
+Thumbs.db

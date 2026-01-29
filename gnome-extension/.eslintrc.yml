@@ -1,0 +1,40 @@
+---
+env:
+  es2021: true
+extends: 'eslint:recommended'
+parserOptions:
+  ecmaVersion: 2022
+  sourceType: module
+rules:
+  indent:
+    - error
+    - 4
+    - SwitchCase: 0
+  arrow-parens:
+    - error
+    - as-needed
+  block-scoped-var: error
+  camelcase: error
+  eqeqeq: error
+  no-restricted-properties:
+    - error
+    - object: imports
+      property: format
+      message: Use template strings
+  no-trailing-spaces: error
+  no-undef: 'off'
+  no-unused-vars:
+    - error
+    - varsIgnorePattern: ^_
+      argsIgnorePattern: ^_
+  no-restricted-globals:
+    - error
+    - name: global
+      message: Use globalThis instead
+  quotes:
+    - error
+    - single
+    - avoidEscape: true
+  semi:
+    - error
+    - always
