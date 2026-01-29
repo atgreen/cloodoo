@@ -144,8 +144,8 @@ export default class CloodooExtension extends Extension {
 
         const argv = [
             cloodooPath, 'add',
+            title,
             '--attachment', screenshotPath,
-            '--title', title,
             '--priority', priority
         ];
 

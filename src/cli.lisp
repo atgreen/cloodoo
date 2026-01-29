@@ -1017,8 +1017,8 @@ URL format: http://HOST:PORT/pair/TOKEN"
               (when (and (> length 0) (< length 1048576))
                 (let ((json-bytes (make-array length :element-type '(unsigned-byte 8))))
                   (read-sequence json-bytes input-stream)
-                  ;; Convert bytes to string and parse JSON
-                  (let ((json-string (map 'string #'code-char json-bytes)))
+                  ;; Convert UTF-8 bytes to string and parse JSON
+                  (let ((json-string (flexi-streams:octets-to-string json-bytes :external-format :utf-8)))
                     (jzon:parse json-string))))))))
     (sb-sys:deadline-timeout ()
       (native-host-log "Timeout waiting for message")
@@ -1028,15 +1028,15 @@ URL format: http://HOST:PORT/pair/TOKEN"
   "Write a native messaging response to OUTPUT-STREAM.
    Format: 4-byte little-endian length + JSON payload."
   (let* ((json-string (jzon:stringify data))
-         (length (length json-string)))
+         (json-bytes (flexi-streams:string-to-octets json-string :external-format :utf-8))
+         (length (length json-bytes)))
     ;; Write 4-byte length prefix (little-endian)
     (write-byte (logand length #xff) output-stream)
     (write-byte (logand (ash length -8) #xff) output-stream)
     (write-byte (logand (ash length -16) #xff) output-stream)
     (write-byte (logand (ash length -24) #xff) output-stream)
-    ;; Write JSON payload as bytes
-    (loop for char across json-string
-          do (write-byte (char-code char) output-stream))
+    ;; Write UTF-8 JSON payload as bytes
+    (write-sequence json-bytes output-stream)
     (force-output output-stream)))
 
 (defun db-todo-exists-p (id)
@@ -1200,7 +1200,11 @@ URL format: http://HOST:PORT/pair/TOKEN"
             (let* ((samples-dir (dom-samples-directory))
                    (timestamp (lt:format-timestring nil (lt:now)
                                 :format '(:year :month :day "-" :hour :min :sec)))
-                   (safe-site (or site "unknown"))
+                   ;; Sanitize site name: remove path separators and limit to alphanumeric+dash
+                   (safe-site (if site
+                                  (remove-if-not (lambda (c) (or (alphanumericp c) (char= c #\-)))
+                                                 site)
+                                  "unknown"))
                    (filename (format nil "~A-~A.html" safe-site timestamp))
                    (filepath (merge-pathnames filename samples-dir))
                    (meta-filepath (merge-pathnames (format nil "~A-~A.json" safe-site timestamp)

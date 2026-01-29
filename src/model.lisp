@@ -130,10 +130,12 @@
   (:documentation "A TODO item."))
 
 (defun generate-id ()
-  "Generate a simple unique ID."
+  "Generate a unique ID with millisecond precision and strong randomness.
+   Uses internal-real-time (millisecond resolution) plus a large random number
+   to minimize collision probability even under rapid concurrent creation."
   (format nil "~A-~A"
-          (get-universal-time)
-          (random 100000)))
+          (get-internal-real-time)
+          (random 1000000000)))
 
 (defun parse-tags (input)
   "Parse tags from INPUT, splitting on whitespace and commas.
