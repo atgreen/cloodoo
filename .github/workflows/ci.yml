@@ -1,0 +1,57 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  lisp-tests:
+    name: Common Lisp Tests
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Install SBCL
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y sbcl
+
+    - name: Install ocicl
+      run: |
+        OCICL_VERSION=$(curl -s https://api.github.com/repos/ocicl/ocicl/releases/latest | grep '"tag_name"' | sed -E 's/.*"v([^"]+)".*/\1/')
+        curl -sLO https://github.com/ocicl/ocicl/releases/latest/download/ocicl_${OCICL_VERSION}-1_amd64.deb
+        sudo dpkg -i ocicl_${OCICL_VERSION}-1_amd64.deb
+        ocicl setup > ~/.sbclrc
+        ocicl version
+
+    - name: Install dependencies
+      run: |
+        ocicl install
+
+    - name: Build ag-protoc
+      run: make ag-protoc
+
+    - name: Generate protobuf code
+      run: make src/grpc-proto.lisp
+
+    - name: Run tests
+      run: |
+        sbcl --non-interactive \
+          --eval "(asdf:load-system :fiveam)" \
+          --eval "(asdf:load-system :cloodoo)" \
+          --load tests/tests.lisp \
+          --eval "(cloodoo-tests:run-tests)"
+
+    - name: Build executable
+      run: make cloodoo
+
+    - name: Upload executable artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: cloodoo-linux-x86_64
+        path: cloodoo
+        retention-days: 7

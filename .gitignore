@@ -8,3 +8,9 @@ STATUS.md
 /ag-protoc
 dump.sql
 src/grpc-proto.lisp
+
+# Android build artifacts
+android/app/build/
+android/build/
+android/.gradle/
+android/local.properties
