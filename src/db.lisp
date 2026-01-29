@@ -124,7 +124,7 @@
   `(bt:with-lock-held (*db-lock*)
      (let ((,db-var (or *db* (open-db)))) ; lint:suppress malformed-let
        (unwind-protect
-            (unquote-splicing body)
+            (progn ,@body) ; lint:suppress redundant-progn
          (unless *db*
            (close-db ,db-var))))))
 
