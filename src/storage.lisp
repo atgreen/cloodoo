@@ -296,7 +296,7 @@
 
 (defun ensure-user-context-file ()
   "Ensure the user context file exists with default template."
-  (ensure-data-directory)
+  (ensure-config-directory)
   (let ((file (user-context-file)))
     (unless (probe-file file)
       (with-open-file (stream file

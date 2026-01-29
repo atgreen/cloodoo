@@ -15,11 +15,8 @@
 ;;── Cryptographically Secure Random ──────────────────────────────────────────
 
 (defun secure-random-bytes (n)
-  "Read N cryptographically random bytes from /dev/urandom."
-  (with-open-file (stream "/dev/urandom" :element-type '(unsigned-byte 8))
-    (let ((bytes (make-array n :element-type '(unsigned-byte 8))))
-      (read-sequence bytes stream)
-      bytes)))
+  "Return N cryptographically random bytes using ironclad's portable CSPRNG."
+  (ironclad:random-data n))
 
 (defun secure-random (limit)
   "Return a cryptographically random non-negative integer below LIMIT.

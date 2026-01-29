@@ -37,9 +37,9 @@
   (make-sync-upsert-message-with-timestamp device-id todo (now-iso)))
 
 (defun timestamp-to-string (ts)
-  "Convert a local-time timestamp to ISO string, or return empty string if nil."
+  "Convert a local-time timestamp to RFC3339 string, or return empty string if nil."
   (if ts
-      (lt:format-timestring nil ts)
+      (lt:format-rfc3339-timestring nil ts)
       ""))
 
 (defun make-sync-upsert-message-with-timestamp (device-id todo timestamp)

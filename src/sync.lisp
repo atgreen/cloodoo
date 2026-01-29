@@ -134,7 +134,7 @@
 
                  ;; Send all pending changes (using the row's actual valid_from timestamp)
                  (dolist (row rows)
-                   (let* ((todo (hash-table-to-todo row))
+                   (let* ((todo (db-row-to-todo row))
                           (valid-from (gethash "valid_from" row))
                           (change-msg (make-sync-upsert-message-with-timestamp
                                        (get-device-id) todo valid-from)))
@@ -194,10 +194,12 @@
       (when client-device-id
         (unregister-sync-client client-device-id)))))
 
-;;── Helper: Convert sync hash table to todo ───────────────────────────────────
+;;── Helper: Convert DB row hash table to todo ─────────────────────────────────
 
-(defun hash-table-to-todo (ht)
-  "Convert a sync hash table (from db-load-rows-since) back to a todo object."
+(defun db-row-to-todo (ht)
+  "Convert a DB row hash table (from db-load-rows-since) back to a todo object.
+   Note: This differs from storage.lisp's hash-table-to-todo because DB rows
+   store tags/location_info as JSON strings, not parsed structures."
   (let ((tags-json (gethash "tags" ht)))
     (make-instance 'todo
                    :id (gethash "id" ht)

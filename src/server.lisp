@@ -23,7 +23,7 @@
   "Derive a 256-bit AES key from PASSPHRASE and SALT using PBKDF2-SHA256.
    SALT should be a byte vector (16 bytes recommended).
    Returns a 32-byte key as a byte vector."
-  (let ((passphrase-bytes (ironclad:ascii-string-to-byte-array passphrase)))
+  (let ((passphrase-bytes (flexi-streams:string-to-octets passphrase :external-format :utf-8)))
     (ironclad:derive-key
      (ironclad:make-kdf 'ironclad:pbkdf2 :digest 'ironclad:sha256)
      passphrase-bytes
