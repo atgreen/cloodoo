@@ -8,8 +8,10 @@ package com.cloodoo.app.ui.components
 
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -26,9 +28,13 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
+import kotlin.math.roundToInt
 import com.cloodoo.app.data.local.TodoEntity
 import com.cloodoo.app.ui.theme.LocalPriorityColors
 import com.cloodoo.app.ui.theme.PriorityColorScheme
@@ -158,7 +164,6 @@ fun TodoItem(
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SwipeableTodoItem(
     todo: TodoEntity,
@@ -169,74 +174,110 @@ fun SwipeableTodoItem(
     modifier: Modifier = Modifier
 ) {
     val isDone = todo.status == "completed" || todo.status == "cancelled"
-    val dismissState = rememberSwipeToDismissBoxState(
-        confirmValueChange = { value ->
-            when (value) {
-                SwipeToDismissBoxValue.StartToEnd -> {
-                    onToggleComplete(todo.id)
-                    false
-                }
-                SwipeToDismissBoxValue.EndToStart -> {
-                    onCancel(todo.id)
-                    false
-                }
-                SwipeToDismissBoxValue.Settled -> true
-            }
-        },
-        positionalThreshold = { totalDistance -> totalDistance * 0.75f }
+    val density = LocalDensity.current
+    val swipeThreshold = with(density) { 100.dp.toPx() }
+
+    var offsetX by remember { mutableFloatStateOf(0f) }
+    var isDragging by remember { mutableStateOf(false) }
+
+    // Animate back to zero when released
+    val animatedOffset by animateFloatAsState(
+        targetValue = if (isDragging) offsetX else 0f,
+        animationSpec = tween(durationMillis = 300),
+        label = "swipe_offset"
     )
 
-    SwipeToDismissBox(
-        state = dismissState,
-        modifier = modifier.padding(horizontal = 12.dp, vertical = 3.dp),
-        backgroundContent = {
-            val direction = dismissState.targetValue
-            val color by animateColorAsState(
-                when (direction) {
-                    SwipeToDismissBoxValue.StartToEnd ->
-                        if (isDone) MaterialTheme.colorScheme.tertiary
-                        else MaterialTheme.colorScheme.secondary
-                    SwipeToDismissBoxValue.EndToStart -> MaterialTheme.colorScheme.error
-                    else -> Color.Transparent
-                },
-                label = "swipe_bg"
-            )
-            val icon = when (direction) {
-                SwipeToDismissBoxValue.StartToEnd ->
-                    if (isDone) Icons.AutoMirrored.Filled.Undo else Icons.Default.Done
-                SwipeToDismissBoxValue.EndToStart -> Icons.Default.Close
-                else -> Icons.Default.Done
-            }
-            val alignment = when (direction) {
-                SwipeToDismissBoxValue.StartToEnd -> Alignment.CenterStart
-                else -> Alignment.CenterEnd
-            }
-            val scale by animateFloatAsState(
-                if (dismissState.targetValue == SwipeToDismissBoxValue.Settled) 0.75f else 1f,
-                label = "swipe_scale"
-            )
-            Box(
-                Modifier
-                    .fillMaxSize()
-                    .background(color, RoundedCornerShape(8.dp))
-                    .padding(horizontal = 20.dp),
-                contentAlignment = alignment
-            ) {
-                Icon(
-                    icon,
-                    contentDescription = null,
-                    modifier = Modifier.scale(scale),
-                    tint = Color.White
-                )
-            }
+    // Determine background state
+    val showingRight = animatedOffset > 10f
+    val showingLeft = animatedOffset < -10f
+
+    val backgroundColor by animateColorAsState(
+        targetValue = when {
+            showingRight -> if (isDone) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.secondary
+            showingLeft && enableCancel -> MaterialTheme.colorScheme.error
+            else -> Color.Transparent
         },
-        enableDismissFromStartToEnd = true,
-        enableDismissFromEndToStart = enableCancel
+        label = "swipe_bg_color"
+    )
+
+    val icon = when {
+        showingRight -> if (isDone) Icons.AutoMirrored.Filled.Undo else Icons.Default.Done
+        showingLeft -> Icons.Default.Close
+        else -> Icons.Default.Done
+    }
+
+    val iconAlignment = when {
+        showingRight -> Alignment.CenterStart
+        showingLeft -> Alignment.CenterEnd
+        else -> Alignment.Center
+    }
+
+    val iconScale by animateFloatAsState(
+        targetValue = if (!showingRight && !showingLeft) 0.5f else 1f,
+        label = "icon_scale"
+    )
+
+    Box(
+        modifier = modifier
+            .padding(horizontal = 12.dp, vertical = 3.dp)
+            .fillMaxWidth()
     ) {
-        TodoItem(
-            todo = todo,
-            onClick = onClick
-        )
+        // Background layer
+        Box(
+            modifier = Modifier
+                .matchParentSize()
+                .background(backgroundColor, RoundedCornerShape(8.dp))
+                .padding(horizontal = 24.dp),
+            contentAlignment = iconAlignment
+        ) {
+            Icon(
+                imageVector = icon,
+                contentDescription = null,
+                modifier = Modifier.scale(iconScale),
+                tint = Color.White
+            )
+        }
+
+        // Foreground TodoItem with drag gesture
+        Box(
+            modifier = Modifier
+                .offset { IntOffset(animatedOffset.roundToInt(), 0) }
+                .pointerInput(Unit) {
+                    detectHorizontalDragGestures(
+                        onDragStart = {
+                            isDragging = true
+                        },
+                        onDragEnd = {
+                            // Only trigger action if threshold is reached (position-based only)
+                            when {
+                                offsetX >= swipeThreshold -> onToggleComplete(todo.id)
+                                enableCancel && offsetX <= -swipeThreshold -> onCancel(todo.id)
+                            }
+                            isDragging = false
+                            offsetX = 0f
+                        },
+                        onDragCancel = {
+                            isDragging = false
+                            offsetX = 0f
+                        },
+                        onHorizontalDrag = { change, dragAmount ->
+                            change.consume()
+                            val newOffset = offsetX + dragAmount
+                            // Allow dragging with resistance
+                            offsetX = when {
+                                newOffset > 0 -> newOffset.coerceAtMost(swipeThreshold * 1.3f)
+                                newOffset < 0 && enableCancel -> newOffset.coerceAtLeast(-swipeThreshold * 1.3f)
+                                else -> 0f
+                            }
+                        }
+                    )
+                }
+        ) {
+            TodoItem(
+                todo = todo,
+                onClick = onClick
+            )
+        }
     }
 }
 
