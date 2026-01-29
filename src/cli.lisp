@@ -233,7 +233,7 @@
                                         (> (priority-order (todo-priority a))
                                            (priority-order (todo-priority b))))))
                   ;; Display
-                  (cond (filtered 
+                  (cond (filtered
                         (format t "~%")
                         (dolist (todo filtered)
                           (format t "~A ~A ~A"
@@ -728,7 +728,7 @@
               (declare (ignore cmd))
               (if (ca-initialized-p)
                   (let ((certs (list-client-certs)))
-                    (cond (certs 
+                    (cond (certs
                           (format t "~%~A~%~%"
                                   (tui:bold "Issued Certificates"))
                           (format t "  ~30A ~12A ~A~%"
@@ -785,7 +785,7 @@
                         (error (e)
                           (format t "~A Error: ~A~%"
                                   (tui:colored "✗" :fg tui:*fg-red*) e)))))
-      (t 
+      (t
                       (format t "Usage: cloodoo cert pair URL~%~%")
                       (format t "Example: cloodoo cert pair http://192.168.1.100:9876/pair/abc123~%")))))))
 

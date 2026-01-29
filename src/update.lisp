@@ -830,7 +830,7 @@
                           (format nil "Rescheduled to ~A"
                                   (lt:format-timestring nil next-date
                                                        :format '(:short-month " " :day))))))
-      (t 
+      (t
                     (setf (todo-status todo) +status-completed+)
                     (setf (todo-completed-at todo) (lt:now)))))
              (:completed
@@ -975,7 +975,7 @@
            (cond (scheduled (let ((utime (lt:timestamp-to-universal scheduled)))
                  (tui.datepicker:datepicker-set-time picker utime)
                  (setf (tui.datepicker:datepicker-selected picker) utime)))
-      (t 
+      (t
                  (tui.datepicker:datepicker-set-time picker (get-universal-time))
                  (tui.datepicker:datepicker-unselect picker)))
            (tui.datepicker:datepicker-focus picker)
@@ -993,7 +993,7 @@
            (cond (deadline (let ((utime (lt:timestamp-to-universal deadline)))
                  (tui.datepicker:datepicker-set-time picker utime)
                  (setf (tui.datepicker:datepicker-selected picker) utime)))
-      (t 
+      (t
                  (tui.datepicker:datepicker-set-time picker (get-universal-time))
                  (tui.datepicker:datepicker-unselect picker)))
            (tui.datepicker:datepicker-focus picker)
@@ -1141,14 +1141,14 @@
                  (has-completion (or (and (model-tag-dropdown-visible model)
                                           (> (length filtered) 0))
                                      (> (length query) 0))))
-            (cond (has-completion 
+            (cond (has-completion
                   (cond
                     ((and (model-tag-dropdown-visible model) (> (length filtered) 0))
                      (add-tag-to-edit-tags model (nth cursor filtered)))
                     ((> (length query) 0)
                      (add-tag-to-edit-tags model query)))
                   (update-tag-dropdown model))
-      (t 
+      (t
                   (setf (model-active-field model) :title)
                   (tui.textinput:textinput-blur (model-tags-input model))
                   (setf (model-tag-dropdown-visible model) nil)
@@ -1202,7 +1202,7 @@
          (cond (current (let ((utime (lt:timestamp-to-universal current)))
                (tui.datepicker:datepicker-set-time picker utime)
                (setf (tui.datepicker:datepicker-selected picker) utime)))
-      (t 
+      (t
                (tui.datepicker:datepicker-set-time picker (get-universal-time))
                (tui.datepicker:datepicker-unselect picker)))
          (tui.datepicker:datepicker-focus picker)
@@ -1218,7 +1218,7 @@
          (cond (current (let ((utime (lt:timestamp-to-universal current)))
                (tui.datepicker:datepicker-set-time picker utime)
                (setf (tui.datepicker:datepicker-selected picker) utime)))
-      (t 
+      (t
                (tui.datepicker:datepicker-set-time picker (get-universal-time))
                (tui.datepicker:datepicker-unselect picker)))
          (tui.datepicker:datepicker-focus picker)
@@ -1252,10 +1252,10 @@
                              -1 1))
               (new-idx (mod (+ idx direction) (length presets)))
               (new-val (nth new-idx presets)))
-         (cond (new-val 
+         (cond (new-val
                (setf (model-edit-repeat-interval model) (first new-val))
                (setf (model-edit-repeat-unit model) (rest new-val)))
-      (t 
+      (t
                (setf (model-edit-repeat-interval model) nil)
                (setf (model-edit-repeat-unit model) nil))))
        (values model nil))
@@ -1524,14 +1524,14 @@
       ((eql key :enter)
        (let ((filename (tui.textinput:textinput-value (model-import-input model))))
          (cond ((and (> (length filename) 0)
-                  (probe-file filename)) 
+                  (probe-file filename))
                (llog:info "Starting org-mode import" :filename filename)
                (setf (model-view-state model) :list)
                ;; Return command to perform async import
                (values model (list (make-import-cmd model filename)
                                    (make-spinner-start-cmd
                                     (model-enrichment-spinner model)))))
-      (t 
+      (t
                (llog:warn "Import file not found" :filename filename)
                ;; Stay in import view - file doesn't exist
                (values model nil)))))
@@ -1687,7 +1687,7 @@
            (cond (scheduled (let ((utime (lt:timestamp-to-universal scheduled)))
                  (tui.datepicker:datepicker-set-time picker utime)
                  (setf (tui.datepicker:datepicker-selected picker) utime)))
-      (t 
+      (t
                  (tui.datepicker:datepicker-set-time picker (get-universal-time))
                  (tui.datepicker:datepicker-unselect picker)))
            (tui.datepicker:datepicker-focus picker)
@@ -1705,7 +1705,7 @@
            (cond (deadline (let ((utime (lt:timestamp-to-universal deadline)))
                  (tui.datepicker:datepicker-set-time picker utime)
                  (setf (tui.datepicker:datepicker-selected picker) utime)))
-      (t 
+      (t
                  (tui.datepicker:datepicker-set-time picker (get-universal-time))
                  (tui.datepicker:datepicker-unselect picker)))
            (tui.datepicker:datepicker-focus picker)

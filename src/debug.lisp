@@ -20,7 +20,7 @@
       (handler-case
           #+sbcl
           (cond ((eq thread sb-thread:*current-thread*) (sb-debug:print-backtrace :stream stream :count 30))
-      (t 
+      (t
                 (sb-thread:interrupt-thread
                  thread
                  (lambda ()

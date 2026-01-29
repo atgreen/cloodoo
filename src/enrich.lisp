@@ -47,7 +47,7 @@
           (error (e)
             (llog:warn "Failed to read config file, using defaults" :error (format nil "~A" e))
             (default-config))))
-      (t 
+      (t
           (llog:info "No config file found, creating default" :path (namestring config-file))
           (save-config (default-config))
           (default-config)))))
@@ -399,7 +399,7 @@ Respond with ONLY the JSON object, no markdown formatting or additional text.")
                               :location-phone (getf location-info :phone)
                               :location-map-url (getf location-info :map-url)))
                 result))
-      (t 
+      (t
                 (llog:warn "Parsed data is not a hash table"
                            :data-type (type-of data))
                 nil))))
@@ -623,10 +623,10 @@ Respond with ONLY the JSON object, no markdown formatting or additional text.")
                       (llog:info "Parsed import response"
                                  :num-todos (length result))
                       (nreverse result)))
-      (t 
+      (t
                       (llog:warn "No todos array in import response")
                       nil))))
-      (t 
+      (t
                 (llog:warn "Import response is not a hash table")
                 nil))))
     (error (e)

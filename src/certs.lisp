@@ -385,7 +385,7 @@
   (bt:with-lock-held (*pairing-lock*)
     (let ((request (gethash token *pending-pairings*)))
       (when request
-        (cond ((> (get-universal-time) (pairing-request-expires-at request)) 
+        (cond ((> (get-universal-time) (pairing-request-expires-at request))
               (remhash token *pending-pairings*)
               nil)
       (t request))))))
