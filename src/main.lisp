@@ -35,6 +35,17 @@
                           (log-error-with-backtrace e)
                           ;; Re-signal to let it propagate
                           (signal e))))
+    ;; Force use of /dev/tty to avoid TWO-WAY-STREAM issues in TUI
+    (handler-case
+        (let ((tty (open "/dev/tty" :direction :io :if-does-not-exist nil)))
+          (when tty
+            (setf *terminal-io* tty
+                  *standard-input* tty
+                  *standard-output* tty
+                  *error-output* tty)
+            (llog:info "Forced /dev/tty for IO")))
+      (error (e)
+        (llog:warn "Failed to force /dev/tty" :error (princ-to-string e))))
     ;; Check for paired sync config
     (multiple-value-bind (sync-host sync-port sync-server-id)
         (find-paired-sync-config)

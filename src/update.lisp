@@ -1406,7 +1406,7 @@
               (tui.textinput:textinput-update (model-description-input model) msg)
             (declare (ignore cmd))
             (setf (model-description-input model) new-input))))
-       (values model nil)))))
+       (values model nil)))))))
 
 ;;── Search View Key Handling ───────────────────────────────────────────────────
 
@@ -2378,5 +2378,3 @@
                                        (when (probe-file temp-file)
                                          (delete-file temp-file))
                                        nil))))))
-)
-)
