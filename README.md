@@ -1,5 +1,9 @@
 # Cloodoo
 
+[![CI](https://github.com/atgreen/cloodoo/actions/workflows/ci.yml/badge.svg)](https://github.com/atgreen/cloodoo/actions/workflows/ci.yml)
+[![Android Build](https://github.com/atgreen/cloodoo/actions/workflows/android.yml/badge.svg)](https://github.com/atgreen/cloodoo/actions/workflows/android.yml)
+[![Lint](https://github.com/atgreen/cloodoo/actions/workflows/lint.yml/badge.svg)](https://github.com/atgreen/cloodoo/actions/workflows/lint.yml)
+
 > **⚠️ Work in Progress**: Cloodoo is under active development. Features and APIs may change.
 
 A personal TODO system with a terminal UI, real-time multi-device sync,
