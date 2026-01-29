@@ -23,8 +23,8 @@ jobs:
     - name: Install ocicl
       run: |
         OCICL_VERSION=$(curl -s https://api.github.com/repos/ocicl/ocicl/releases/latest | grep '"tag_name"' | sed -E 's/.*"v([^"]+)".*/\1/')
-        curl -sL https://github.com/ocicl/ocicl/releases/latest/download/ocicl-${OCICL_VERSION}-linux-amd64.tar.gz | tar xz
-        sudo mv ocicl /usr/local/bin/
+        curl -sLO https://github.com/ocicl/ocicl/releases/latest/download/ocicl_${OCICL_VERSION}-1_amd64.deb
+        sudo dpkg -i ocicl_${OCICL_VERSION}-1_amd64.deb
         ocicl version
 
     - name: Install dependencies
