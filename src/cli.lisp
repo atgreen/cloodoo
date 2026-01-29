@@ -330,9 +330,10 @@
      :description "Remove old versions from the database to reclaim space"
      :options (list yes-opt)
      :handler (lambda (cmd)
-                (let ((skip-confirm (clingon:getopt cmd :yes)))
-                  (ensure-db-initialized)
-                  (with-db (db)
+                (block nil ; lint:suppress redundant-block
+                  (let ((skip-confirm (clingon:getopt cmd :yes)))
+                    (ensure-db-initialized)
+                    (with-db (db)
                     ;; Count before
                     (let ((before (caar (sqlite:execute-to-list db "SELECT COUNT(*) FROM todos")))
                           (current (caar (sqlite:execute-to-list db "SELECT COUNT(*) FROM todos WHERE valid_to IS NULL"))))
