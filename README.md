@@ -1,8 +1,8 @@
 # Cloodoo
 
 A personal TODO system with a terminal UI, real-time multi-device sync,
-an Android companion app, and a browser extension for capturing tasks
-from email.
+an Android companion app, a browser extension for capturing tasks from
+email, and a GNOME Shell extension for screenshot-based TODOs.
 
 Written in Common Lisp. Built on SQLite with temporal versioning,
 gRPC bidirectional streaming with mTLS, and optional LLM enrichment.
@@ -17,6 +17,8 @@ gRPC bidirectional streaming with mTLS, and optional LLM enrichment.
   queue, QR code pairing, and background reconnect
 - **Browser extension** (Manifest V3) that extracts TODO context from
   Gmail, Outlook, Yahoo Mail, ProtonMail, and Zoho Mail
+- **GNOME Shell extension** for capturing screenshots as TODOs with
+  `Super+Shift+T` -- uses content-addressed storage for deduplication
 - **AI enrichment** via Gemini, OpenAI, Anthropic, or local Ollama --
   auto-fills descriptions, tags, priorities, and time estimates
 - **REST API** for programmatic access and the browser extension
@@ -312,6 +314,41 @@ The extension extracts email subject, sender, date, and body snippet to
 pre-fill the TODO form. Tasks can be created even when offline and will
 sync when the native host becomes available.
 
+## GNOME Shell extension
+
+The GNOME extension lives in `gnome-extension/`. Allows capturing
+screenshots as TODOs with attached images.
+
+### Install
+
+```sh
+make install-gnome-extension
+```
+
+Or manually:
+
+```sh
+cd gnome-extension
+glib-compile-schemas schemas/
+mkdir -p ~/.local/share/gnome-shell/extensions/cloodoo-screenshot@moxielogic.com
+cp -r * ~/.local/share/gnome-shell/extensions/cloodoo-screenshot@moxielogic.com/
+gnome-extensions enable cloodoo-screenshot@moxielogic.com
+```
+
+Then restart GNOME Shell (Alt+F2, type `r`, Enter on X11; log out/in on
+Wayland).
+
+### Usage
+
+1. Press `Super+Shift+T`
+2. Select an area with the crosshair cursor
+3. Enter title, priority, and tags in the dialog
+4. The TODO is created with the screenshot attached
+
+Screenshots are stored using content-addressed storage (SHA256 hashing)
+and deduplicated automatically. Requires `gnome-screenshot` and
+`zenity`.
+
 ## AI enrichment
 
 Set one of these environment variables (or add to `.env`):
@@ -377,6 +414,7 @@ src/
   main.lisp          Entry point
 android/             Jetpack Compose companion app
 extension/           Browser extension (Manifest V3)
+gnome-extension/     GNOME Shell extension for screenshot capture
 cloodoo.asd          ASDF system definition
 Makefile             Build script
 ```
