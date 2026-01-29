@@ -57,47 +57,65 @@
 
 (defun data-directory ()
   "Return the path to the cloodoo data directory.
+   If CLOODOO_HOME is set: $CLOODOO_HOME/data/
    On Windows: %APPDATA%\\cloodoo\\
    On Unix: XDG_DATA_HOME/cloodoo/ (default ~/.local/share/cloodoo/)
    Falls back to legacy ~/.cloodoo/ if it exists and new location doesn't."
-  (if (windowsp)
-      ;; Windows: use %APPDATA%\cloodoo\
-      (let ((appdata (windows-appdata)))
-        (if appdata
-            (merge-pathnames "cloodoo/" appdata)
-            (legacy-data-directory)))
-      ;; Unix: use XDG with legacy fallback
-      (let ((xdg-dir (merge-pathnames "cloodoo/" (xdg-data-home)))
-            (legacy-dir (legacy-data-directory)))
-        (if (or (probe-file xdg-dir)
-                (not (probe-file legacy-dir)))
-            xdg-dir
-            legacy-dir))))
+  ;; Check for CLOODOO_HOME first
+  (let ((cloodoo-home (uiop:getenv "CLOODOO_HOME")))
+    (if (and cloodoo-home (> (length cloodoo-home) 0))
+        (merge-pathnames "data/" (uiop:ensure-directory-pathname cloodoo-home))
+        ;; Otherwise use platform defaults
+        (if (windowsp)
+            ;; Windows: use %APPDATA%\cloodoo\
+            (let ((appdata (windows-appdata)))
+              (if appdata
+                  (merge-pathnames "cloodoo/" appdata)
+                  (legacy-data-directory)))
+            ;; Unix: use XDG with legacy fallback
+            (let ((xdg-dir (merge-pathnames "cloodoo/" (xdg-data-home)))
+                  (legacy-dir (legacy-data-directory)))
+              (if (or (probe-file xdg-dir)
+                      (not (probe-file legacy-dir)))
+                  xdg-dir
+                  legacy-dir))))))
 
 (defun config-directory ()
   "Return the path to the cloodoo config directory.
+   If CLOODOO_HOME is set: $CLOODOO_HOME/config/
    On Windows: %APPDATA%\\cloodoo\\
    On Unix: XDG_CONFIG_HOME/cloodoo/ (default ~/.config/cloodoo/)"
-  (if (windowsp)
-      (data-directory)  ; Windows uses same dir for data and config
-      ;; Unix: use XDG with legacy fallback
-      (let ((xdg-dir (merge-pathnames "cloodoo/" (xdg-config-home)))
-            (legacy-dir (legacy-data-directory)))
-        (if (or (probe-file xdg-dir)
-                (not (probe-file legacy-dir)))
-            xdg-dir
-            legacy-dir))))
+  ;; Check for CLOODOO_HOME first
+  (let ((cloodoo-home (uiop:getenv "CLOODOO_HOME")))
+    (if (and cloodoo-home (> (length cloodoo-home) 0))
+        (merge-pathnames "config/" (uiop:ensure-directory-pathname cloodoo-home))
+        ;; Otherwise use platform defaults
+        (if (windowsp)
+            (data-directory)  ; Windows uses same dir for data and config
+            ;; Unix: use XDG with legacy fallback
+            (let ((xdg-dir (merge-pathnames "cloodoo/" (xdg-config-home)))
+                  (legacy-dir (legacy-data-directory)))
+              (if (or (probe-file xdg-dir)
+                      (not (probe-file legacy-dir)))
+                  xdg-dir
+                  legacy-dir))))))
 
 (defun cache-directory ()
   "Return the path to the cloodoo cache directory.
+   If CLOODOO_HOME is set: $CLOODOO_HOME/cache/
    On Windows: %LOCALAPPDATA%\\cloodoo\\
    On Unix: XDG_CACHE_HOME/cloodoo/ (default ~/.cache/cloodoo/)"
-  (if (windowsp)
-      (let ((localappdata (uiop:getenv "LOCALAPPDATA")))
-        (if (and localappdata (> (length localappdata) 0))
-            (merge-pathnames "cloodoo/" (uiop:ensure-directory-pathname localappdata))
-            (data-directory)))
-      (merge-pathnames "cloodoo/" (xdg-cache-home))))
+  ;; Check for CLOODOO_HOME first
+  (let ((cloodoo-home (uiop:getenv "CLOODOO_HOME")))
+    (if (and cloodoo-home (> (length cloodoo-home) 0))
+        (merge-pathnames "cache/" (uiop:ensure-directory-pathname cloodoo-home))
+        ;; Otherwise use platform defaults
+        (if (windowsp)
+            (let ((localappdata (uiop:getenv "LOCALAPPDATA")))
+              (if (and localappdata (> (length localappdata) 0))
+                  (merge-pathnames "cloodoo/" (uiop:ensure-directory-pathname localappdata))
+                  (data-directory)))
+            (merge-pathnames "cloodoo/" (xdg-cache-home))))))
 
 (defun todos-file ()
   "Return the path to the todos.json file."
