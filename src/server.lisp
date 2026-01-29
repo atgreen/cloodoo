@@ -101,36 +101,36 @@
                         (key-path (client-key-file device-name))
                         (ca-path (ca-cert-file)))
                     (cond ((and (probe-file cert-path) (probe-file key-path))
-                          ;; Build the payload to encrypt
-                          (setf (gethash "cert" payload)
-                                (uiop:read-file-string cert-path))
-                          (setf (gethash "key" payload)
-                                (uiop:read-file-string key-path))
-                          (when (probe-file ca-path)
-                            (setf (gethash "ca_cert" payload)
-                                  (uiop:read-file-string ca-path)))
-                          (setf (gethash "device_name" payload) device-name)
-                          ;; Encrypt the payload with the passphrase
-                          (let ((encrypted-response
-                                  (encrypt-with-passphrase
-                                   (jzon:stringify payload)
-                                   provided-passphrase)))
-                            (jzon:stringify encrypted-response)))
-      (t
-                          (setf (hunchentoot:return-code*) 500)
-                          (jzon:stringify (alexandria:plist-hash-table
-                                           '("error" "Certificate files not found")
-                                           :test #'equal)))))))
-      (t
-                (setf (hunchentoot:return-code*) 403)
-                (jzon:stringify (alexandria:plist-hash-table
-                                 '("error" "Invalid passphrase")
-                                 :test #'equal))))))
-      (t
-          (setf (hunchentoot:return-code*) 404)
-          (jzon:stringify (alexandria:plist-hash-table
-                           '("error" "Invalid or expired pairing token")
-                           :test #'equal))))))
+                           ;; Build the payload to encrypt
+                           (setf (gethash "cert" payload)
+                                 (uiop:read-file-string cert-path))
+                           (setf (gethash "key" payload)
+                                 (uiop:read-file-string key-path))
+                           (when (probe-file ca-path)
+                             (setf (gethash "ca_cert" payload)
+                                   (uiop:read-file-string ca-path)))
+                           (setf (gethash "device_name" payload) device-name)
+                           ;; Encrypt the payload with the passphrase
+                           (let ((encrypted-response
+                                   (encrypt-with-passphrase
+                                    (jzon:stringify payload)
+                                    provided-passphrase)))
+                             (jzon:stringify encrypted-response)))
+                          (t
+                           (setf (hunchentoot:return-code*) 500)
+                           (jzon:stringify (alexandria:plist-hash-table
+                                            '("error" "Certificate files not found")
+                                            :test #'equal)))))))
+                (t
+                 (setf (hunchentoot:return-code*) 403)
+                 (jzon:stringify (alexandria:plist-hash-table
+                                  '("error" "Invalid passphrase")
+                                  :test #'equal))))))
+          (t
+           (setf (hunchentoot:return-code*) 404)
+           (jzon:stringify (alexandria:plist-hash-table
+                            '("error" "Invalid or expired pairing token")
+                            :test #'equal))))))
 
 (easy-routes:defroute api-pair-status ("/api/pair/status" :method :get) ()
   "Check if CA is initialized and return server info for pairing."
