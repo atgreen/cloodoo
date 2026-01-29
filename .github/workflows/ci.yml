@@ -24,7 +24,8 @@ jobs:
       run: |
         OCICL_VERSION=$(curl -s https://api.github.com/repos/ocicl/ocicl/releases/latest | grep '"tag_name"' | sed -E 's/.*"v([^"]+)".*/\1/')
         curl -sL https://github.com/ocicl/ocicl/releases/latest/download/ocicl-${OCICL_VERSION}-linux-amd64.tar.gz | tar xz
-        sudo mv bin/ocicl /usr/local/bin/
+        sudo mv ocicl /usr/local/bin/
+        ocicl version
 
     - name: Install dependencies
       run: |
