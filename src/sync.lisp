@@ -483,19 +483,19 @@
               (loop while *sync-client-running*
                     do (let ((msg (ag-grpc:stream-read-message *sync-client-stream*)))
                          (cond (msg (handle-sync-client-message msg))
-      (t
-                               (llog:info "Sync stream ended")
-                               (return))))))
+                               (t
+                                (llog:info "Sync stream ended")
+                                (return))))))
           (error (e)
             (let ((error-msg (princ-to-string e)))
               ;; Check if this is a deliberate shutdown, not an actual error
               (cond ((search "sync client shutting down" error-msg)
-                    (llog:info "Sync client shutdown signal received")
-                    (return))
-      (t
-                    (llog:error "Sync connection error" :error error-msg)
-                    (update-sync-status :error error-msg)
-                    (notify-tui-refresh))))))
+                     (llog:info "Sync client shutdown signal received")
+                     (return))
+                    (t
+                     (llog:error "Sync connection error" :error error-msg)
+                     (update-sync-status :error error-msg)
+                     (notify-tui-refresh))))))
 
         ;; Cleanup before retry
         (cleanup-sync-client)
@@ -569,12 +569,12 @@
             (pending (proto-ack-pending-changes ack))
             (error-msg (proto-ack-error ack)))
        (cond ((and error-msg (plusp (length error-msg)))
-             (llog:error "Server rejected connection" :error error-msg)
-             (update-sync-status :error error-msg)
-             (setf *sync-client-running* nil))
-      (t
-             (llog:info "Sync connected" :server-time server-time :pending pending)
-             (update-sync-status :connected)
+              (llog:error "Server rejected connection" :error error-msg)
+              (update-sync-status :error error-msg)
+              (setf *sync-client-running* nil))
+             (t
+              (llog:info "Sync connected" :server-time server-time :pending pending)
+              (update-sync-status :connected)
              ;; Save server time for next reconnect (avoid full resync)
              (when (and server-time (plusp (length server-time)))
                (save-last-sync-timestamp server-time))
