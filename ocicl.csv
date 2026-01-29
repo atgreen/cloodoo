@@ -1,8 +1,8 @@
-ag-grpc, ghcr.io/ocicl/ag-grpc@sha256:2b51233b2c7b173e1d94605bab29efa3794e140e15dc9c4d420a8750e65172d7, ag-gRPC-20260124-536f82a/ag-grpc.asd
-ag-grpc-all, ghcr.io/ocicl/ag-grpc@sha256:2b51233b2c7b173e1d94605bab29efa3794e140e15dc9c4d420a8750e65172d7, ag-gRPC-20260124-536f82a/ag-grpc-all.asd
-ag-http2, ghcr.io/ocicl/ag-grpc@sha256:2b51233b2c7b173e1d94605bab29efa3794e140e15dc9c4d420a8750e65172d7, ag-gRPC-20260124-536f82a/ag-http2.asd
-ag-proto, ghcr.io/ocicl/ag-grpc@sha256:2b51233b2c7b173e1d94605bab29efa3794e140e15dc9c4d420a8750e65172d7, ag-gRPC-20260124-536f82a/ag-proto.asd
-ag-proto-cli, ghcr.io/ocicl/ag-grpc@sha256:2b51233b2c7b173e1d94605bab29efa3794e140e15dc9c4d420a8750e65172d7, ag-gRPC-20260124-536f82a/ag-proto-cli.asd
+ag-grpc, ghcr.io/ocicl/ag-grpc@sha256:1e42955d43b315a19b08185a14f54515a6be3267111bc81b32fd8f489f07d6f7, ag-gRPC-20260129-a1906c3/ag-grpc.asd
+ag-grpc-all, ghcr.io/ocicl/ag-grpc@sha256:1e42955d43b315a19b08185a14f54515a6be3267111bc81b32fd8f489f07d6f7, ag-gRPC-20260129-a1906c3/ag-grpc-all.asd
+ag-http2, ghcr.io/ocicl/ag-grpc@sha256:1e42955d43b315a19b08185a14f54515a6be3267111bc81b32fd8f489f07d6f7, ag-gRPC-20260129-a1906c3/ag-http2.asd
+ag-proto, ghcr.io/ocicl/ag-grpc@sha256:1e42955d43b315a19b08185a14f54515a6be3267111bc81b32fd8f489f07d6f7, ag-gRPC-20260129-a1906c3/ag-proto.asd
+ag-proto-cli, ghcr.io/ocicl/ag-grpc@sha256:1e42955d43b315a19b08185a14f54515a6be3267111bc81b32fd8f489f07d6f7, ag-gRPC-20260129-a1906c3/ag-proto-cli.asd
 alexandria, ghcr.io/ocicl/alexandria@sha256:e433c2e076ed3bcf8641b97b00192680db2201d305efac9293539dee88c7fbf7, alexandria-20240503-8514d8e/alexandria.asd
 asn1, ghcr.io/ocicl/asn1@sha256:b9913fbf4fcdacf7a01930d1b05ccfb64ad778263a29418dc0a00c6d7919cd87, asn1-20240503-b0388fa/asn1.asd
 autoload, ghcr.io/ocicl/mgl-pax-bootstrap@sha256:2f4da326e75413741907b8818f67dd3a7f8b783e2a8983a6f52f1e3373306be8, mgl-pax-20260112-2c726a5/autoload/autoload.asd
