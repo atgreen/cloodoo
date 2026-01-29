@@ -168,7 +168,7 @@
                  :priority (or priority +priority-medium+)
                  :scheduled-date scheduled-date
                  :due-date due-date
-                 :tags (or tags nil)
+                 :tags tags
                  :estimated-minutes estimated-minutes
                  :location-info location-info
                  :url url

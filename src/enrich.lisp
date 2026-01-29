@@ -39,16 +39,15 @@
 (defun load-config ()
   "Load configuration from config file or return defaults."
   (let ((config-file (config-file-path)))
-    (if (probe-file config-file)
-        (handler-case
+    (cond ((probe-file config-file) (handler-case
             (with-open-file (in config-file :direction :input)
               (let ((config (read in nil nil)))
                 (llog:info "Loaded config from file" :path (namestring config-file))
                 config))
           (error (e)
             (llog:warn "Failed to read config file, using defaults" :error (format nil "~A" e))
-            (default-config)))
-        (progn
+            (default-config))))
+      (t 
           (llog:info "No config file found, creating default" :path (namestring config-file))
           (save-config (default-config))
           (default-config)))))
@@ -136,7 +135,7 @@
   ;; Check if we have what we need for the selected provider
   (cond
     ;; Ollama doesn't need an API key
-    ((eq *llm-provider* :ollama)
+    ((eql *llm-provider* :ollama)
      (llog:info "Using Ollama provider (no API key required)"
                 :model *llm-model*
                 :endpoint (or *llm-endpoint* "http://localhost:11434")))
@@ -357,8 +356,7 @@ Respond with ONLY the JSON object, no markdown formatting or additional text.")
                     :json-length (length json-str)
                     :json-content json-str)
         (let ((data (jzon:parse json-str)))
-          (if (hash-table-p data)
-              (let* ((location-info (parse-location-info (gethash "location" data)))
+          (cond ((hash-table-p data) (let* ((location-info (parse-location-info (gethash "location" data)))
                      (scheduled-date (parse-iso-date (json-null-to-nil (gethash "scheduled_date" data))))
                      (due-date (parse-iso-date (json-null-to-nil (gethash "due_date" data))))
                      (raw-repeat-interval (json-null-to-nil (gethash "repeat_interval" data)))
@@ -400,8 +398,8 @@ Respond with ONLY the JSON object, no markdown formatting or additional text.")
                               :location-address (getf location-info :address)
                               :location-phone (getf location-info :phone)
                               :location-map-url (getf location-info :map-url)))
-                result)
-              (progn
+                result))
+      (t 
                 (llog:warn "Parsed data is not a hash table"
                            :data-type (type-of data))
                 nil))))
@@ -427,7 +425,7 @@ Respond with ONLY the JSON object, no markdown formatting or additional text.")
 
   ;; Check preconditions - Ollama doesn't need API key, others do
   (unless (and *enrichment-enabled*
-               (or (eq *llm-provider* :ollama) *llm-api-key*)
+               (or (eql *llm-provider* :ollama) *llm-api-key*)
                (> (length raw-title) 0))
     (llog:debug "Enrichment skipped - preconditions not met"
                 :enabled *enrichment-enabled*
@@ -598,10 +596,8 @@ Respond with ONLY the JSON object, no markdown formatting or additional text.")
         (llog:debug "Extracted JSON for import"
                     :json-length (length json-str))
         (let ((data (jzon:parse json-str)))
-          (if (hash-table-p data)
-              (let ((todos-array (gethash "todos" data)))
-                (if (and todos-array (vectorp todos-array))
-                    (let ((result nil))
+          (cond ((hash-table-p data) (let ((todos-array (gethash "todos" data)))
+                (cond ((and todos-array (vectorp todos-array)) (let ((result nil))
                       (loop for item across todos-array
                             when (hash-table-p item)
                             do (let* ((location-info (parse-location-info (gethash "location" item)))
@@ -626,11 +622,11 @@ Respond with ONLY the JSON object, no markdown formatting or additional text.")
                                  (push todo-data result)))
                       (llog:info "Parsed import response"
                                  :num-todos (length result))
-                      (nreverse result))
-                    (progn
+                      (nreverse result)))
+      (t 
                       (llog:warn "No todos array in import response")
-                      nil)))
-              (progn
+                      nil))))
+      (t 
                 (llog:warn "Import response is not a hash table")
                 nil))))
     (error (e)
@@ -646,7 +642,7 @@ Respond with ONLY the JSON object, no markdown formatting or additional text.")
 
   ;; Check preconditions - Ollama doesn't need API key, others do
   (unless (and *enrichment-enabled*
-               (or (eq *llm-provider* :ollama) *llm-api-key*))
+               (or (eql *llm-provider* :ollama) *llm-api-key*))
     (llog:warn "Import requires enrichment to be enabled with valid provider config")
     (return-from import-org-file nil))
 
@@ -656,7 +652,7 @@ Respond with ONLY the JSON object, no markdown formatting or additional text.")
                     :filename filename
                     :content-length (length file-content))
 
-        (when (= (length file-content) 0)
+        (when (zerop (length file-content))
           (llog:warn "Org file is empty" :filename filename)
           (return-from import-org-file nil))
 

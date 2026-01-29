@@ -120,7 +120,7 @@
            (tomorrow (lt:timestamp+ today 1 :day))
            (week-end (lt:timestamp+ today 7 :day)))
       ;; Deleted items are never shown
-      (when (eq status :deleted)
+      (when (eql status :deleted)
         (return-from categorize-by-date nil))
 
       ;; Check if overdue (due date passed) - but not for completed/cancelled items
@@ -224,7 +224,7 @@
       (maphash (lambda (k v)
                  (push (cons k (nreverse v)) alist))
                groups)
-      (sort alist #'< :key (lambda (pair) (date-category-order (car pair)))))))
+      (sort alist #'< :key (lambda (pair) (date-category-order (first pair)))))))
 
 ;;; Todo line rendering
 (defun render-todo-line (todo selected-p width)
@@ -233,7 +233,7 @@
          (priority (priority-colored (todo-priority todo)))
          (title (sanitize-title-for-display (todo-title todo)))
          (due (format-due-date (todo-due-date todo)))
-         (completed-p (eq (todo-status todo) :completed))
+         (completed-p (eql (todo-status todo) :completed))
          ;; Calculate widths
          (prefix-len 8)  ; "  ○ !!! "
          (due-len (if due (+ 2 (length (format nil "~A" due))) 0))
@@ -396,7 +396,7 @@
       (push (tui:colored (format nil "Search:~A" search) :fg tui:*fg-cyan*) parts))
     (when priority
       (push (tui:colored (format nil "Priority:~A" priority) :fg tui:*fg-yellow*) parts))
-    (when (and status (not (eq status :all)))
+    (when (and status (not (eql status :all)))
       (push (tui:colored (format nil "Status:~A" status) :fg tui:*fg-green*) parts))
     (if parts
         (format nil "[~{~A~^ ~}]" (nreverse parts))

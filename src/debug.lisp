@@ -19,11 +19,8 @@
       (format stream "  Stack:~%")
       (handler-case
           #+sbcl
-          (if (eq thread sb-thread:*current-thread*)
-              ;; Current thread - print directly
-              (sb-debug:print-backtrace :stream stream :count 30)
-              ;; Other thread - have it print its own backtrace
-              (progn
+          (cond ((eq thread sb-thread:*current-thread*) (sb-debug:print-backtrace :stream stream :count 30))
+      (t 
                 (sb-thread:interrupt-thread
                  thread
                  (lambda ()

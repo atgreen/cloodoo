@@ -101,7 +101,7 @@
                     (>= day 1) (<= day 31))
            ;; Handle 2-digit years
            (when (< year 100)
-             (setf year (+ 2000 year)))
+             (incf year 2000))
            (lt:encode-timestamp 0 0 0 0 day month year))))
 
       (t nil))))
@@ -225,7 +225,7 @@
                   ;; Unless --all, hide completed by default
                   (unless show-all
                     (setf filtered (remove-if
-                                   (lambda (item) (eq (todo-status item) :completed))
+                                   (lambda (item) (eql (todo-status item) :completed))
                                    filtered)))
                   ;; Sort by priority
                   (setf filtered (sort (copy-list filtered)
@@ -233,8 +233,7 @@
                                         (> (priority-order (todo-priority a))
                                            (priority-order (todo-priority b))))))
                   ;; Display
-                  (if filtered
-                      (progn
+                  (cond (filtered 
                         (format t "~%")
                         (dolist (todo filtered)
                           (format t "~A ~A ~A"
@@ -247,7 +246,7 @@
                         (format t "~%~A~%"
                                (tui:colored (format nil "~D item~:P" (length filtered))
                                            :fg tui:*fg-bright-black*)))
-                      (format t "~%No items found.~%~%")))))))
+      (t (format t "~%No items found.~%~%"))))))))
 
 (defun make-done-command ()
   "Create the 'done' subcommand to mark a TODO as completed."
@@ -292,13 +291,13 @@
               (declare (ignore cmd))
               (let* ((todos (load-todos))
                      (total (length todos))
-                     (pending (count-if (lambda (item) (eq (todo-status item) :pending)) todos))
-                     (in-progress (count-if (lambda (item) (eq (todo-status item) :in-progress)) todos))
-                     (completed (count-if (lambda (item) (eq (todo-status item) :completed)) todos))
-                     (high (count-if (lambda (item) (eq (todo-priority item) :high)) todos))
+                     (pending (count-if (lambda (item) (eql (todo-status item) :pending)) todos))
+                     (in-progress (count-if (lambda (item) (eql (todo-status item) :in-progress)) todos))
+                     (completed (count-if (lambda (item) (eql (todo-status item) :completed)) todos))
+                     (high (count-if (lambda (item) (eql (todo-priority item) :high)) todos))
                      (overdue (count-if (lambda (item)
                                          (and (todo-due-date item)
-                                              (not (eq (todo-status item) :completed))
+                                              (not (eql (todo-status item) :completed))
                                               (lt:timestamp< (todo-due-date item) (lt:now))))
                                        todos)))
                 (format t "~%~A~%~%"
@@ -370,7 +369,7 @@
 
 (defun sql-escape-string (str)
   "Escape a string for SQL insertion (single quotes doubled)."
-  (if (or (null str) (eq str :null))
+  (if (or (null str) (eql str :null))
       "NULL"
       (format nil "'~A'" (str:replace-all "'" "''" str))))
 
@@ -446,7 +445,7 @@
                               (sql-escape-string scheduled-date)
                               (sql-escape-string due-date)
                               (sql-escape-string tags)
-                              (if (or (null estimated-minutes) (eq estimated-minutes :null)) "NULL" estimated-minutes)
+                              (if (or (null estimated-minutes) (eql estimated-minutes :null)) "NULL" estimated-minutes)
                               (sql-escape-string location-info)
                               (sql-escape-string url)
                               "NULL"  ; parent-id no longer used
@@ -455,9 +454,9 @@
                               (sql-escape-string valid-from)
                               (sql-escape-string valid-to)
                               (sql-escape-string device-id)
-                              (if (or (null repeat-interval) (eq repeat-interval :null)) "NULL" repeat-interval)
+                              (if (or (null repeat-interval) (eql repeat-interval :null)) "NULL" repeat-interval)
                               (sql-escape-string repeat-unit)
-                              (if (or (null enriching-p) (eq enriching-p :null)) "0" enriching-p))))
+                              (if (or (null enriching-p) (eql enriching-p :null)) "0" enriching-p))))
                   (format t "~%-- ~D todos exported~%~%" (length rows)))
                 ;; Dump tag_presets data
                 (format t "-- Data: tag_presets~%")
@@ -660,7 +659,7 @@
                                            ;; No IPs found
                                            ((null ips) "localhost")
                                            ;; Only one IP - use it
-                                           ((null (cdr ips)) (first ips))
+                                           ((null (rest ips)) (first ips))
                                            ;; Multiple IPs - let user choose
                                            (t (format t "~%Available network addresses:~%")
                                               (loop for ip in ips
@@ -729,8 +728,7 @@
               (declare (ignore cmd))
               (if (ca-initialized-p)
                   (let ((certs (list-client-certs)))
-                    (if certs
-                        (progn
+                    (cond (certs 
                           (format t "~%~A~%~%"
                                   (tui:bold "Issued Certificates"))
                           (format t "  ~30A ~12A ~A~%"
@@ -750,7 +748,7 @@
                                        nil (lt:universal-to-timestamp issued)
                                        :format '(:year "-" (:month 2) "-" (:day 2))))))
                           (format t "~%"))
-                        (format t "~%No certificates issued yet.~%~%")))
+      (t (format t "~%No certificates issued yet.~%~%"))))
                   (format t "~%CA not initialized. Run 'cloodoo cert init' first.~%~%")))))
 
 (defun make-cert-revoke-command ()
@@ -781,14 +779,13 @@
    :usage "URL"
    :handler (lambda (cmd)
               (let ((args (clingon:command-arguments cmd)))
-                (if args
-                    (let ((url (first args)))
+                (cond (args (let ((url (first args)))
                       (handler-case
                           (pair-with-server url)
                         (error (e)
                           (format t "~A Error: ~A~%"
-                                  (tui:colored "✗" :fg tui:*fg-red*) e))))
-                    (progn
+                                  (tui:colored "✗" :fg tui:*fg-red*) e)))))
+      (t 
                       (format t "Usage: cloodoo cert pair URL~%~%")
                       (format t "Example: cloodoo cert pair http://192.168.1.100:9876/pair/abc123~%")))))))
 
@@ -958,7 +955,7 @@ URL format: http://HOST:PORT/pair/TOKEN"
                   (init-enrichment)
                   (dolist (todo pending)
                     (handler-case
-                        (let* ((enriched (enrich-todo-input (todo-title todo)
+                        (let ((enriched (enrich-todo-input (todo-title todo)
                                                             (todo-description todo)
                                                             nil)))
                           (when enriched
@@ -1066,7 +1063,7 @@ URL format: http://HOST:PORT/pair/TOKEN"
           (let ((push-setting (assoc ag-http2::+settings-enable-push+
                                      ag-http2::*default-settings*)))
             (when push-setting
-              (setf (cdr push-setting) 0)))
+              (setf (rest push-setting) 0)))
           (unwind-protect
                (progn
                  ;; Connect to sync server
@@ -1085,7 +1082,7 @@ URL format: http://HOST:PORT/pair/TOKEN"
                      (make-sync-init-message (get-device-id) now now)))
                  ;; Read SyncAck
                  (let ((ack-msg (ag-grpc:stream-read-message stream)))
-                   (unless (and ack-msg (eq (proto-msg-case ack-msg) :ack))
+                   (unless (and ack-msg (eql (proto-msg-case ack-msg) :ack))
                      (native-host-log "Sync push: no ACK received")
                      (return-from sync-push-todo nil))
                    (let* ((ack (proto-msg-ack ack-msg))
@@ -1389,7 +1386,7 @@ URL format: http://HOST:PORT/pair/TOKEN"
     (cond
       ;; Linux
       ((or (search "linux" (string-downcase os))
-           (eq os :linux))
+           (eql os :linux))
        (let ((chrome-dir (merge-pathnames ".config/google-chrome/NativeMessagingHosts/" home))
              (chrome-beta-dir (merge-pathnames ".config/google-chrome-beta/NativeMessagingHosts/" home))
              (chrome-unstable-dir (merge-pathnames ".config/google-chrome-unstable/NativeMessagingHosts/" home))
@@ -1410,7 +1407,7 @@ URL format: http://HOST:PORT/pair/TOKEN"
            (push (list "Chromium" chromium-dir :chrome) dirs))))
       ;; macOS
       ((or (search "darwin" (string-downcase os))
-           (eq os :darwin)
+           (eql os :darwin)
            (search "macos" (string-downcase os)))
        (push (list "Google Chrome"
                    (merge-pathnames "Library/Application Support/Google/Chrome/NativeMessagingHosts/" home)
@@ -1435,7 +1432,7 @@ URL format: http://HOST:PORT/pair/TOKEN"
       ;; Windows
       ((or (search "windows" (string-downcase os))
            (search "win" (string-downcase os))
-           (eq os :windows))
+           (eql os :windows))
        (push (list "Chrome/Chromium"
                    (merge-pathnames "AppData/Local/Cloodoo/" home)
                    :chrome)

@@ -124,7 +124,7 @@
   `(bt:with-lock-held (*db-lock*)
      (let ((,db-var (or *db* (open-db))))
        (unwind-protect
-            (progn ,@body)
+            (unquote-splicing body)
          (unless *db*
            (close-db ,db-var))))))
 
@@ -302,13 +302,13 @@
     (when rows
       (dolist (row rows)
         (destructuring-bind (row-id description location-info) row
-          (when (and description (not (eq description :null)))
+          (when (and description (not (eql description :null)))
             (let ((hash (store-blob db description)))
               (when hash
                 (sqlite:execute-non-query db
                   "UPDATE todos SET description = NULL, description_hash = ? WHERE row_id = ?"
                   hash row-id))))
-          (when (and location-info (not (eq location-info :null)))
+          (when (and location-info (not (eql location-info :null)))
             (let ((hash (store-blob db location-info)))
               (when hash
                 (sqlite:execute-non-query db
@@ -379,16 +379,16 @@
     (make-instance 'todo
                    :id id
                    :title title
-                   :description (unless (eq description :null) description)
+                   :description (unless (eql description :null) description)
                    :priority (intern (string-upcase priority) :keyword)
                    :status (intern (string-upcase status) :keyword)
                    :scheduled-date (parse-timestamp scheduled-date)
                    :due-date (parse-timestamp due-date)
-                   :tags (when (and tags (not (eq tags :null)))
+                   :tags (when (and tags (not (eql tags :null)))
                            (coerce (jzon:parse tags) 'list))
-                   :estimated-minutes (unless (eq estimated-minutes :null)
+                   :estimated-minutes (unless (eql estimated-minutes :null)
                                         estimated-minutes)
-                   :location-info (when (and location-info (not (eq location-info :null)))
+                   :location-info (when (and location-info (not (eql location-info :null)))
                                     (let ((ht (jzon:parse location-info)))
                                       (when (hash-table-p ht)
                                         (list :name (gethash "name" ht)
@@ -396,15 +396,15 @@
                                               :phone (gethash "phone" ht)
                                               :map-url (gethash "map_url" ht)
                                               :website (gethash "website" ht)))))
-                   :url (unless (eq url :null) url)
-                   :attachment-hashes (when (and attachment-hashes (not (eq attachment-hashes :null)))
+                   :url (unless (eql url :null) url)
+                   :attachment-hashes (when (and attachment-hashes (not (eql attachment-hashes :null)))
                                         (coerce (jzon:parse attachment-hashes) 'list))
-                   :device-id (unless (eq device-id :null) device-id)
-                   :repeat-interval (unless (or (null repeat-interval) (eq repeat-interval :null))
+                   :device-id (unless (eql device-id :null) device-id)
+                   :repeat-interval (unless (or (null repeat-interval) (eql repeat-interval :null))
                                       repeat-interval)
-                   :repeat-unit (when (and repeat-unit (not (eq repeat-unit :null)) (stringp repeat-unit))
+                   :repeat-unit (when (and repeat-unit (not (eql repeat-unit :null)) (stringp repeat-unit))
                                   (intern (string-upcase repeat-unit) :keyword))
-                   :enriching-p (and enriching-p (not (eq enriching-p :null)) (= enriching-p 1))
+                   :enriching-p (and enriching-p (not (eql enriching-p :null)) (= enriching-p 1))
                    :created-at (lt:parse-timestring created-at)
                    :completed-at (parse-timestamp completed-at))))
 
@@ -599,7 +599,7 @@
     (let ((presets (make-array 10 :initial-element nil)))
       (dolist (row (sqlite:execute-to-list db "SELECT slot, tags FROM tag_presets"))
         (destructuring-bind (slot tags) row
-          (when (and tags (not (eq tags :null)) (< slot 10))
+          (when (and tags (not (eql tags :null)) (< slot 10))
             (let ((parsed (jzon:parse tags)))
               ;; Only store if parsed result is an actual sequence (not null symbol)
               (when (and parsed (not (eq parsed 'null)) (typep parsed 'sequence))
@@ -613,7 +613,7 @@
       (let ((tags (aref presets i)))
         (sqlite:execute-non-query db "
           UPDATE tag_presets SET tags = ? WHERE slot = ?"
-          (when (and tags (listp tags) (not (eq tags 'null)) (not (eq tags :null)))
+          (when (and tags (listp tags) (not (eq tags 'null)) (not (eql tags :null)))
             (jzon:stringify (coerce tags 'vector)))
           i)))))
 
@@ -756,7 +756,7 @@
 
 (defun db-null-to-json-null (value)
   "Convert a database value to JSON-safe value. :null and nil become 'null."
-  (if (or (eq value :null) (null value))
+  (if (or (eql value :null) (null value))
       'null
       value))
 

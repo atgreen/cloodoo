@@ -36,7 +36,7 @@
   "Unregister a disconnected sync client."
   (bt:with-lock-held (*clients-lock*)
     (setf *connected-clients*
-          (remove-if (lambda (entry) (string= (car entry) device-id))
+          (remove-if (lambda (entry) (string= (first entry) device-id))
                      *connected-clients*))
     (llog:info "Sync client disconnected" :device-id device-id)))
 
@@ -77,7 +77,7 @@
              (when *sync-debug* (format t "~&[SYNC-DEBUG] Got message, msg-case=~A~%" (proto-msg-case init-msg)))
 
              ;; Verify it's a SyncInit message
-             (unless (eq (proto-msg-case init-msg) :init)
+             (unless (eql (proto-msg-case init-msg) :init)
                (llog:warn "Expected init message" :got (proto-msg-case init-msg))
                (return-from sync-handler))
 
@@ -168,7 +168,7 @@
                          (force-output))
                        (return-from sync-handler))
 
-                     (when (eq (proto-msg-case msg) :change)
+                     (when (eql (proto-msg-case msg) :change)
                        (let ((change (proto-msg-change msg)))
                          (case (proto-change-case change)
                            (:upsert
@@ -258,7 +258,7 @@
     (let ((push-setting (assoc ag-http2::+settings-enable-push+
                                ag-http2::*default-settings*)))
       (when push-setting
-        (setf (cdr push-setting) 0)))
+        (setf (rest push-setting) 0)))
 
     (setf *grpc-server*
           (if use-tls
@@ -378,7 +378,7 @@
 
 (defun sync-client-connected-p ()
   "Check if the sync client is connected."
-  (eq *sync-client-status* :connected))
+  (eql *sync-client-status* :connected))
 
 (defun update-sync-status (status &optional error-msg)
   "Update the sync client status and optionally the model."
@@ -482,19 +482,17 @@
               ;; Receive loop — blocks until stream ends or error
               (loop while *sync-client-running*
                     do (let ((msg (ag-grpc:stream-read-message *sync-client-stream*)))
-                         (if msg
-                             (handle-sync-client-message msg)
-                             (progn
+                         (cond (msg (handle-sync-client-message msg))
+      (t 
                                (llog:info "Sync stream ended")
                                (return))))))
           (error (e)
             (let ((error-msg (princ-to-string e)))
               ;; Check if this is a deliberate shutdown, not an actual error
-              (if (search "sync client shutting down" error-msg)
-                  (progn
+              (cond ((search "sync client shutting down" error-msg) 
                     (llog:info "Sync client shutdown signal received")
                     (return))
-                  (progn
+      (t 
                     (llog:error "Sync connection error" :error error-msg)
                     (update-sync-status :error error-msg)
                     (notify-tui-refresh))))))
@@ -570,14 +568,11 @@
             (server-time (proto-ack-server-time ack))
             (pending (proto-ack-pending-changes ack))
             (error-msg (proto-ack-error ack)))
-       (if (and error-msg (plusp (length error-msg)))
-           ;; Server rejected connection
-           (progn
+       (cond ((and error-msg (plusp (length error-msg))) 
              (llog:error "Server rejected connection" :error error-msg)
              (update-sync-status :error error-msg)
              (setf *sync-client-running* nil))
-           ;; Connection accepted
-           (progn
+      (t 
              (llog:info "Sync connected" :server-time server-time :pending pending)
              (update-sync-status :connected)
              ;; Save server time for next reconnect (avoid full resync)
