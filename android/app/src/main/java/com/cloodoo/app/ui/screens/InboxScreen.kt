@@ -22,8 +22,13 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavController
+import java.time.LocalDate
+import java.time.format.DateTimeFormatter
+import java.util.Locale
 import com.cloodoo.app.data.local.TodoEntity
 import com.cloodoo.app.ui.components.DateGroup
 import com.cloodoo.app.ui.components.SectionHeader
@@ -77,6 +82,22 @@ fun InboxScreen(
         if (uiState.isSyncing) {
             LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
         }
+
+        // Today's date header
+        val todayFormatted = remember {
+            LocalDate.now().format(
+                DateTimeFormatter.ofPattern("EEEE, MMMM d", Locale.getDefault())
+            )
+        }
+        Text(
+            text = todayFormatted,
+            style = MaterialTheme.typography.titleLarge,
+            fontWeight = FontWeight.Medium,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(vertical = 12.dp),
+            textAlign = TextAlign.Center
+        )
 
         // Search bar
         AnimatedVisibility(visible = isSearchVisible) {
