@@ -167,8 +167,12 @@
     // Extract subject - for Outlook, prefer title attribute
     const subjectEl = queryWithFallbacks(selectors.subject);
     if (subjectEl) {
-      data.subject = subjectEl.getAttribute('title') ||
-                     subjectEl.textContent.trim();
+      const subject = (subjectEl.getAttribute('title') ||
+                      subjectEl.textContent || '').trim();
+      // Only set if non-empty after trimming
+      if (subject.length > 0) {
+        data.subject = subject;
+      }
     }
 
     // Extract sender - prefer email attribute, then parse aria-label, then text
@@ -181,29 +185,42 @@
       const fromMatch = ariaLabel.match(/^From:\s*([^<]+)/);
       const nameFromLabel = fromMatch ? fromMatch[1].trim() : null;
 
-      data.sender = senderEl.getAttribute('email') ||
-                    senderEl.getAttribute('data-hovercard-id') ||
-                    (emailMatch ? emailMatch[1] : null) ||
-                    nameFromLabel ||
-                    senderEl.textContent.trim();
+      const sender = (senderEl.getAttribute('email') ||
+                     senderEl.getAttribute('data-hovercard-id') ||
+                     (emailMatch ? emailMatch[1] : null) ||
+                     nameFromLabel ||
+                     senderEl.textContent || '').trim();
+      if (sender.length > 0) {
+        data.sender = sender;
+      }
     }
 
     // Extract body snippet
     const bodyEl = queryWithFallbacks(selectors.body);
     if (bodyEl) {
-      const text = bodyEl.textContent.trim();
-      data.snippet = text.substring(0, 200) + (text.length > 200 ? '...' : '');
+      const text = (bodyEl.textContent || '').trim();
+      if (text.length > 0) {
+        data.snippet = text.substring(0, 200) + (text.length > 200 ? '...' : '');
+      }
     }
 
     // Extract date
     const dateEl = queryWithFallbacks(selectors.date);
     if (dateEl) {
-      data.date = dateEl.getAttribute('title') ||
-                  dateEl.getAttribute('data-tooltip') ||
-                  dateEl.textContent.trim();
+      const date = (dateEl.getAttribute('title') ||
+                   dateEl.getAttribute('data-tooltip') ||
+                   dateEl.textContent || '').trim();
+      if (date.length > 0) {
+        data.date = date;
+      }
     }
 
     return data;
+  }
+
+  // Check if data has meaningful content (not just whitespace)
+  function hasRealContent(data) {
+    return data.subject && data.subject.trim().length > 0;
   }
 
   // Watch for email content to load using MutationObserver
@@ -211,7 +228,7 @@
     return new Promise((resolve) => {
       // First try immediate extraction
       const immediateData = extractEmailData();
-      if (immediateData.subject) {
+      if (hasRealContent(immediateData)) {
         console.log('Cloodoo: Immediate extraction succeeded');
         resolve(immediateData);
         return;
@@ -227,7 +244,7 @@
         attempts++;
 
         const data = extractEmailData();
-        if (data.subject) {
+        if (hasRealContent(data)) {
           console.log('Cloodoo: Observer extraction succeeded after', attempts, 'mutations');
           resolved = true;
           observer.disconnect();
@@ -249,7 +266,7 @@
           return;
         }
         const data = extractEmailData();
-        if (data.subject) {
+        if (hasRealContent(data)) {
           console.log('Cloodoo: Interval extraction succeeded');
           resolved = true;
           observer.disconnect();
@@ -281,7 +298,8 @@
   chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     if (request.action === 'getEmailData') {
       console.log('Cloodoo: Popup requested email data');
-      observeAndExtract(1500).then(emailData => {
+      // Use 4-second timeout to handle slow-loading email content
+      observeAndExtract(4000).then(emailData => {
         console.log('Cloodoo: Sending to popup:', emailData);
         sendResponse(emailData);
       });
