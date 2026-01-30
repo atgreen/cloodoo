@@ -176,13 +176,55 @@
                             (let* ((proto-data (proto-change-upsert change))
                                    (origin-device-id (proto-change-device-id change))
                                    (change-timestamp (proto-change-timestamp change))
-                                   (todo (proto-to-todo proto-data)))
+                                   (todo (proto-to-todo proto-data))
+                                   (enriched nil))
                               ;; Set device-id from the change envelope (not from local server)
                               (setf (todo-device-id todo) origin-device-id)
+
+                              ;; Try to enrich the TODO
+                              (when *enrichment-enabled*
+                                (handler-case
+                                    (let ((enriched-data (enrich-todo-input
+                                                          (todo-title todo)
+                                                          (todo-description todo)
+                                                          nil)))
+                                      (when enriched-data
+                                        (setf enriched t)
+                                        ;; Apply enrichment results
+                                        (when (getf enriched-data :title)
+                                          (setf (todo-title todo) (getf enriched-data :title)))
+                                        (when (getf enriched-data :description)
+                                          (setf (todo-description todo) (getf enriched-data :description)))
+                                        (when (getf enriched-data :priority)
+                                          (setf (todo-priority todo) (getf enriched-data :priority)))
+                                        (when (getf enriched-data :category)
+                                          (let ((tag (category-to-tag (getf enriched-data :category))))
+                                            (when tag
+                                              (pushnew tag (todo-tags todo) :test #'string-equal))))
+                                        (when (getf enriched-data :estimated-minutes)
+                                          (setf (todo-estimated-minutes todo) (getf enriched-data :estimated-minutes)))
+                                        (when (getf enriched-data :scheduled-date)
+                                          (setf (todo-scheduled-date todo) (getf enriched-data :scheduled-date)))
+                                        (when (getf enriched-data :due-date)
+                                          (setf (todo-due-date todo) (getf enriched-data :due-date)))
+                                        (when (getf enriched-data :location-info)
+                                          (setf (todo-location-info todo) (getf enriched-data :location-info)))
+                                        (llog:info "Enriched TODO from sync" :id (todo-id todo))))
+                                  (error (e)
+                                    (llog:warn "Enrichment failed, using original TODO"
+                                              :id (todo-id todo)
+                                              :error (princ-to-string e)))))
+
                               ;; Save to local database with original timestamp
                               (db-save-todo todo :valid-from change-timestamp)
-                              ;; Broadcast to other connected clients
-                              (broadcast-change msg device-id)))
+
+                              ;; If enriched, create a new change message with enriched data and broadcast
+                              ;; Otherwise broadcast the original message
+                              (if enriched
+                                  (let ((enriched-msg (make-sync-upsert-message-with-timestamp
+                                                       origin-device-id todo change-timestamp)))
+                                    (broadcast-change enriched-msg device-id))
+                                  (broadcast-change msg device-id))))
                            (:delete-id
                             ;; Client is requesting a delete
                             (let ((todo-id (proto-change-delete-id change)))
@@ -282,6 +324,16 @@
     ;; Register change hooks so local TUI changes are broadcast to sync clients
     (setf *todo-change-hook* #'notify-todo-changed)
     (setf *todo-delete-hook* #'notify-todo-deleted)
+
+    ;; Initialize enrichment for automatic TODO enrichment
+    (when *enrichment-enabled*
+      (handler-case
+          (progn
+            (init-enrichment)
+            (llog:info "Enrichment initialized for sync server"))
+        (error (e)
+          (llog:warn "Failed to initialize enrichment, will continue without it"
+                    :error (princ-to-string e)))))
 
     (llog:info "Starting gRPC sync server" :host host :port port)
     (format t "~&gRPC sync server starting on ~A:~A~%" host port)
