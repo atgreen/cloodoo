@@ -645,8 +645,8 @@
                  (todo (proto-to-todo proto-data)))
             (llog:info "Received upsert from server" :id (todo-id todo))
             ;; If local TODO was being enriched, clear the flag since server has enriched it
-            (when-let ((local-todo (db-get-todo (todo-id todo))))
-              (when (todo-enriching-p local-todo)
+            (let ((local-todo (db-get-todo (todo-id todo))))
+              (when (and local-todo (todo-enriching-p local-todo))
                 (llog:info "Clearing enriching flag for server-enriched TODO" :id (todo-id todo))
                 (setf (todo-enriching-p todo) nil)))
             ;; Suppress notifications to avoid sending the change back
