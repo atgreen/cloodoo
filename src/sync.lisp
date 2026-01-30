@@ -215,6 +215,9 @@
                                               :id (todo-id todo)
                                               :error (princ-to-string e)))))
 
+                              ;; Clear enriching-p flag since enrichment is complete
+                              (setf (todo-enriching-p todo) nil)
+
                               ;; Save to local database with original timestamp
                               (db-save-todo todo :valid-from change-timestamp)
 
@@ -644,11 +647,7 @@
           (let* ((proto-data (proto-change-upsert change))
                  (todo (proto-to-todo proto-data)))
             (llog:info "Received upsert from server" :id (todo-id todo))
-            ;; If local TODO was being enriched, clear the flag since server has enriched it
-            (let ((local-todo (db-get-todo (todo-id todo))))
-              (when (and local-todo (todo-enriching-p local-todo))
-                (llog:info "Clearing enriching flag for server-enriched TODO" :id (todo-id todo))
-                (setf (todo-enriching-p todo) nil)))
+            ;; Server always clears enriching-p after processing, so no need to check
             ;; Suppress notifications to avoid sending the change back
             (let ((*suppress-change-notifications* t))
               (db-save-todo todo))

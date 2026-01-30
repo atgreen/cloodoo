@@ -61,7 +61,8 @@
                                    :repeat-interval (or (todo-repeat-interval todo) 0)
                                    :repeat-unit (let ((ru (todo-repeat-unit todo)))
                                                      (if ru (string-downcase (symbol-name ru)) ""))
-                                   :attachment-hashes (or (todo-attachment-hashes todo) '())))
+                                   :attachment-hashes (or (todo-attachment-hashes todo) '())
+                                   :enriching-p (or (todo-enriching-p todo) nil)))
          (change (make-instance 'proto-todo-change
                                 :device-id device-id
                                 :timestamp timestamp))
@@ -198,4 +199,5 @@
                                   (intern (string-upcase ru) :keyword)))
                  :attachment-hashes (proto-attachment-hashes proto-data)
                  :created-at (lt:parse-timestring (proto-created-at proto-data))
-                 :completed-at (parse-timestamp (proto-completed-at proto-data))))
+                 :completed-at (parse-timestamp (proto-completed-at proto-data))
+                 :enriching-p (proto-enriching-p proto-data)))
