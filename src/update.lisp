@@ -1072,13 +1072,22 @@
                         :title (todo-title todo))
              (setf (todo-enriching-p todo) t)
              (save-todo todo)
-             (return-from handle-list-keys
-               (values model (list (make-enrichment-cmd (todo-id todo)
-                                                        (todo-title todo)
-                                                        (todo-description todo)
-                                                        nil)  ; No parent context
-                                   (make-spinner-start-cmd
-                                    (model-enrichment-spinner model))))))))
+             ;; If connected to sync server, send TODO and let server enrich it
+             (if (sync-client-connected-p)
+                 (progn
+                   (llog:info "Sending TODO to sync server for enrichment")
+                   (sync-client-send-upsert todo)
+                   (return-from handle-list-keys
+                     (values model (list (make-spinner-start-cmd
+                                          (model-enrichment-spinner model))))))
+                 ;; Otherwise, do local enrichment
+                 (return-from handle-list-keys
+                   (values model (list (make-enrichment-cmd (todo-id todo)
+                                                            (todo-title todo)
+                                                            (todo-description todo)
+                                                            nil)  ; No parent context
+                                       (make-spinner-start-cmd
+                                        (model-enrichment-spinner model)))))))))
        (values model nil))
 
       ;; Import org-mode file (i)
