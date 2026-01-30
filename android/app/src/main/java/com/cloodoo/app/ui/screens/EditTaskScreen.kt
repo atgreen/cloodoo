@@ -34,26 +34,31 @@ fun EditTaskScreen(
     onNavigateBack: () -> Unit
 ) {
     val uiState by viewModel.uiState.collectAsState()
-    val todo = uiState.todos.find { it.id == todoId }
 
-    if (todo == null) {
+    // Find initial TODO and cache it
+    val initialTodo = remember(todoId) {
+        uiState.todos.find { it.id == todoId }
+    }
+
+    // If initial TODO not found, navigate back immediately
+    if (initialTodo == null) {
         LaunchedEffect(Unit) { onNavigateBack() }
         return
     }
 
-    val initialTags = remember(todo.tags) { parseTags(todo.tags) }
+    val initialTags = remember(initialTodo.tags) { parseTags(initialTodo.tags) }
 
-    var title by remember { mutableStateOf(todo.title) }
-    var description by remember { mutableStateOf(todo.description ?: "") }
-    var priority by remember { mutableStateOf(todo.priority) }
-    var dueDate by remember { mutableStateOf<String?>(todo.dueDate) }
-    var scheduledDate by remember { mutableStateOf<String?>(todo.scheduledDate) }
+    var title by remember { mutableStateOf(initialTodo.title) }
+    var description by remember { mutableStateOf(initialTodo.description ?: "") }
+    var priority by remember { mutableStateOf(initialTodo.priority) }
+    var dueDate by remember { mutableStateOf<String?>(initialTodo.dueDate) }
+    var scheduledDate by remember { mutableStateOf<String?>(initialTodo.scheduledDate) }
     var tags by remember { mutableStateOf<List<String>>(initialTags) }
     var newTagText by remember { mutableStateOf("") }
     var showDueDatePicker by remember { mutableStateOf(false) }
     var showScheduledDatePicker by remember { mutableStateOf(false) }
-    var repeatUnit by remember { mutableStateOf<String?>(todo.repeatUnit) }
-    var repeatInterval by remember { mutableIntStateOf(todo.repeatInterval ?: 1) }
+    var repeatUnit by remember { mutableStateOf<String?>(initialTodo.repeatUnit) }
+    var repeatInterval by remember { mutableIntStateOf(initialTodo.repeatInterval ?: 1) }
 
     val focusRequester = remember { FocusRequester() }
     LaunchedEffect(Unit) { focusRequester.requestFocus() }

@@ -68,7 +68,10 @@ fun TodoDetailSheet(
                     color = MaterialTheme.colorScheme.onSurface,
                     modifier = Modifier.weight(1f)
                 )
-                IconButton(onClick = { onEdit(todo.id); onDismiss() }) {
+                IconButton(onClick = {
+                    onDismiss()
+                    onEdit(todo.id)
+                }) {
                     Icon(
                         Icons.Default.Edit,
                         contentDescription = "Edit",
