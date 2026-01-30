@@ -35,13 +35,30 @@
   "Path to the server certificate."
   (merge-pathnames "server.crt" (certs-directory)))
 
+(defun valid-device-name-p (name)
+  "Check if NAME is a valid device name (alphanumeric, dash, underscore only)."
+  (and (stringp name)
+       (plusp (length name))
+       (<= (length name) 64)
+       (every (lambda (c)
+                (or (alphanumericp c)
+                    (char= c #\-)
+                    (char= c #\_)))
+              name)))
+
+(defun sanitize-device-name (name)
+  "Validate and return device name, or signal error if invalid."
+  (unless (valid-device-name-p name)
+    (error "Invalid device name: ~S. Must be 1-64 alphanumeric characters, dashes, or underscores." name))
+  name)
+
 (defun client-key-file (name)
   "Path to a client's private key."
-  (merge-pathnames (format nil "clients/~A.key" name) (certs-directory)))
+  (merge-pathnames (format nil "clients/~A.key" (sanitize-device-name name)) (certs-directory)))
 
 (defun client-cert-file (name)
   "Path to a client's certificate."
-  (merge-pathnames (format nil "clients/~A.crt" name) (certs-directory)))
+  (merge-pathnames (format nil "clients/~A.crt" (sanitize-device-name name)) (certs-directory)))
 
 (defun clients-directory ()
   "Path to the clients subdirectory."

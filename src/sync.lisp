@@ -32,19 +32,29 @@
     (push (cons device-id stream) *connected-clients*)
     (llog:info "Sync client connected" :device-id device-id)))
 
-(defun unregister-sync-client (device-id)
-  "Unregister a disconnected sync client."
+(defun unregister-sync-client-by-stream (stream device-id)
+  "Unregister a specific sync client stream.
+   Removes only the entry matching this specific stream, not all entries for device-id."
   (bt:with-lock-held (*clients-lock*)
     (setf *connected-clients*
-          (remove-if (lambda (entry) (string= (first entry) device-id))
+          (remove-if (lambda (entry) (eq (rest entry) stream))
                      *connected-clients*))
     (llog:info "Sync client disconnected" :device-id device-id)))
+
+(defun remove-dead-client (stream device-id)
+  "Remove a dead client stream from the connected clients list."
+  (bt:with-lock-held (*clients-lock*)
+    (setf *connected-clients*
+          (remove-if (lambda (entry) (eq (rest entry) stream))
+                     *connected-clients*))
+    (llog:info "Removed dead sync client" :device-id device-id)))
 
 (defun broadcast-change (change-msg &optional exclude-device-id)
   "Broadcast a change to all connected clients except the one specified.
    CHANGE-MSG should be a proto-sync-message.
    Snapshots the client list under lock, then sends outside the lock
-   to avoid holding the lock during network I/O."
+   to avoid holding the lock during network I/O.
+   Failed sends result in the client being removed from the list."
   (let ((clients-snapshot
           (bt:with-lock-held (*clients-lock*)
             (copy-list *connected-clients*))))
@@ -55,7 +65,8 @@
           (handler-case
               (ag-grpc:stream-send stream change-msg)
             (error (e)
-              (llog:warn "Failed to send to client" :device-id device-id :error (princ-to-string e)))))))))
+              (llog:warn "Failed to send to client, removing" :device-id device-id :error (princ-to-string e))
+              (remove-dead-client stream device-id))))))))
 
 ;;── SyncStream Handler ────────────────────────────────────────────────────────
 
@@ -242,7 +253,7 @@
         (format t "~&[SYNC-DEBUG] Handler exiting, cleanup. device-id=~A~%" client-device-id)
         (force-output))
       (when client-device-id
-        (unregister-sync-client client-device-id)))))
+        (unregister-sync-client-by-stream stream client-device-id)))))
 
 ;;── Helper: Convert DB row hash table to todo ─────────────────────────────────
 

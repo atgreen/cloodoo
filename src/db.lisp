@@ -262,10 +262,12 @@
 ;;── Content-Addressed Blob Storage ────────────────────────────────────────────
 
 (defun content-hash (text)
-  "Compute MD5 hash of TEXT as a hex string."
+  "Compute SHA-256 hash of TEXT as a hex string."
   (when (and text (stringp text) (> (length text) 0))
-    (let* ((bytes (md5:md5sum-string text :external-format :utf-8))
-           (hex (make-string 32)))
+    (let* ((bytes (ironclad:digest-sequence
+                   :sha256
+                   (flexi-streams:string-to-octets text :external-format :utf-8)))
+           (hex (make-string 64)))
       (loop for byte across bytes
             for i from 0 by 2
             do (let ((hi (ash byte -4))
@@ -500,11 +502,21 @@
   "Save a TODO to the database using append-only semantics.
    If the TODO already exists (by ID), the old version is marked as superseded.
    Large text fields (description, location_info) are stored in the blobs table.
-   VALID-FROM can be specified for sync operations to preserve original timestamp."
+   VALID-FROM can be specified for sync operations to preserve original timestamp.
+   Returns T if saved, NIL if rejected due to conflict (incoming timestamp older than current)."
   (with-db (db)
     (let ((now (or valid-from (now-iso)))
           (values (todo-to-db-values todo))
           (committed nil))
+      ;; Check for timestamp conflict - reject if incoming is older than current
+      (let ((current-timestamp (sqlite:execute-single db
+                                  "SELECT valid_from FROM todos WHERE id = ? AND valid_to IS NULL"
+                                  (todo-id todo))))
+        (when (and current-timestamp valid-from
+                   (string< valid-from current-timestamp))
+          (llog:warn "Rejecting stale update" :id (todo-id todo)
+                     :incoming valid-from :current current-timestamp)
+          (return-from db-save-todo nil)))
       ;; Store large text fields as blobs
       (let ((desc-hash (store-blob db (third values)))
             (loc-hash (store-blob db (tenth values))))
@@ -531,7 +543,8 @@
                  (nth 12 values) (nth 13 values) now (nth 14 values)
                  (nth 15 values) (nth 16 values) (nth 17 values) (nth 18 values))
                (sqlite:execute-non-query db "COMMIT")
-               (setf committed t))
+               (setf committed t)
+               t)  ; Return T on success
           (unless committed
             (ignore-errors (sqlite:execute-non-query db "ROLLBACK"))))))))
 
