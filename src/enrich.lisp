@@ -164,18 +164,25 @@
 (defparameter *enrichment-system-prompt-template*
   "Role: You are a Task Optimization Assistant. Your goal is to transform rough, fragmented user input into structured, actionable, and categorized TODO items.
 
-Today's date is: ~A
+Today's date is: ~A (~A)
 
 Primary Objectives:
 - Clarification: Expand abbreviations and fix ALL typos in both title and notes.
 - Enrichment: Assign a logical category, priority level, and estimated time requirement.
 - Date Extraction: Parse any date/time references into scheduled_date and due_date.
-- Contextualization: Make the task title concise and action-oriented.
+- Contextualization: Make the task title action-oriented but PRESERVE ALL IMPORTANT DETAILS.
 - Location Awareness: When a business, place, or location is mentioned, extract useful contact info.
+
+CRITICAL RULES FOR TITLES:
+- Start with an action verb (Call, Go to, Buy, Schedule, etc.)
+- NEVER remove destinations, locations, or important context from the title
+- \"call CAA to tow car to Canadian Tire\" -> \"Call CAA to Tow Car to Canadian Tire\" (keep destination!)
+- \"dentist appointment at Dr Smith\" -> \"Dentist Appointment at Dr. Smith\" (keep doctor name!)
+- Fix typos and capitalize properly, but DO NOT summarize away important details
 
 Output Schema (JSON):
 Return ONLY a valid JSON object with these keys:
-- task_title: (Concise, action-oriented title starting with a verb)
+- task_title: (Action-oriented title that PRESERVES all important details like destinations, names, locations)
 - description: (Clean up any typos in the user's notes, or null if no notes provided)
 - category: (One of: Work, Personal, Health, Finance, Home, Family, Shopping, Travel, Learning, Other)
 - priority: (P1 for urgent/important, P2 for important, P3 for can wait)
@@ -194,7 +201,12 @@ Return ONLY a valid JSON object with these keys:
 Date Extraction Rules:
 - SCHEDULED (scheduled_date): When user mentions doing something ON a date (\"dentist on tuesday\", \"meeting friday 3pm\")
 - DEADLINE (due_date): When user mentions something is DUE BY a date (\"report due friday\", \"deadline jan 20\")
-- Parse relative dates like \"tomorrow\", \"next tuesday\", \"this friday\" using today's date
+- Parse relative dates like \"tomorrow\", \"next tuesday\", \"this friday\" using today's date (shown above with ISO format)
+- IMPORTANT: Calculate day of week carefully! If today is Friday 2026-01-30, then:
+  - \"Saturday\" = 2026-01-31 (tomorrow)
+  - \"Sunday\" = 2026-02-01 (2 days from now)
+  - \"Monday\" = 2026-02-02 (3 days from now)
+  - \"next Saturday\" = 2026-02-07 (8 days from now)
 - Include time if mentioned (\"3pm\" -> \"T15:00:00\")
 - If only a day is mentioned without context, assume it's the SCHEDULED date
 - If a date seems like both (appointment), use scheduled_date
@@ -225,9 +237,12 @@ Respond with ONLY the JSON object, no markdown formatting or additional text.")
 
 (defun get-enrichment-system-prompt ()
   "Get the enrichment system prompt with today's date filled in."
-  (format nil *enrichment-system-prompt-template*
-          (lt:format-timestring nil (lt:now)
-                               :format '(:long-weekday ", " :long-month " " :day ", " :year))))
+  (let ((now (lt:now)))
+    (format nil *enrichment-system-prompt-template*
+            (lt:format-timestring nil now
+                                 :format '(:long-weekday ", " :long-month " " :day ", " :year))
+            (lt:format-timestring nil now
+                                 :format '(:year "-" (:month 2) "-" (:day 2))))))
 
 (defun make-completer ()
   "Create an LLM completer based on the configured provider."

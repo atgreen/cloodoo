@@ -219,11 +219,12 @@
                               (db-save-todo todo :valid-from change-timestamp)
 
                               ;; If enriched, create a new change message with enriched data and broadcast
-                              ;; Otherwise broadcast the original message
+                              ;; When enriched, send to ALL clients including the originator so they get the enrichment
+                              ;; When not enriched, exclude the originator (they already have this data)
                               (if enriched
                                   (let ((enriched-msg (make-sync-upsert-message-with-timestamp
                                                        origin-device-id todo change-timestamp)))
-                                    (broadcast-change enriched-msg device-id))
+                                    (broadcast-change enriched-msg nil))  ;; nil = send to everyone
                                   (broadcast-change msg device-id))))
                            (:delete-id
                             ;; Client is requesting a delete
