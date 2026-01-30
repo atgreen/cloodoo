@@ -84,7 +84,7 @@ fun TodoItem(
             // Priority accent strip
             Box(
                 modifier = Modifier
-                    .width(4.dp)
+                    .width(6.dp)
                     .fillMaxHeight()
                     .background(
                         if (isCompleted) priorityColor.copy(alpha = 0.3f)
