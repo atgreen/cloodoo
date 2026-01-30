@@ -62,7 +62,7 @@
                                    :repeat-unit (let ((ru (todo-repeat-unit todo)))
                                                      (if ru (string-downcase (symbol-name ru)) ""))
                                    :attachment-hashes (or (todo-attachment-hashes todo) '())
-                                   :enriching-p (or (todo-enriching-p todo) nil)))
+                                   :enriching-p (todo-enriching-p todo)))
          (change (make-instance 'proto-todo-change
                                 :device-id device-id
                                 :timestamp timestamp))

@@ -667,7 +667,7 @@
                 (notify-tui-reload)
                 (setf *sync-pending-count* 0 *sync-received-count* 0)))
             ;; For single updates outside initial sync, ask main thread to reload
-            (when (= *sync-pending-count* 0)
+            (when (zerop *sync-pending-count*)
               (notify-tui-reload))))
          (:delete-id
           (let ((todo-id (proto-change-delete-id change)))
