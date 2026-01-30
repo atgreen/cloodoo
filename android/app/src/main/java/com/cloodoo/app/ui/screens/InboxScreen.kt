@@ -23,6 +23,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.unit.dp
+import androidx.navigation.NavController
 import com.cloodoo.app.data.local.TodoEntity
 import com.cloodoo.app.ui.components.DateGroup
 import com.cloodoo.app.ui.components.SectionHeader
@@ -32,7 +33,8 @@ import com.cloodoo.app.ui.util.parseTags
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 fun InboxScreen(
-    viewModel: TodoListViewModel
+    viewModel: TodoListViewModel,
+    navController: NavController
 ) {
     val uiState by viewModel.uiState.collectAsState()
     var searchQuery by remember { mutableStateOf("") }
@@ -219,6 +221,9 @@ fun InboxScreen(
             onDismiss = { selectedTodo = null },
             onUpdate = { todoId, dueDate, scheduledDate, tags ->
                 viewModel.updateTodo(todoId, dueDate = dueDate, scheduledDate = scheduledDate, tags = tags)
+            },
+            onEdit = { todoId ->
+                navController.navigate(com.cloodoo.app.ui.navigation.Screen.EditTask.createRoute(todoId))
             }
         )
     }

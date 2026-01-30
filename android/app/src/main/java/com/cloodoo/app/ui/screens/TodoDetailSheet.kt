@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Clear
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -34,7 +35,8 @@ import com.cloodoo.app.ui.util.tagsToStorageString
 fun TodoDetailSheet(
     todo: TodoEntity,
     onDismiss: () -> Unit,
-    onUpdate: (todoId: String, dueDate: String?, scheduledDate: String?, tags: String?) -> Unit
+    onUpdate: (todoId: String, dueDate: String?, scheduledDate: String?, tags: String?) -> Unit,
+    onEdit: (todoId: String) -> Unit
 ) {
     val context = LocalContext.current
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
@@ -55,11 +57,25 @@ fun TodoDetailSheet(
                 .padding(horizontal = 20.dp, vertical = 16.dp)
                 .padding(bottom = 32.dp)
         ) {
-            Text(
-                text = todo.title,
-                style = MaterialTheme.typography.headlineSmall,
-                color = MaterialTheme.colorScheme.onSurface
-            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.Top
+            ) {
+                Text(
+                    text = todo.title,
+                    style = MaterialTheme.typography.headlineSmall,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.weight(1f)
+                )
+                IconButton(onClick = { onEdit(todo.id); onDismiss() }) {
+                    Icon(
+                        Icons.Default.Edit,
+                        contentDescription = "Edit",
+                        tint = MaterialTheme.colorScheme.primary
+                    )
+                }
+            }
 
             Spacer(modifier = Modifier.height(16.dp))
 

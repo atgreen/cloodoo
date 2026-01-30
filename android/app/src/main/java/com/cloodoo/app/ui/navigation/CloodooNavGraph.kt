@@ -161,10 +161,10 @@ fun CloodooApp(openQuickAdd: Boolean = false) {
                     modifier = Modifier.padding(padding)
                 ) {
                     composable(Screen.Inbox.route) {
-                        InboxScreen(viewModel = viewModel)
+                        InboxScreen(viewModel = viewModel, navController = navController)
                     }
                     composable(Screen.Completed.route) {
-                        CompletedScreen(viewModel = viewModel)
+                        CompletedScreen(viewModel = viewModel, navController = navController)
                     }
                     composable(Screen.Settings.route) {
                         SettingsScreen(
@@ -175,6 +175,14 @@ fun CloodooApp(openQuickAdd: Boolean = false) {
                     }
                     composable(Screen.AddTask.route) {
                         AddTaskScreen(
+                            viewModel = viewModel,
+                            onNavigateBack = { navController.popBackStack() }
+                        )
+                    }
+                    composable(Screen.EditTask.route) { backStackEntry ->
+                        val todoId = backStackEntry.arguments?.getString("todoId") ?: return@composable
+                        EditTaskScreen(
+                            todoId = todoId,
                             viewModel = viewModel,
                             onNavigateBack = { navController.popBackStack() }
                         )

@@ -14,13 +14,15 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import androidx.navigation.NavController
 import com.cloodoo.app.data.local.TodoEntity
 import com.cloodoo.app.ui.components.DateGroup
 import com.cloodoo.app.ui.components.SwipeableTodoItem
 
 @Composable
 fun CompletedScreen(
-    viewModel: TodoListViewModel
+    viewModel: TodoListViewModel,
+    navController: NavController
 ) {
     val uiState by viewModel.uiState.collectAsState()
 
@@ -113,6 +115,9 @@ fun CompletedScreen(
             onDismiss = { selectedTodo = null },
             onUpdate = { todoId, dueDate, scheduledDate, tags ->
                 viewModel.updateTodo(todoId, dueDate = dueDate, scheduledDate = scheduledDate, tags = tags)
+            },
+            onEdit = { todoId ->
+                navController.navigate(com.cloodoo.app.ui.navigation.Screen.EditTask.createRoute(todoId))
             }
         )
     }

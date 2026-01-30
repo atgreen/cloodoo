@@ -280,6 +280,38 @@ class TodoListViewModel(
         }
     }
 
+    fun editTodo(
+        todoId: String,
+        title: String,
+        description: String? = null,
+        priority: String,
+        dueDate: String? = null,
+        scheduledDate: String? = null,
+        tags: String? = null,
+        repeatInterval: Int? = null,
+        repeatUnit: String? = null
+    ) {
+        if (title.isBlank()) return
+
+        viewModelScope.launch {
+            repository.updateTodo(
+                todoId = todoId,
+                title = title.trim(),
+                description = description,
+                priority = priority,
+                dueDate = dueDate,
+                scheduledDate = scheduledDate,
+                tags = tags,
+                repeatInterval = repeatInterval,
+                repeatUnit = repeatUnit
+            )
+            val updated = database.todoDao().getCurrentById(todoId)
+            if (updated != null) {
+                syncManager.sendTodoUpsert(updated)
+            }
+        }
+    }
+
     fun clearSyncMessage() {
         _uiState.update { it.copy(lastSyncResult = null, syncError = null) }
     }

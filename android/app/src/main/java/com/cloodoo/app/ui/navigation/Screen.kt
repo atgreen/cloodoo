@@ -11,6 +11,9 @@ sealed class Screen(val route: String) {
     object Completed : Screen("completed")
     object Settings : Screen("settings")
     object AddTask : Screen("add_task")
+    object EditTask : Screen("edit_task/{todoId}") {
+        fun createRoute(todoId: String) = "edit_task/$todoId"
+    }
     object Pairing : Screen("pairing")
     object VoiceAdd : Screen("voice_add")
     object OcrCapture : Screen("ocr_capture")
