@@ -884,6 +884,10 @@
       ((and (characterp key) (char= key #\e))
        (when (< (model-cursor model) (length todos))
          (let ((todo (nth (model-cursor model) todos)))
+           ;; Don't allow editing while enriching
+           (when (todo-enriching-p todo)
+             (setf (model-status-message model) "Cannot edit while enriching")
+             (return-from handle-list-keys (values model nil)))
            (setf (model-view-state model) :edit)
            (setf (model-edit-todo-id model) (todo-id todo))
            (setf (model-edit-priority model) (todo-priority todo))

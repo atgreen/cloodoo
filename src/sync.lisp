@@ -651,16 +651,21 @@
             ;; Suppress notifications to avoid sending the change back
             (let ((*suppress-change-notifications* t))
               (db-save-todo todo))
-            ;; Track progress and only refresh when done with initial batch
-            (when (> *sync-pending-count* 0)
-              (incf *sync-received-count*)
-              ;; Yield CPU every 10 writes to keep UI responsive
-              (when (zerop (mod *sync-received-count* 10))
-                (sleep 0.001))
-              (when (>= *sync-received-count* *sync-pending-count*)
-                (llog:info "Initial sync complete" :count *sync-received-count*)
-                (when *sync-model-ref* (refresh-model-todos *sync-model-ref*))
-                (setf *sync-pending-count* 0 *sync-received-count* 0)))))
+            ;; Track progress and refresh appropriately
+            (if (> *sync-pending-count* 0)
+                ;; Initial sync batch - only refresh when complete
+                (progn
+                  (incf *sync-received-count*)
+                  ;; Yield CPU every 10 writes to keep UI responsive
+                  (when (zerop (mod *sync-received-count* 10))
+                    (sleep 0.001))
+                  (when (>= *sync-received-count* *sync-pending-count*)
+                    (llog:info "Initial sync complete" :count *sync-received-count*)
+                    (when *sync-model-ref* (refresh-model-todos *sync-model-ref*))
+                    (setf *sync-pending-count* 0 *sync-received-count* 0)))
+                ;; Single update (e.g., enrichment result) - refresh immediately
+                (when *sync-model-ref*
+                  (refresh-model-todos *sync-model-ref*)))))
          (:delete-id
           (let ((todo-id (proto-change-delete-id change)))
             (llog:info "Received delete from server" :id todo-id)
