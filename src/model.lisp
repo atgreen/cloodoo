@@ -205,3 +205,7 @@
 (tui:defmessage sync-refresh-msg ()
   :print-name sync-refresh
   :documentation "Message sent to trigger a TUI redraw after sync data arrives.")
+
+(tui:defmessage sync-reload-msg ()
+  :print-name sync-reload
+  :documentation "Message sent to trigger reloading todos from database in main thread.")

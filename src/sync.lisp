@@ -430,6 +430,11 @@
   (when *sync-program-ref*
     (tui:send *sync-program-ref* (make-instance 'sync-refresh-msg))))
 
+(defun notify-tui-reload ()
+  "Send a sync-reload message to the TUI program to reload todos from database."
+  (when *sync-program-ref*
+    (tui:send *sync-program-ref* (make-instance 'sync-reload-msg))))
+
 ;;── Sync Client Status ────────────────────────────────────────────────────────
 
 (defun sync-client-connected-p ()
@@ -659,21 +664,19 @@
                 (sleep 0.001))
               (when (>= *sync-received-count* *sync-pending-count*)
                 (llog:info "Initial sync complete" :count *sync-received-count*)
-                (when *sync-model-ref* (refresh-model-todos *sync-model-ref*))
+                (notify-tui-reload)
                 (setf *sync-pending-count* 0 *sync-received-count* 0)))
-            ;; For single updates outside initial sync, mark visible todos as dirty
-            ;; so they'll be reloaded on next render (avoids race with edit mode)
-            (when (and (= *sync-pending-count* 0) *sync-model-ref*)
-              (setf (model-visible-todos-dirty *sync-model-ref*) t))))
+            ;; For single updates outside initial sync, ask main thread to reload
+            (when (= *sync-pending-count* 0)
+              (notify-tui-reload))))
          (:delete-id
           (let ((todo-id (proto-change-delete-id change)))
             (llog:info "Received delete from server" :id todo-id)
             ;; Suppress notifications
             (let ((*suppress-change-notifications* t))
               (db-delete-todo todo-id))
-            ;; Refresh the model
-            (when *sync-model-ref*
-              (refresh-model-todos *sync-model-ref*)))))))
+            ;; Ask main thread to reload
+            (notify-tui-reload))))))
 
     (otherwise
      (llog:warn "Unknown message from server" :case (proto-msg-case msg)))))

@@ -1392,7 +1392,7 @@
                                                             desc-input
                                                             nil)  ; No parent context
                                        (make-spinner-start-cmd
-                                        (model-enrichment-spinner model)))))))
+                                        (model-enrichment-spinner model)))))))))
        (values model nil))
 
       ;; Pass key to active text input
@@ -1408,7 +1408,7 @@
               (tui.textinput:textinput-update (model-description-input model) msg)
             (declare (ignore cmd))
             (setf (model-description-input model) new-input))))
-       (values model nil)))))))
+       (values model nil)))))
 
 ;;── Search View Key Handling ───────────────────────────────────────────────────
 

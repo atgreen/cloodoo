@@ -635,18 +635,12 @@
 
 (defun render-add-edit-view (model)
   "Render the add/edit TODO form as an overlay dialog on the list view."
-  (llog:info "render-add-edit-view called" :is-edit (model-edit-todo-id model))
   (let* ((background (render-list-view model))
          (term-width (model-term-width model))
          (dialog-width (calculate-dialog-width term-width))
          (is-edit (model-edit-todo-id model))
-         ;; Check if this is a child task (labels not editable)
-         (is-child (or (model-pending-parent-id model)
-                       (and is-edit
-                            (let ((todo (find is-edit (model-todos model)
-                                              :key #'todo-id :test #'equal)))
-                              (and todo (todo-parent-id todo))))))
          (title (if is-edit "EDIT ITEM" "NEW ITEM"))
+         (title-input-view (tui.textinput:textinput-view (model-title-input model)))
          (content
            (with-output-to-string (c)
              ;; Title input
@@ -654,7 +648,7 @@
                      (if (eql (model-active-field model) :title)
                          (tui:colored ">" :fg tui:*fg-cyan*)
                          " ")
-                     (tui.textinput:textinput-view (model-title-input model)))
+                     title-input-view)
 
              ;; Notes input
              (format c "~%~A ~A"
@@ -727,13 +721,8 @@
                            (tui:colored "  (←/→)" :fg tui:*fg-bright-black*)
                            "")))
 
-             ;; Labels/Tags - not editable for child tasks (they inherit from parent)
-             (if is-child
-                 ;; Child tasks: show inherited label (read-only)
-                 (format c "~%  Labels:    ~A"
-                         (tui:colored "(inherited from parent)" :fg tui:*fg-bright-black*))
-                 ;; Non-child tasks: editable labels
-                 (let* ((edit-tags (model-edit-tags model))
+             ;; Labels/Tags
+             (let* ((edit-tags (model-edit-tags model))
                         (tags-focused (eql (model-active-field model) :tags)))
                    (format c "~%~A Labels:    "
                            (if tags-focused
@@ -761,7 +750,7 @@
                                do (format c "~%             ~A"
                                           (if (= idx cursor)
                                               (tui:colored (format nil "> ~A" tag) :bg tui:*bg-cyan* :fg tui:*fg-black*)
-                                              (format nil "  ~A" tag)))))))))
+                                              (format nil "  ~A" tag))))))))
 
              ;; Help line at bottom
              (format c "~%~%~A"
