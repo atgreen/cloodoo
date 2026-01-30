@@ -1278,18 +1278,27 @@ URL format: http://HOST:PORT/pair/TOKEN"
    :description "Native messaging host for browser extension (internal use)"
    :handler (lambda (cmd)
               (declare (ignore cmd))
-              (native-host-log "Native host started")
-              ;; Use SBCL's file descriptor streams for binary I/O
-              (let ((input-stream (sb-sys:make-fd-stream 0
-                                        :input t
-                                        :element-type '(unsigned-byte 8)
-                                        :buffering :full
-                                        :name "stdin-binary"))
-                    (output-stream (sb-sys:make-fd-stream 1
-                                         :output t
-                                         :element-type '(unsigned-byte 8)
-                                         :buffering :none
-                                         :name "stdout-binary")))
+              ;; CRITICAL: Save original stdout fd and redirect standard *standard-output*
+              ;; to stderr to prevent any log messages from polluting the binary protocol.
+              ;; Chrome expects only 4-byte length prefix + JSON on stdout (fd 1).
+              (let ((original-stdout-fd (sb-posix:dup 1))) ; Save original stdout
+                (unwind-protect
+                    (progn
+                      ;; Redirect the Lisp *standard-output* to stderr
+                      (setf *standard-output* *error-output*)
+                      (native-host-log "Native host started")
+                      ;; Use SBCL's file descriptor streams for binary I/O
+                      ;; Use the saved original stdout fd for output
+                      (let ((input-stream (sb-sys:make-fd-stream 0
+                                                :input t
+                                                :element-type '(unsigned-byte 8)
+                                                :buffering :full
+                                                :name "stdin-binary"))
+                            (output-stream (sb-sys:make-fd-stream original-stdout-fd
+                                                 :output t
+                                                 :element-type '(unsigned-byte 8)
+                                                 :buffering :none
+                                                 :name "stdout-binary")))
                 (unwind-protect
                     (handler-case
                         (progn
@@ -1332,10 +1341,12 @@ URL format: http://HOST:PORT/pair/TOKEN"
                           (setf (gethash "success" r) nil)
                           (setf (gethash "error" r) (format nil "~A" e))
                           (write-native-message r output-stream))))
-                  ;; Cleanup
+                  ;; Cleanup streams (inner unwind-protect)
                   (native-host-log "Cleaning up and exiting")
                   (when input-stream (close input-stream))
-                  (when output-stream (close output-stream))))
+                  (when output-stream (close output-stream)))))
+                  ;; Cleanup saved stdout fd (outer unwind-protect)
+                  (sb-posix:close original-stdout-fd)))
               ;; Explicitly exit to prevent clingon from doing anything else
               (uiop:quit 0))))
 

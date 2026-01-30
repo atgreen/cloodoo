@@ -89,7 +89,10 @@
 (defun main ()
   "The main entrypoint."
   ;; Set up SIGQUIT handler to dump thread stacks (like JVM Ctrl+\)
-  (setup-thread-dump-signal)
+  ;; BUT: Skip this if we're running as native-host, since any output
+  ;; to stdout will corrupt the binary messaging protocol with Chrome.
+  (unless (member "native-host" sb-ext:*posix-argv* :test #'string=)
+    (setup-thread-dump-signal))
   (handler-bind ((error (lambda (e)
                           (format *error-output* "~%Error: ~A~%~%" e)
                           #+sbcl (sb-debug:print-backtrace :stream *error-output* :count 20)
