@@ -42,27 +42,25 @@
   "Set up SIGQUIT (signal 3) handler to dump thread stacks, like JVM."
   #+sbcl
   (handler-case
-      (progn
-        (sb-sys:enable-interrupt
-         sb-unix:sigquit
-         (lambda (signal info context)
-           (declare (ignore signal info context))
-           (ensure-cache-directory)
-           (let* ((timestamp (lt:format-timestring nil (lt:now) :format '(:year "-" :month "-" :day "T" :hour ":" :min ":" :sec)))
-                  (filename (format nil "~A/cloodoo-threaddump-~A.txt"
-                                  (cache-directory) timestamp)))
-             (handler-case
-                 (with-open-file (stream filename
-                                        :direction :output
-                                        :if-exists :supersede
-                                        :if-does-not-exist :create)
-                   (dump-all-thread-stacks stream)
-                   (format *error-output* "~%Thread dump written to: ~A~%" filename)
-                   (force-output *error-output*))
-               (error (e)
-                 (format *error-output* "~%Failed to write thread dump: ~A~%" e)
-                 (force-output *error-output*))))))
-        (llog:info "SIGQUIT handler installed for thread dumps (kill -QUIT <pid> or Ctrl+\\)"))
+      (sb-sys:enable-interrupt
+       sb-unix:sigquit
+       (lambda (signal info context)
+         (declare (ignore signal info context))
+         (ensure-cache-directory)
+         (let* ((timestamp (lt:format-timestring nil (lt:now) :format '(:year "-" :month "-" :day "T" :hour ":" :min ":" :sec)))
+                (filename (format nil "~A/cloodoo-threaddump-~A.txt"
+                                (cache-directory) timestamp)))
+           (handler-case
+               (with-open-file (stream filename
+                                      :direction :output
+                                      :if-exists :supersede
+                                      :if-does-not-exist :create)
+                 (dump-all-thread-stacks stream)
+                 (format *error-output* "~%Thread dump written to: ~A~%" filename)
+                 (force-output *error-output*))
+             (error (e)
+               (format *error-output* "~%Failed to write thread dump: ~A~%" e)
+               (force-output *error-output*))))))
     (error (e)
       (llog:error "Failed to install SIGQUIT handler" :error (princ-to-string e))))
   #-sbcl

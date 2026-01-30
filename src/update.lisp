@@ -1092,7 +1092,7 @@
                                                            (todo-description todo)
                                                            nil)  ; No parent context
                                       (make-spinner-start-cmd
-                                       (model-enrichment-spinner model)))))))))))
+                                       (model-enrichment-spinner model))))))))))
        (values model nil))
 
       ;; Import org-mode file (i)
