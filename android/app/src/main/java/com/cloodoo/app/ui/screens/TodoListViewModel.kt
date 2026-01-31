@@ -159,6 +159,9 @@ class TodoListViewModel(
     fun unpair() {
         disconnect()
         certificateManager.removeCertificate()
+        // Clear sync timestamp to force full sync on next pairing
+        _lastSyncTime.value = null
+        saveLastSyncTime(getApplication())
     }
 
     fun createTodo(

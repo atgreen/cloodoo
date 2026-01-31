@@ -121,10 +121,16 @@
                      (llog:warn "Failed to parse client time" :error (princ-to-string e)))))
 
                ;; Get pending changes to send (only current versions, not historical)
-               (let* ((rows (db-load-current-rows-since (if (plusp (length since))
-                                                            since
-                                                            "1970-01-01T00:00:00Z")))
+               (let* ((effective-since (if (plusp (length since))
+                                           since
+                                           "1970-01-01T00:00:00Z"))
+                      (rows (db-load-current-rows-since effective-since))
                       (pending-count (length rows)))
+                 (format t "~&[SYNC-INIT] device=~A since=~S effective=~S pending=~D~%"
+                         device-id since effective-since pending-count)
+                 (force-output)
+                 (llog:info "Sync init" :device-id device-id :since since
+                            :effective-since effective-since :pending pending-count)
                  (when *sync-debug* (format t "~&[SYNC-DEBUG] Pending changes to send: ~D~%" pending-count))
 
                  ;; Send SyncAck
