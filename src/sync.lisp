@@ -154,6 +154,20 @@
                        (error (e)
                          (llog:error "Failed to send change" :error (princ-to-string e))
                          (return-from sync-handler)))))
+
+                 ;; Send all settings
+                 (let ((settings-hash (db-load-all-settings)))
+                   (when (> (hash-table-count settings-hash) 0)
+                     (let ((settings-msg (make-sync-settings-message (get-device-id) settings-hash)))
+                       (when *sync-debug*
+                         (format t "~&[SYNC-DEBUG] Sending ~D settings~%"
+                                 (hash-table-count settings-hash)))
+                       (handler-case
+                           (ag-grpc:stream-send stream settings-msg)
+                         (error (e)
+                           (llog:error "Failed to send settings" :error (princ-to-string e))
+                           (return-from sync-handler))))))
+
                  (when *sync-debug*
                    (format t "~&[SYNC-DEBUG] All pending changes sent. Entering receive loop.~%")
                    (force-output))
@@ -246,7 +260,35 @@
                               ;; Delete locally
                               (db-delete-todo todo-id)
                               ;; Broadcast to other clients
-                              (broadcast-change msg device-id))))))))))))
+                              (broadcast-change msg device-id))))))
+
+                    (when (eql (proto-msg-case msg) :settings-change)
+                      (let* ((settings-change (proto-msg-settings-change msg))
+                             (origin-device-id (proto-settings-change-device-id settings-change))
+                             (settings-list (proto-settings-change-settings settings-change)))
+                        (when *sync-debug*
+                          (format t "~&[SYNC-DEBUG] Received settings change from ~A with ~D settings~%"
+                                  origin-device-id (length settings-list)))
+                        ;; Process each setting with last-write-wins conflict resolution
+                        (dolist (setting-data settings-list)
+                          (let* ((key (proto-key setting-data))
+                                 (value (proto-value setting-data))
+                                 (updated-at (proto-updated-at setting-data))
+                                 (current-setting (db-load-setting key)))
+                            ;; Only update if incoming timestamp is newer or setting doesn't exist
+                            (when (or (null current-setting)
+                                     (string< (or (getf (gethash key (db-load-all-settings)) :updated-at) "")
+                                             updated-at))
+                              (when *sync-debug*
+                                (format t "~&[SYNC-DEBUG] Updating setting ~A~%" key))
+                              ;; Save with the incoming timestamp to preserve causality
+                              (with-db (db)
+                                (sqlite:execute-non-query db
+                                  "INSERT OR REPLACE INTO app_settings (key, value, updated_at)
+                                   VALUES (?, ?, ?)"
+                                  key value updated-at)))))
+                        ;; Broadcast to other clients (excluding sender)
+                        (broadcast-change msg origin-device-id))))))))) ; close loop, let (pending changes), block
 
       ;; Cleanup on exit
       (when *sync-debug*
@@ -339,6 +381,7 @@
     ;; Register change hooks so local TUI changes are broadcast to sync clients
     (setf *todo-change-hook* #'notify-todo-changed)
     (setf *todo-delete-hook* #'notify-todo-deleted)
+    (setf *settings-change-hook* #'notify-settings-changed)
 
     ;; Initialize enrichment for automatic TODO enrichment
     (when *enrichment-enabled*
@@ -375,6 +418,7 @@
     ;; Unregister change hooks
     (setf *todo-change-hook* nil)
     (setf *todo-delete-hook* nil)
+    (setf *settings-change-hook* nil)
     ;; Stop the server
     (handler-case
         (ag-grpc:server-stop *grpc-server*)
@@ -400,6 +444,16 @@
    Call this when a todo is deleted locally."
   (when *connected-clients*
     (let ((msg (make-sync-delete-message (get-device-id) todo-id)))
+      (broadcast-change msg))))
+
+(defun notify-settings-changed (key value)
+  "Notify all connected sync clients about a setting change.
+   Call this when a setting is modified locally."
+  (declare (ignore key))  ; We send all settings for simplicity
+  (declare (ignore value))
+  (when *connected-clients*
+    (let* ((settings-hash (db-load-all-settings))
+           (msg (make-sync-settings-message (get-device-id) settings-hash)))
       (broadcast-change msg))))
 
 ;;══════════════════════════════════════════════════════════════════════════════

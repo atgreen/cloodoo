@@ -244,7 +244,15 @@
       (when (zerop count)
         (dotimes (i 10)
           (sqlite:execute-non-query db
-            "INSERT INTO tag_presets (slot, tags) VALUES (?, NULL)" i)))))
+            "INSERT INTO tag_presets (slot, tags) VALUES (?, NULL)" i))))
+
+    ;; App settings table for user context and other settings
+    (sqlite:execute-non-query db
+      "CREATE TABLE IF NOT EXISTS app_settings (
+         key TEXT PRIMARY KEY,
+         value TEXT,
+         updated_at TEXT NOT NULL
+       )"))
   t)
 
 ;;── Timestamp Helpers ─────────────────────────────────────────────────────────
@@ -363,6 +371,52 @@
                   FROM attachments WHERE hash = ?" hash)))
       (when row
         (values-list row)))))
+
+;;── App Settings Storage ──────────────────────────────────────────────────────
+
+(defun db-load-setting (key)
+  "Load a setting by KEY from the database, returning its value or NIL."
+  (with-db (db)
+    (sqlite:execute-single db
+      "SELECT value FROM app_settings WHERE key = ?" key)))
+
+(defun db-save-setting (key value)
+  "Save a SETTING with KEY and VALUE, auto-timestamping."
+  (with-db (db)
+    (sqlite:execute-non-query db
+      "INSERT OR REPLACE INTO app_settings (key, value, updated_at)
+       VALUES (?, ?, ?)"
+      key value (now-iso))))
+
+(defun db-load-all-settings ()
+  "Return all settings as a hash table."
+  (with-db (db)
+    (let ((ht (make-hash-table :test 'equal))
+          (rows (sqlite:execute-to-list db
+                  "SELECT key, value, updated_at FROM app_settings")))
+      (dolist (row rows)
+        (destructuring-bind (key value updated-at) row
+          (setf (gethash key ht)
+                (list :value value :updated-at updated-at))))
+      ht)))
+
+(defun migrate-user-context-to-db ()
+  "One-time migration of context.txt from file to database.
+   Renames the file to context.txt.migrated after successful migration."
+  (let ((context-file (merge-pathnames "context.txt" (config-directory))))
+    (when (probe-file context-file)
+      ;; Check if already migrated
+      (unless (db-load-setting "user_context")
+        (let ((content (uiop:read-file-string context-file)))
+          (when (and content (> (length content) 0))
+            ;; Save to database
+            (db-save-setting "user_context" content)
+            ;; Rename file
+            (let ((backup-file (merge-pathnames "context.txt.migrated"
+                                               (config-directory))))
+              (rename-file context-file backup-file)
+              (format t "~&Migrated user context to database (backup: ~A)~%"
+                      backup-file))))))))
 
 ;;── Row to TODO Conversion ────────────────────────────────────────────────────
 
@@ -707,7 +761,9 @@
          (migrate-json-to-db))
         ;; Neither exists - create fresh database
         (t
-         (init-db))))))
+         (init-db))))
+    ;; Always attempt user context migration (idempotent)
+    (migrate-user-context-to-db)))
 
 ;;── Redefine Storage Functions to Use SQLite ──────────────────────────────────
 
@@ -757,6 +813,29 @@
   "Save tag presets to SQLite database."
   (ensure-db-initialized)
   (db-save-presets presets))
+
+;; User context - redefine to use database
+(defvar *settings-change-hook* nil
+  "Function to call when a setting changes. Called with (key value).
+   Used by sync server to broadcast settings changes to connected clients.")
+
+(defun load-user-context ()
+  "Load the user context from the database.
+   Falls back to default template if not present."
+  (ensure-db-initialized)
+  (or (db-load-setting "user_context")
+      *default-user-context*))
+
+(defun save-user-context (content)
+  "Save user context to database and notify sync clients."
+  (ensure-db-initialized)
+  (db-save-setting "user_context" content)
+  ;; Notify sync clients
+  (when (and *settings-change-hook* (not *suppress-change-notifications*))
+    (handler-case
+        (funcall *settings-change-hook* "user_context" content)
+      (error (e)
+        (llog:warn "Settings change notification failed: ~A" e)))))
 
 ;; Time-travel API
 (defun load-todos-at (timestamp)

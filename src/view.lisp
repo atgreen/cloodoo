@@ -1095,7 +1095,7 @@
                   ("" . ""))))
          (col4 (render-help-column "OTHER"
                 '(("i" . "Import org")
-                  ("u" . "User context")
+                  ("U" . "Edit context")
                   ("?" . "This help")
                   ("q" . "Quit")
                   ("" . "Datepicker:")

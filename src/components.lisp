@@ -282,7 +282,7 @@
 ;;; Help bar at bottom
 (defun render-help-bar (&optional width)
   "Render the bottom help bar."
-  (let* ((help "F1:Help │ ↑↓:Navigate │ Enter:View │ Space:Done │ A:Add │ E:Edit │ DEL:Del │ /:Search │ Q:Quit")
+  (let* ((help "F1:Help │ ↑↓:Navigate │ Enter:View │ Space:Done │ A:Add │ E:Edit │ U:Context │ DEL:Del │ /:Search │ Q:Quit")
          (w (or width (length help))))
     (tui:colored
      (format nil "~A~A"

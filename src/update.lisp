@@ -13,6 +13,13 @@
 (defconstant +list-top-lines+ 2
   "Number of lines above the list viewport (title and date header).")
 
+;;── Global TUI Program Reference ──────────────────────────────────────────────
+
+(defvar *tui-program-ref* nil
+  "Reference to the TUI program for forcing redraws after exec-cmd callbacks.
+   This is a workaround for tuition library issue where exec-cmd callbacks
+   don't trigger immediate redraws.")
+
 ;;── Application State (Model) ──────────────────────────────────────────────────
 
 (defclass app-model ()
@@ -928,6 +935,10 @@
        (tui.textinput:textinput-set-value (model-search-input model) (model-search-query model))
        (tui.textinput:textinput-focus (model-search-input model))
        (values model nil))
+
+      ;; Edit user context (U) - opens external editor
+      ((and (characterp key) (char= key #\U))
+       (values model (make-user-context-editor-cmd)))
 
       ;; Set priority B=Medium, C=Low (org-mode style)
       ;; Note: A is now used for add-child
@@ -2338,6 +2349,66 @@
           (save-todo todo)
           (llog:info "Updated todo notes" :todo-id todo-id))))
     (values model nil)))
+
+(defclass user-context-editor-complete-msg ()
+  ((new-text
+    :initarg :new-text
+    :accessor user-context-msg-new-text
+    :documentation "The edited user context text."))
+  (:documentation "Message sent when external user context editor completes."))
+
+(defmethod tui:update-message ((model app-model) (msg user-context-editor-complete-msg))
+  "Handle user context editor completion by saving to database."
+  (let ((new-text (user-context-msg-new-text msg)))
+    (when new-text
+      (save-user-context new-text)
+      (setf (model-status-message model) "User context saved")
+      (llog:info "Updated user context"))
+    ;; WORKAROUND: Clear renderer cache to force redraw after exec-cmd
+    ;; The exec-cmd clears the screen but the renderer thinks nothing changed
+    (when *tui-program-ref*
+      (handler-case
+          (let ((renderer (tui::program-renderer *tui-program-ref*)))
+            (setf (tui::last-output renderer) ""))
+        (error (e)
+          (llog:warn "Failed to clear renderer cache" :error e))))
+    (values model nil)))
+
+(defun make-user-context-editor-cmd ()
+  "Create an exec-cmd that opens an external editor for editing user context.
+   Uses exec-cmd for proper TUI suspension."
+  (llog:info "Creating user context editor command")
+  (ensure-cache-directory)
+  (let* ((editor (get-editor))
+         (current-text (load-user-context))
+         (temp-file (merge-pathnames
+                     (format nil "cloodoo-context-~A.md" (get-universal-time))
+                     (cache-directory))))
+    ;; Write current context to temp file
+    (with-open-file (stream temp-file
+                            :direction :output
+                            :if-exists :supersede
+                            :if-does-not-exist :create)
+      (when current-text
+        (write-string current-text stream)))
+    ;; Return exec-cmd with callback to read result
+    (tui:make-exec-cmd editor
+                       :args (list (namestring temp-file))
+                       :callback (lambda ()
+                                   (llog:info "User context editor callback - reading result")
+                                   (handler-case
+                                       (let ((result (uiop:read-file-string temp-file)))
+                                         ;; Clean up temp file
+                                         (when (probe-file temp-file)
+                                           (delete-file temp-file))
+                                         ;; Return result
+                                         (make-instance 'user-context-editor-complete-msg
+                                                        :new-text result))
+                                     (error (e)
+                                       (llog:warn "Error reading user context editor result" :error (princ-to-string e))
+                                       (when (probe-file temp-file)
+                                         (delete-file temp-file))
+                                       nil))))))
 
 (defun make-detail-notes-editor-cmd (todo-id current-text)
   "Create an exec-cmd that opens an external editor for editing a todo's notes directly.

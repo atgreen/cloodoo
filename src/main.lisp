@@ -54,6 +54,8 @@
       (handler-bind ((warning #'muffle-warning))
         (let* ((model (make-initial-model))
                (program (tui:make-program model :alt-screen t :mouse :cell-motion)))
+          ;; Set global program reference for exec-cmd workaround
+          (setf *tui-program-ref* program)
           (if sync-host
               ;; Auto-connect to paired sync server
               (let ((cert-path (namestring (paired-client-cert-file sync-server-id)))
@@ -65,12 +67,17 @@
                                    :client-key key-path)
                 (unwind-protect
                      (tui:run program)
-                  (stop-sync-client)))
+                  (stop-sync-client)
+                  (setf *tui-program-ref* nil)))
               ;; No sync config — run TUI without sync
-              (tui:run program))))
+              (unwind-protect
+                  (tui:run program)
+                (setf *tui-program-ref* nil)))))
       #-sbcl
       (let* ((model (make-initial-model))
              (program (tui:make-program model :alt-screen t :mouse :cell-motion)))
+        ;; Set global program reference for exec-cmd workaround
+        (setf *tui-program-ref* program)
         (if sync-host
             (let ((cert-path (namestring (paired-client-cert-file sync-server-id)))
                   (key-path (namestring (paired-client-key-file sync-server-id))))
@@ -81,8 +88,11 @@
                                  :client-key key-path)
               (unwind-protect
                    (tui:run program)
-                (stop-sync-client)))
-            (tui:run program))))))
+                (stop-sync-client)
+                (setf *tui-program-ref* nil)))
+            (unwind-protect
+                (tui:run program)
+              (setf *tui-program-ref* nil)))))))
 
 ;;── Entry Point ────────────────────────────────────────────────────────────────
 

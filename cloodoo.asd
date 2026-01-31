@@ -42,6 +42,7 @@
                              (:file "db")
                              (:file "certs")
                              (:file "enrich")
+                             (:file "export")
                              (:file "update")
                              (:file "components")
                              (:file "view")

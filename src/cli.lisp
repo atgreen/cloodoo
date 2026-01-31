@@ -1549,6 +1549,196 @@ URL format: http://HOST:PORT/pair/TOKEN"
                                                         (second (first browser-dirs))))))
                   (format t "~%Restart your browser for changes to take effect.~%"))))))
 
+;;── Export Command ─────────────────────────────────────────────────────────────
+
+(defun make-export-command ()
+  "Create the 'export' subcommand for exporting TODOs to text or PDF."
+  (let ((output-opt (clingon:make-option
+                     :filepath
+                     :short-name #\o
+                     :long-name "output"
+                     :key :output
+                     :description "Output file path (default: agenda.txt or agenda.pdf)"))
+        (pdf-opt (clingon:make-option
+                  :flag
+                  :long-name "pdf"
+                  :key :pdf
+                  :description "Export to PDF instead of text"))
+        (by-tag-opt (clingon:make-option
+                     :flag
+                     :short-name #\t
+                     :long-name "by-tag"
+                     :key :by-tag
+                     :description "Group by tags instead of by date"))
+        (title-opt (clingon:make-option
+                    :string
+                    :long-name "title"
+                    :key :title
+                    :initial-value "Week-agenda"
+                    :description "Title for the agenda"))
+        (status-opt (clingon:make-option
+                     :string
+                     :short-name #\s
+                     :long-name "status"
+                     :key :status
+                     :description "Filter by status: pending, in-progress, completed"))
+        (priority-opt (clingon:make-option
+                       :string
+                       :short-name #\p
+                       :long-name "priority"
+                       :key :priority
+                       :description "Filter by priority: high, medium, low"))
+        (all-opt (clingon:make-option
+                  :flag
+                  :short-name #\a
+                  :long-name "all"
+                  :key :all
+                  :description "Include completed TODOs")))
+    (clingon:make-command
+     :name "export"
+     :description "Export TODOs in org-agenda format (text or PDF)"
+     :options (list output-opt pdf-opt by-tag-opt title-opt status-opt priority-opt all-opt)
+     :handler (lambda (cmd)
+                (let* ((output (clingon:getopt cmd :output))
+                       (pdf-mode (clingon:getopt cmd :pdf))
+                       (by-tag (clingon:getopt cmd :by-tag))
+                       (title (clingon:getopt cmd :title))
+                       (status-filter (clingon:getopt cmd :status))
+                       (priority-filter (clingon:getopt cmd :priority))
+                       (show-all (clingon:getopt cmd :all))
+                       (todos (load-todos))
+                       (filtered todos))
+
+                  ;; Apply filters
+                  (when status-filter
+                    (let ((status-key (intern (string-upcase status-filter) :keyword)))
+                      (setf filtered (remove-if-not
+                                     (lambda (item) (eq (todo-status item) status-key))
+                                     filtered))))
+                  (when priority-filter
+                    (let ((priority-key (intern (string-upcase priority-filter) :keyword)))
+                      (setf filtered (remove-if-not
+                                     (lambda (item) (eq (todo-priority item) priority-key))
+                                     filtered))))
+
+                  ;; Unless --all, hide completed by default
+                  (unless show-all
+                    (setf filtered (remove-if
+                                   (lambda (item) (eql (todo-status item) :completed))
+                                   filtered)))
+
+                  ;; Determine output file
+                  (let ((output-file (or output
+                                       (if pdf-mode "agenda.pdf" "agenda.txt"))))
+
+                    ;; Export
+                    (cond
+                      (pdf-mode
+                       ;; PDF export
+                       (if (export-todos-pdf filtered output-file :title title :by-tag by-tag)
+                           (format t "~A Exported ~D TODO~:P to ~A~%"
+                                  (tui:colored "✓" :fg tui:*fg-green*)
+                                  (length filtered)
+                                  output-file)
+                           (progn
+                             (format t "~A No PDF converter found (wkhtmltopdf, pandoc, or enscript).~%"
+                                    (tui:colored "✗" :fg tui:*fg-red*))
+                             (format t "  Falling back to text export...~%")
+                             (let ((text-file (format nil "~A.txt" (pathname-name output-file))))
+                               (with-open-file (stream text-file :direction :output :if-exists :supersede)
+                                 (export-todos-text filtered :stream stream :title title :by-tag by-tag))
+                               (format t "~A Exported ~D TODO~:P to ~A~%"
+                                      (tui:colored "✓" :fg tui:*fg-green*)
+                                      (length filtered)
+                                      text-file)))))
+                      (t
+                       ;; Text export
+                       (with-open-file (stream output-file :direction :output :if-exists :supersede)
+                         (export-todos-text filtered :stream stream :title title :by-tag by-tag))
+                       (format t "~A Exported ~D TODO~:P to ~A~%"
+                              (tui:colored "✓" :fg tui:*fg-green*)
+                              (length filtered)
+                              output-file)))))))))
+
+;;── Context Commands ──────────────────────────────────────────────────────────
+
+(defun make-context-show-command ()
+  "Create the 'context show' subcommand."
+  (clingon:make-command
+   :name "show"
+   :description "Display current user context"
+   :handler (lambda (cmd)
+              (declare (ignore cmd))
+              (let ((context (load-user-context)))
+                (if context
+                    (progn
+                      (format t "~%~A~%~%" (tui:bold "User Context:"))
+                      (format t "~A~%" context))
+                    (format t "~%No user context configured.~%"))))))
+
+(defun make-context-edit-command ()
+  "Create the 'context edit' subcommand."
+  (clingon:make-command
+   :name "edit"
+   :description "Edit user context in $EDITOR"
+   :handler (lambda (cmd)
+              (declare (ignore cmd))
+              (let* ((editor (or (uiop:getenv "EDITOR") "vi"))
+                     (temp-file (merge-pathnames "cloodoo-context-edit.txt"
+                                                (uiop:temporary-directory)))
+                     (current-context (load-user-context)))
+                ;; Write current context to temp file
+                (with-open-file (out temp-file :direction :output
+                                     :if-exists :supersede)
+                  (write-string (or current-context *default-user-context*) out))
+                ;; Open in editor
+                (let ((status (uiop:run-program (list editor (namestring temp-file))
+                                                :ignore-error-status t)))
+                  (if (zerop status)
+                      (progn
+                        ;; Read back and save
+                        (let ((new-context (uiop:read-file-string temp-file)))
+                          (save-user-context new-context)
+                          (format t "~A User context saved~%"
+                                  (tui:colored "✓" :fg tui:*fg-green*)))
+                        ;; Clean up temp file
+                        (when (probe-file temp-file)
+                          (delete-file temp-file)))
+                      (format t "~A Editor exited with error~%"
+                              (tui:colored "✗" :fg tui:*fg-red*))))))))
+
+(defun make-context-set-command ()
+  "Create the 'context set' subcommand."
+  (clingon:make-command
+   :name "set"
+   :description "Set user context from command line"
+   :usage "<text>"
+   :handler (lambda (cmd)
+              (let ((args (clingon:command-arguments cmd)))
+                (if args
+                    (let ((text (format nil "~{~A~^ ~}" args)))
+                      (save-user-context text)
+                      (format t "~A User context set~%"
+                              (tui:colored "✓" :fg tui:*fg-green*)))
+                    (progn
+                      (format t "~A Error: no text provided~%"
+                              (tui:colored "✗" :fg tui:*fg-red*))
+                      (format t "Usage: cloodoo context set <text>~%")))))))
+
+(defun make-context-command ()
+  "Create the 'context' command with subcommands."
+  (clingon:make-command
+   :name "context"
+   :description "Manage user context for LLM enrichment"
+   :usage "[show|edit|set]"
+   :handler (lambda (cmd)
+              ;; Default: show context
+              (let ((show-cmd (make-context-show-command)))
+                (funcall (clingon:command-handler show-cmd) show-cmd)))
+   :sub-commands (list (make-context-show-command)
+                       (make-context-edit-command)
+                       (make-context-set-command))))
+
 (defun make-app ()
   "Create and return the command-line application."
   (clingon:make-command
@@ -1566,8 +1756,10 @@ URL format: http://HOST:PORT/pair/TOKEN"
                        (make-list-command)
                        (make-done-command)
                        (make-stats-command)
+                       (make-export-command)
                        (make-dump-command)
                        (make-compact-command)
+                       (make-context-command)
                        (make-sync-server-command)
                        (make-sync-connect-command)
                        (make-cert-command)

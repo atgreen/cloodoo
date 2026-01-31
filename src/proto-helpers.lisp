@@ -85,10 +85,29 @@
     (setf (msg-case msg) :change)
     msg))
 
+(defun make-sync-settings-message (device-id settings-hash)
+  "Create a SyncMessage with SettingsChange payload.
+   SETTINGS-HASH is a hash table with keys mapped to (:value val :updated-at timestamp)."
+  (let* ((settings-data-list
+           (loop for key being the hash-keys of settings-hash
+                   using (hash-value data)
+                 collect (make-instance 'proto-settings-data
+                                       :key key
+                                       :value (getf data :value)
+                                       :updated-at (getf data :updated-at))))
+         (settings-change (make-instance 'proto-settings-change
+                                        :device-id device-id
+                                        :timestamp (now-iso)
+                                        :settings settings-data-list))
+         (msg (make-instance 'proto-sync-message)))
+    (setf (proto-settings-change msg) settings-change)
+    (setf (msg-case msg) :settings-change)
+    msg))
+
 ;;── Message Type Detection ────────────────────────────────────────────────────
 
 (defun proto-msg-case (sync-message)
-  "Return which variant is set in a SyncMessage (:init, :ack, or :change)."
+  "Return which variant is set in a SyncMessage (:init, :ack, :change, or :settings-change)."
   (msg-case sync-message))
 
 ;;── Message Field Accessors ───────────────────────────────────────────────────
@@ -154,6 +173,24 @@
 (defun proto-init-client-time (sync-init)
   "Get client-time from SyncInit."
   (proto-client-time sync-init))
+
+;;── SettingsChange Accessors ──────────────────────────────────────────────────
+
+(defun proto-msg-settings-change (sync-message)
+  "Extract the SettingsChange from a SyncMessage."
+  (proto-settings-change sync-message))
+
+(defun proto-settings-change-device-id (settings-change)
+  "Get device-id from SettingsChange."
+  (proto-device-id settings-change))
+
+(defun proto-settings-change-timestamp (settings-change)
+  "Get timestamp from SettingsChange."
+  (proto-timestamp settings-change))
+
+(defun proto-settings-change-settings (settings-change)
+  "Get settings list from SettingsChange."
+  (proto-settings settings-change))
 
 ;;── TodoData Conversion ────────────────────────────────────────────────────────
 
