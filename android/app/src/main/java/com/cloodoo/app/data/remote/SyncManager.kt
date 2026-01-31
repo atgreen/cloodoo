@@ -181,6 +181,21 @@ class SyncManager(
     }
 
     /**
+     * Send a settings change to the server.
+     * Currently does not queue if disconnected - settings sync is best-effort.
+     */
+    suspend fun sendSettingsChange(key: String, value: String, updatedAt: String) {
+        val client = grpcClient
+        if (client == null || _connectionState.value != ConnectionState.CONNECTED) {
+            Log.d(TAG, "Not connected, skipping settings sync for $key")
+            return
+        }
+
+        client.sendSettingsChange(deviceId, key, value, updatedAt)
+        Log.d(TAG, "Sent settings change: $key")
+    }
+
+    /**
      * Drain the pending sync queue after reconnecting.
      * For upserts, looks up the current TodoEntity and sends it.
      * For deletes, sends the delete ID.
@@ -278,6 +293,15 @@ class SyncManager(
                 }
             }
 
+            SyncMessage.MsgCase.SETTINGS_CHANGE -> {
+                val settingsChange = message.settingsChange
+                Log.d(TAG, "Received settings change from ${settingsChange.deviceId}")
+
+                for (setting in settingsChange.settingsList) {
+                    handleRemoteSettingsChange(setting)
+                }
+            }
+
             else -> {
                 Log.w(TAG, "Unknown message type: ${message.msgCase}")
             }
@@ -310,6 +334,28 @@ class SyncManager(
             todoDao.markSuperseded(todoId, timestamp)
             Log.d(TAG, "Applied remote delete for $todoId")
             _syncEvents.emit(SyncEvent.Received(todoId, SyncEventType.DELETE))
+        }
+    }
+
+    private suspend fun handleRemoteSettingsChange(settingsData: SettingsData) {
+        val key = settingsData.key
+        val value = settingsData.value
+        val updatedAt = settingsData.updatedAt
+
+        // Check if we should update (last-write-wins based on timestamp)
+        val appSettingsDao = database.appSettingsDao()
+        val existing = appSettingsDao.getSetting(key)
+
+        if (existing == null || existing.updatedAt < updatedAt) {
+            val entity = com.cloodoo.app.data.local.AppSettingsEntity(
+                key = key,
+                value = value,
+                updatedAt = updatedAt
+            )
+            appSettingsDao.insertSetting(entity)
+            Log.d(TAG, "Updated setting: $key")
+        } else {
+            Log.d(TAG, "Ignoring older settings change for $key")
         }
     }
 

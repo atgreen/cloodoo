@@ -166,6 +166,32 @@ class GrpcSyncClient(
     }
 
     /**
+     * Send settings changes to the server.
+     */
+    fun sendSettingsChange(deviceId: String, key: String, value: String, updatedAt: String) {
+        val settingsData = SettingsData.newBuilder()
+            .setKey(key)
+            .setValue(value)
+            .setUpdatedAt(updatedAt)
+            .build()
+
+        val settingsChange = SettingsChange.newBuilder()
+            .setDeviceId(deviceId)
+            .setTimestamp(java.time.ZonedDateTime.now().format(
+                java.time.format.DateTimeFormatter.ISO_OFFSET_DATE_TIME
+            ))
+            .addSettings(settingsData)
+            .build()
+
+        val message = SyncMessage.newBuilder()
+            .setSettingsChange(settingsChange)
+            .build()
+
+        requestObserver?.onNext(message)
+        Log.d(TAG, "Sent settings change: $key")
+    }
+
+    /**
      * Disconnect from the server.
      */
     fun disconnect() {

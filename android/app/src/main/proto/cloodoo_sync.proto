@@ -47,6 +47,20 @@ message TodoChange {
   }
 }
 
+// App settings data (key-value pairs)
+message SettingsData {
+  string key = 1;
+  string value = 2;
+  string updated_at = 3;  // ISO 8601
+}
+
+// Settings change event
+message SettingsChange {
+  string device_id = 1;
+  string timestamp = 2;  // When this change occurred (ISO 8601)
+  repeated SettingsData settings = 3;
+}
+
 // Sent by client to initiate sync
 message SyncInit {
   string device_id = 1;
@@ -67,6 +81,7 @@ message SyncMessage {
     SyncInit init = 1;
     SyncAck ack = 2;
     TodoChange change = 3;
+    SettingsChange settings_change = 4;
   }
 }
 

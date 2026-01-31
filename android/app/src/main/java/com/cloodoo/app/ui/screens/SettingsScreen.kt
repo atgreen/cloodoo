@@ -8,6 +8,7 @@ package com.cloodoo.app.ui.screens
 
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.CloudOff
 import androidx.compose.material3.*
@@ -28,8 +29,10 @@ fun SettingsScreen(
     var serverAddress by remember { mutableStateOf(certificateManager.getServerAddress() ?: "") }
     var serverPort by remember { mutableStateOf(certificateManager.getServerPort().toString()) }
     var showUnpairConfirmation by remember { mutableStateOf(false) }
+    var showContextEditor by remember { mutableStateOf(false) }
 
     val connectionState by viewModel.connectionState.collectAsState()
+    val userContext by viewModel.userContext.collectAsState()
     val deviceName = certificateManager.getDeviceName() ?: "Unknown"
 
     Column(
@@ -143,6 +146,48 @@ fun SettingsScreen(
             }
         }
 
+        // Enrichment section
+        Text(
+            text = "Enrichment",
+            style = MaterialTheme.typography.titleMedium,
+            color = MaterialTheme.colorScheme.primary
+        )
+        Card(modifier = Modifier.fillMaxWidth()) {
+            Column(
+                modifier = Modifier.padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Text(
+                    text = "User Context",
+                    style = MaterialTheme.typography.bodyLarge
+                )
+                Text(
+                    text = if (userContext.isBlank()) {
+                        "Not set"
+                    } else {
+                        val preview = userContext.take(60)
+                        if (userContext.length > 60) "$preview..." else preview
+                    },
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(vertical = 4.dp)
+                )
+                if (userContext.isNotBlank()) {
+                    Text(
+                        text = "${userContext.length} characters",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                Button(
+                    onClick = { showContextEditor = true },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(if (userContext.isBlank()) "Set Context" else "Edit Context")
+                }
+            }
+        }
+
         // Account section
         Text(
             text = "Account",
@@ -186,6 +231,117 @@ fun SettingsScreen(
             },
             dismissButton = {
                 TextButton(onClick = { showUnpairConfirmation = false }) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
+
+    // User Context Editor Dialog
+    if (showContextEditor) {
+        UserContextEditorDialog(
+            initialContext = userContext,
+            onDismiss = { showContextEditor = false },
+            onSave = { newContext ->
+                viewModel.saveUserContext(newContext)
+                showContextEditor = false
+            }
+        )
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun UserContextEditorDialog(
+    initialContext: String,
+    onDismiss: () -> Unit,
+    onSave: (String) -> Unit
+) {
+    var editedContext by remember { mutableStateOf(initialContext) }
+    var showUnsavedWarning by remember { mutableStateOf(false) }
+    val hasUnsavedChanges = editedContext != initialContext
+
+    fun handleDismiss() {
+        if (hasUnsavedChanges) {
+            showUnsavedWarning = true
+        } else {
+            onDismiss()
+        }
+    }
+
+    androidx.compose.ui.window.Dialog(
+        onDismissRequest = { handleDismiss() },
+        properties = androidx.compose.ui.window.DialogProperties(
+            usePlatformDefaultWidth = false,
+            dismissOnBackPress = false
+        )
+    ) {
+        Scaffold(
+            topBar = {
+                TopAppBar(
+                    title = { Text("User Context") },
+                    navigationIcon = {
+                        IconButton(onClick = { handleDismiss() }) {
+                            Icon(
+                                imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                                contentDescription = "Cancel"
+                            )
+                        }
+                    },
+                    actions = {
+                        TextButton(
+                            onClick = { onSave(editedContext) },
+                            enabled = hasUnsavedChanges
+                        ) {
+                            Text("SAVE")
+                        }
+                    },
+                    colors = TopAppBarDefaults.topAppBarColors(
+                        containerColor = MaterialTheme.colorScheme.surface
+                    )
+                )
+            }
+        ) { paddingValues ->
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(paddingValues)
+            ) {
+                OutlinedTextField(
+                    value = editedContext,
+                    onValueChange = { editedContext = it },
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(16.dp),
+                    placeholder = { Text("Enter context for LLM enrichment...\n\nExample:\n- I'm a software developer\n- I prefer concise descriptions\n- Tag work items with 'work'") },
+                    textStyle = MaterialTheme.typography.bodyMedium,
+                    colors = OutlinedTextFieldDefaults.colors(
+                        unfocusedContainerColor = MaterialTheme.colorScheme.surface,
+                        focusedContainerColor = MaterialTheme.colorScheme.surface
+                    )
+                )
+            }
+        }
+    }
+
+    // Unsaved changes warning dialog
+    if (showUnsavedWarning) {
+        AlertDialog(
+            onDismissRequest = { showUnsavedWarning = false },
+            title = { Text("Unsaved Changes") },
+            text = { Text("You have unsaved changes. Discard them?") },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        showUnsavedWarning = false
+                        onDismiss()
+                    }
+                ) {
+                    Text("Discard")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showUnsavedWarning = false }) {
                     Text("Cancel")
                 }
             }

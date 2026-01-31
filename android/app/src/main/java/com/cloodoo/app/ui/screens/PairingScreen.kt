@@ -173,8 +173,7 @@ fun PairingScreen(
                                 label = { Text("Passphrase") },
                                 placeholder = { Text("tiger-blue-forest-alpha") },
                                 modifier = Modifier.fillMaxWidth(),
-                                singleLine = true,
-                                visualTransformation = PasswordVisualTransformation()
+                                singleLine = true
                             )
 
                             Spacer(modifier = Modifier.height(8.dp))
@@ -227,8 +226,7 @@ fun PairingScreen(
                         label = { Text("Passphrase") },
                         placeholder = { Text("tiger-blue-forest-alpha") },
                         modifier = Modifier.fillMaxWidth(),
-                        singleLine = true,
-                        visualTransformation = PasswordVisualTransformation()
+                        singleLine = true
                     )
 
                     Spacer(modifier = Modifier.height(8.dp))

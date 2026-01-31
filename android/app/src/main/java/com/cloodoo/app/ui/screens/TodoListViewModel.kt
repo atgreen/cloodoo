@@ -12,6 +12,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
+import com.cloodoo.app.data.local.AppSettingsEntity
 import com.cloodoo.app.data.local.CloodooDatabase
 import com.cloodoo.app.data.local.TodoEntity
 import com.cloodoo.app.data.remote.ConnectionState
@@ -331,6 +332,34 @@ class TodoListViewModel(
         prefs.edit()
             .putString("last_sync_time", _lastSyncTime.value)
             .apply()
+    }
+
+    // User Context (Enrichment) methods
+    private val _userContext = MutableStateFlow("")
+    val userContext: StateFlow<String> = _userContext.asStateFlow()
+
+    init {
+        // Load user context from database
+        viewModelScope.launch {
+            database.appSettingsDao().getSettingFlow("user_context").collect { setting ->
+                _userContext.value = setting?.value ?: ""
+            }
+        }
+    }
+
+    fun saveUserContext(context: String) {
+        viewModelScope.launch {
+            val now = DateTimeFormatter.ISO_INSTANT.format(ZonedDateTime.now().toInstant())
+            val setting = AppSettingsEntity(
+                key = "user_context",
+                value = context,
+                updatedAt = now
+            )
+            database.appSettingsDao().insertSetting(setting)
+
+            // Broadcast to sync server
+            syncManager.sendSettingsChange("user_context", context, now)
+        }
     }
 
     class Factory(
