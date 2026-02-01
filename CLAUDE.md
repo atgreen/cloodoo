@@ -24,14 +24,19 @@ make clean
 ```
 
 ### Android App
+
+**Requirements**: Java 21 (JDK 21). The Makefile automatically detects and uses Java 21 if available at `/usr/lib/jvm/java-21-openjdk`.
+
 ```sh
-# Build APK
+# Build APK (requires Java 21)
 make android
 # or:
-cd android && ./gradlew assembleDebug
+cd android && JAVA_HOME=/usr/lib/jvm/java-21-openjdk ./gradlew assembleDebug
 
 # Install to device (optionally set DEVICE=<device-id>)
 make android-install
+
+# Note: If adb is not in PATH, ensure ~/Android/Sdk/platform-tools is in your PATH
 ```
 
 ### GNOME Extension
@@ -137,6 +142,45 @@ Load order defined in `cloodoo.asd`:
 - **Dialog**: `zenity` for metadata input (title, priority, tags)
 - **Storage**: Calls `cloodoo add --attachment <path>` which stores screenshot in content-addressed `attachments` table (SHA256 hash deduplication)
 - **No daemon**: Direct CLI invocation, no background service
+
+### Export to org-agenda Format
+
+Cloodoo can export TODOs in org-agenda style (similar to Emacs org-mode agenda views):
+
+```sh
+# Export to text (org-agenda format)
+./cloodoo export -o agenda.txt
+
+# Export to PDF
+./cloodoo export --pdf -o agenda.pdf
+
+# Group by tags instead of by date
+./cloodoo export --by-tag -o by-tag.txt
+
+# Filter by status or priority
+./cloodoo export --status pending --priority high -o urgent.txt
+
+# Include completed tasks (hidden by default)
+./cloodoo export --all -o full-agenda.txt
+```
+
+**Text output format:**
+- Week header with ISO week numbers (e.g., `Week-agenda (W05-W06):`)
+- Tasks grouped by date or tag
+- Overdue indicators (e.g., `Sched.232x:` for 232 days overdue)
+- Priority markers ([#A], [#B], [#C])
+- Status keywords (TODO, DOING, DONE, WAITING, CANCELLED)
+- Footer with statistics (total, completed, overdue counts)
+
+**PDF conversion:**
+- Requires one of: `pandoc` (with pdflatex), `wkhtmltopdf`, or `enscript` (with ps2pdf)
+- Falls back to text export if no converter available
+- Uses monospace font and proper margins for readability
+
+**Export module:**
+- `src/export.lisp`: Export logic (text and PDF generation)
+- Uses existing date/priority/status helpers from `components.lisp`
+- Separate from TUI rendering (pure CLI functionality)
 
 ## Development Patterns
 

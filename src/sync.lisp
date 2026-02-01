@@ -554,6 +554,7 @@
   ;; Register hooks so local changes are sent even while reconnecting
   (setf *todo-change-hook* #'notify-sync-todo-changed)
   (setf *todo-delete-hook* #'notify-sync-todo-deleted)
+  (setf *settings-change-hook* #'notify-sync-settings-changed)
 
   ;; All blocking work happens in the connector thread
   (setf *sync-client-thread*
@@ -646,6 +647,7 @@
   ;; Unregister hooks
   (setf *todo-change-hook* nil)
   (setf *todo-delete-hook* nil)
+  (setf *settings-change-hook* nil)
 
   ;; Close channel to unblock stream-read-message
   (cleanup-sync-client)
@@ -708,7 +710,11 @@
              (setf *sync-received-count* 0)
              (llog:info "Expecting pending changes" :count pending)
              (when *sync-model-ref*
-               (setf (model-sync-pending-count *sync-model-ref*) pending))))))
+               (setf (model-sync-pending-count *sync-model-ref*) pending))
+             ;; Send local settings to server on connect
+             (let ((settings-hash (db-load-all-settings)))
+               (when (> (hash-table-count settings-hash) 0)
+                 (sync-client-send-settings nil nil)))))))
 
     (:change
      (let ((change (proto-msg-change msg)))
@@ -742,6 +748,28 @@
               (db-delete-todo todo-id))
             ;; Ask main thread to reload
             (notify-tui-reload))))))
+
+    (:settings-change
+     (let* ((settings-change (proto-msg-settings-change msg))
+            (settings-list (proto-settings-change-settings settings-change)))
+       (llog:info "Received settings change from server" :count (length settings-list))
+       ;; Process each setting with last-write-wins conflict resolution
+       (dolist (setting-data settings-list)
+         (let* ((key (proto-key setting-data))
+                (value (proto-value setting-data))
+                (updated-at (proto-updated-at setting-data))
+                (current-setting (db-load-setting key)))
+           ;; Only update if incoming timestamp is newer or setting doesn't exist
+           (when (or (null current-setting)
+                     (string< (getf current-setting :updated-at) updated-at))
+             (let ((*suppress-change-notifications* t))
+               ;; Save with incoming timestamp (bypass db-save-setting which auto-timestamps)
+               (with-db (db)
+                 (sqlite:execute-non-query db
+                   "INSERT OR REPLACE INTO app_settings (key, value, updated_at)
+                    VALUES (?, ?, ?)"
+                   key value updated-at)))
+             (llog:info "Applied settings update from server" :key key))))))
 
     (otherwise
      (llog:warn "Unknown message from server" :case (proto-msg-case msg)))))
@@ -787,3 +815,21 @@
   (notify-todo-deleted todo-id)
   ;; Send to server (if we're connected as client)
   (sync-client-send-delete todo-id))
+
+(defun sync-client-send-settings (key value)
+  "Send settings change to the sync server."
+  (declare (ignore key value))  ; We send all settings for simplicity
+  (when (and *sync-client-stream* (sync-client-connected-p))
+    (let* ((settings-hash (db-load-all-settings))
+           (msg (make-sync-settings-message (get-device-id) settings-hash)))
+      (handler-case
+          (ag-grpc:stream-send *sync-client-stream* msg)
+        (error (e)
+          (llog:error "Failed to send settings" :error (princ-to-string e)))))))
+
+(defun notify-sync-settings-changed (key value)
+  "Notify about a settings change - sends to connected sync clients AND to server if connected as client."
+  ;; Notify connected clients (if we're running as server)
+  (notify-settings-changed key value)
+  ;; Send to server (if we're connected as client)
+  (sync-client-send-settings key value))

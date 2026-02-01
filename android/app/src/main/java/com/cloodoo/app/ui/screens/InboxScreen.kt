@@ -69,7 +69,7 @@ fun InboxScreen(
                         todo.title.contains(searchQuery, ignoreCase = true) ||
                         (todo.description?.contains(searchQuery, ignoreCase = true) == true)
                     val matchesTag = currentTag == null ||
-                        (todo.tags?.contains(currentTag) == true)
+                        parseTags(todo.tags).contains(currentTag)
                     matchesSearch && matchesTag
                 }
                 if (filteredTodos.isNotEmpty()) group.copy(todos = filteredTodos) else null

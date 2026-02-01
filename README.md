@@ -33,6 +33,8 @@ gRPC bidirectional streaming with mTLS, and optional LLM enrichment.
 - **Temporal database** -- every change creates a new version; nothing
   is overwritten
 - **Org-mode import** -- bring tasks in from Emacs
+- **Org-agenda export** -- export to text or PDF in org-mode agenda
+  format with priority markers, overdue indicators, and statistics
 
 ## Building
 
@@ -221,6 +223,7 @@ cloodoo add TITLE           Add a task (--priority, --due, --tag, --note)
 cloodoo list                List tasks (--status, --priority, --all)
 cloodoo done SEARCH         Mark a task completed
 cloodoo stats               Show counts and overdue tasks
+cloodoo export              Export tasks in org-agenda format (text or PDF)
 
 cloodoo sync-server         Start gRPC sync server (default 0.0.0.0:50051)
 cloodoo sync-connect        Connect TUI to a remote sync server
@@ -378,6 +381,46 @@ Press `u` in the TUI to edit a user context file
 about you -- location, work context, preferences -- so enrichment
 results are more relevant.
 
+## Exporting to org-agenda format
+
+Cloodoo can export your tasks in org-agenda style (similar to Emacs
+org-mode agenda views), either as formatted text or PDF:
+
+```sh
+# Export to text file
+./cloodoo export -o agenda.txt
+
+# Export to PDF (requires pandoc, wkhtmltopdf, or enscript)
+./cloodoo export --pdf -o agenda.pdf
+
+# Group by tags instead of by date
+./cloodoo export --by-tag -o by-tag.txt
+
+# Filter by status or priority
+./cloodoo export --status pending --priority high -o urgent.txt
+
+# Include completed tasks (hidden by default)
+./cloodoo export --all -o full-agenda.txt
+```
+
+The output format includes:
+
+- **Week header** with ISO week numbers (e.g., `Week-agenda (W05-W06):`)
+- **Tasks grouped** by scheduled/due date or by tags
+- **Overdue indicators** showing days late (e.g., `Sched.232x:` means
+  232 days overdue)
+- **Priority markers**: `[#A]` (high), `[#B]` (medium), `[#C]` (low)
+- **Status keywords**: TODO, DOING, DONE, WAITING, CANCELLED
+- **Footer statistics**: total count, completed count, overdue count
+
+PDF generation requires one of:
+- `pandoc` with `pdflatex` (most common)
+- `wkhtmltopdf` (produces formatted HTML-style PDFs)
+- `enscript` with `ps2pdf` (plain text to PostScript to PDF)
+
+If no PDF converter is available, the command falls back to text
+export automatically.
+
 ## Configuration
 
 Cloodoo follows the XDG Base Directory spec:
@@ -409,6 +452,7 @@ src/
   db.lisp            SQLite with temporal versioning
   storage.lisp       File-based persistence and XDG paths
   enrich.lisp        LLM enrichment (Gemini, OpenAI, Anthropic, Ollama)
+  export.lisp        Export to org-agenda format (text and PDF)
   view.lisp          TUI rendering
   components.lisp    Reusable UI components
   update.lisp        TUI event handling and keybindings

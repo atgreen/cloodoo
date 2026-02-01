@@ -118,7 +118,11 @@
         (completed-at (todo-completed-at todo)))
     (let* ((today (local-today))
            (tomorrow (lt:timestamp+ today 1 :day))
-           (week-end (lt:timestamp+ today 7 :day)))
+           ;; Calculate end of current calendar week (Sunday)
+           ;; day-of-week: 0=Sunday, 1=Monday, ..., 6=Saturday
+           (day-of-week (lt:timestamp-day-of-week today))
+           (days-to-sunday (if (zerop day-of-week) 0 (- 7 day-of-week)))
+           (week-end (lt:timestamp+ today days-to-sunday :day)))
       ;; Deleted items are never shown
       (when (eql status :deleted)
         (return-from categorize-by-date nil))
