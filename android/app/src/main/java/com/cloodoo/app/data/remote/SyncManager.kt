@@ -88,9 +88,15 @@ class SyncManager(
                 _connectionState.value = ConnectionState.DISCONNECTED
             } catch (e: Exception) {
                 Log.e(TAG, "Sync connection error", e)
-                _connectionState.value = ConnectionState.ERROR
-                _syncEvents.emit(SyncEvent.Error(e.message ?: "Connection error"))
-                scheduleReconnect(scope)
+                if (autoReconnect) {
+                    // Transient error - will reconnect, don't show error to user
+                    _connectionState.value = ConnectionState.DISCONNECTED
+                    scheduleReconnect(scope)
+                } else {
+                    // Permanent error - show to user
+                    _connectionState.value = ConnectionState.ERROR
+                    _syncEvents.emit(SyncEvent.Error(e.message ?: "Connection error"))
+                }
             }
         }
     }
