@@ -15,9 +15,14 @@ import androidx.compose.material.icons.outlined.Inbox
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import java.time.LocalDate
+import java.time.format.DateTimeFormatter
+import java.util.Locale
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
@@ -82,7 +87,27 @@ fun CloodooApp(openQuickAdd: Boolean = false) {
                 topBar = {
                     if (showBottomBar) {
                         TopAppBar(
-                            title = { Text("Cloodoo") },
+                            title = {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.Start
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Check,
+                                        contentDescription = "Cloodoo",
+                                        modifier = Modifier.padding(end = 12.dp)
+                                    )
+                                    Column {
+                                        Text(
+                                            text = LocalDate.now().format(
+                                                DateTimeFormatter.ofPattern("EEEE, MMMM d", Locale.getDefault())
+                                            ),
+                                            style = MaterialTheme.typography.titleMedium,
+                                            fontWeight = FontWeight.Medium
+                                        )
+                                    }
+                                }
+                            },
                             actions = {
                                 IconButton(onClick = { viewModel.connect() }) {
                                     when (connectionState) {

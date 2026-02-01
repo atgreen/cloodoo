@@ -84,22 +84,6 @@ fun InboxScreen(
             LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
         }
 
-        // Today's date header
-        val todayFormatted = remember {
-            LocalDate.now().format(
-                DateTimeFormatter.ofPattern("EEEE, MMMM d", Locale.getDefault())
-            )
-        }
-        Text(
-            text = todayFormatted,
-            style = MaterialTheme.typography.titleLarge,
-            fontWeight = FontWeight.Medium,
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(vertical = 12.dp),
-            textAlign = TextAlign.Center
-        )
-
         // Search bar
         AnimatedVisibility(visible = isSearchVisible) {
             val focusRequester = remember { FocusRequester() }
