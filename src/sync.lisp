@@ -273,20 +273,20 @@
                         (dolist (setting-data settings-list)
                           (let* ((key (proto-key setting-data))
                                  (value (proto-value setting-data))
-                                 (updated-at (proto-updated-at setting-data))
-                                 (current-setting (db-load-setting key)))
-                            ;; Only update if incoming timestamp is newer or setting doesn't exist
-                            (when (or (null current-setting)
-                                     (string< (or (getf (gethash key (db-load-all-settings)) :updated-at) "")
-                                             updated-at))
-                              (when *sync-debug*
-                                (format t "~&[SYNC-DEBUG] Updating setting ~A~%" key))
-                              ;; Save with the incoming timestamp to preserve causality
-                              (with-db (db)
-                                (sqlite:execute-non-query db
-                                  "INSERT OR REPLACE INTO app_settings (key, value, updated_at)
-                                   VALUES (?, ?, ?)"
-                                  key value updated-at)))))
+                                 (updated-at (proto-updated-at setting-data)))
+                            (multiple-value-bind (current-value current-timestamp)
+                                (db-load-setting-with-timestamp key)
+                              ;; Only update if incoming timestamp is newer or setting doesn't exist
+                              (when (or (null current-value)
+                                       (string< current-timestamp updated-at))
+                                (when *sync-debug*
+                                  (format t "~&[SYNC-DEBUG] Updating setting ~A~%" key))
+                                ;; Save with the incoming timestamp to preserve causality
+                                (with-db (db)
+                                  (sqlite:execute-non-query db
+                                    "INSERT OR REPLACE INTO app_settings (key, value, updated_at)
+                                     VALUES (?, ?, ?)"
+                                    key value updated-at))))))
                         ;; Broadcast to other clients (excluding sender)
                         (broadcast-change msg origin-device-id))))))))) ; close loop, let (pending changes), block
 
@@ -750,19 +750,20 @@
        (dolist (setting-data settings-list)
          (let* ((key (proto-key setting-data))
                 (value (proto-value setting-data))
-                (updated-at (proto-updated-at setting-data))
-                (current-setting (db-load-setting key)))
-           ;; Only update if incoming timestamp is newer or setting doesn't exist
-           (when (or (null current-setting)
-                     (string< (getf current-setting :updated-at) updated-at))
-             (let ((*suppress-change-notifications* t))
-               ;; Save with incoming timestamp (bypass db-save-setting which auto-timestamps)
-               (with-db (db)
-                 (sqlite:execute-non-query db
-                   "INSERT OR REPLACE INTO app_settings (key, value, updated_at)
-                    VALUES (?, ?, ?)"
-                   key value updated-at)))
-             (llog:info "Applied settings update from server" :key key))))))
+                (updated-at (proto-updated-at setting-data)))
+           (multiple-value-bind (current-value current-timestamp)
+               (db-load-setting-with-timestamp key)
+             ;; Only update if incoming timestamp is newer or setting doesn't exist
+             (when (or (null current-value)
+                       (string< current-timestamp updated-at))
+               (let ((*suppress-change-notifications* t))
+                 ;; Save with incoming timestamp (bypass db-save-setting which auto-timestamps)
+                 (with-db (db)
+                   (sqlite:execute-non-query db
+                     "INSERT OR REPLACE INTO app_settings (key, value, updated_at)
+                      VALUES (?, ?, ?)"
+                     key value updated-at)))
+               (llog:info "Applied settings update from server" :key key)))))))
 
     (otherwise
      (llog:warn "Unknown message from server" :case (proto-msg-case msg)))))

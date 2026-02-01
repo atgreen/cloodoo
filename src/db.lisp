@@ -380,6 +380,14 @@
     (sqlite:execute-single db
       "SELECT value FROM app_settings WHERE key = ?" key)))
 
+(defun db-load-setting-with-timestamp (key)
+  "Load a setting by KEY with its timestamp, returning (values value updated-at) or NIL."
+  (with-db (db)
+    (let ((row (sqlite:execute-to-list db
+                 "SELECT value, updated_at FROM app_settings WHERE key = ?" key)))
+      (when row
+        (values (first (first row)) (second (first row)))))))
+
 (defun db-save-setting (key value)
   "Save a SETTING with KEY and VALUE, auto-timestamping."
   (with-db (db)
