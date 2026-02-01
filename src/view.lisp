@@ -613,7 +613,9 @@
                                (tui:colored "RET/q:back  e:edit  n:notes  s:sched  d:deadline  o:url"
                                            :fg tui:*fg-bright-black*))))
                    (modal (render-box-with-title "ITEM DETAILS" content :min-width modal-width)))
-              (tui:overlay-centered modal background))))
+              (tui:composite-with-shadow modal background
+                                         :x-position tui:+center+
+                                         :y-position tui:+middle+))))
     (error (e)
       (llog:error "Error rendering detail view"
                   :error-type (type-of e)
@@ -756,7 +758,9 @@
              (format c "~%~%~A"
                      (tui:colored "Tab:next  ^E:edit notes  Enter:save  Esc:cancel" :fg tui:*fg-bright-black*))))
          (modal (render-box-with-title title content :min-width dialog-width)))
-    (tui:overlay-centered modal background)))
+    (tui:composite-with-shadow modal background
+                               :x-position tui:+center+
+                               :y-position tui:+middle+)))
 
 (defun render-search-view (model)
   "Render the search view."
@@ -793,10 +797,8 @@
         ;; Pad to full width
         (let ((inner-width (- term-width 2)))
           (format s "~A~%"
-                  (tui:render-shadow
-                   (tui:render-border (pad-content-to-width content inner-width)
-                                      tui:*border-double*)
-                   :style :medium))))
+                  (tui:render-border (pad-content-to-width content inner-width)
+                                     tui:*border-double*))))
 
       ;; Help bar
       (let ((help " RET:apply  ESC:cancel "))
@@ -823,7 +825,9 @@
                                             :fg tui:*fg-bright-black*)))
                       "No item selected"))
          (modal (render-box-with-title "DELETE ITEM" content :min-width modal-width)))
-    (tui:overlay-centered modal background)))
+    (tui:composite-with-shadow modal background
+                               :x-position tui:+center+
+                               :y-position tui:+middle+)))
 
 (defun render-delete-done-confirm-view (model)
   "Render the delete-done confirmation dialog as an overlay."
@@ -841,7 +845,9 @@
                             (tui:colored "y:confirm  any other key:cancel"
                                         :fg tui:*fg-bright-black*))))
          (modal (render-box-with-title "DELETE DONE ITEMS" content :min-width modal-width)))
-    (tui:overlay-centered modal background)))
+    (tui:composite-with-shadow modal background
+                               :x-position tui:+center+
+                               :y-position tui:+middle+)))
 
 (defun render-delete-tag-confirm-view (model)
   "Render the delete tag confirmation dialog as an overlay."
@@ -863,7 +869,9 @@
                             (tui:colored "y:confirm  any other key:cancel"
                                         :fg tui:*fg-bright-black*))))
          (modal (render-box-with-title "DELETE LABEL" content :min-width modal-width)))
-    (tui:overlay-centered modal background)))
+    (tui:composite-with-shadow modal background
+                               :x-position tui:+center+
+                               :y-position tui:+middle+)))
 
 (defun render-context-info-view (model)
   "Render the context info view as an overlay showing where to edit user context."
@@ -892,7 +900,9 @@
              (format c "~%~A"
                      (tui:colored "Press any key to close" :fg tui:*fg-bright-black*))))
          (modal (render-box-with-title "USER CONTEXT" content :min-width modal-width)))
-    (tui:overlay-centered modal background)))
+    (tui:composite-with-shadow modal background
+                               :x-position tui:+center+
+                               :y-position tui:+middle+)))
 
 (defun render-import-view (model)
   "Render the org-mode import view."
@@ -930,10 +940,8 @@
         ;; Pad to full width
         (let ((inner-width (- term-width 2)))
           (format s "~A~%"
-                  (tui:render-shadow
-                   (tui:render-border (pad-content-to-width content inner-width)
-                                      tui:*border-double*)
-                   :style :medium))))
+                  (tui:render-border (pad-content-to-width content inner-width)
+                                     tui:*border-double*))))
 
       ;; Help bar
       (let ((help " RET:import  ESC:cancel "))
@@ -1000,7 +1008,9 @@
                      (tui:colored "hjkl:nav  []:month  {}:year  Home:today  RET:save  DEL:clear  ESC:cancel"
                                  :fg tui:*fg-bright-black*))))
          (modal (render-box-with-title title content :min-width modal-width)))
-    (tui:overlay-centered modal background)))
+    (tui:composite-with-shadow modal background
+                               :x-position tui:+center+
+                               :y-position tui:+middle+)))
 
 (defun render-help-column (title entries &optional (key-width 10))
   "Render a help column with TITLE and list of (key . description) ENTRIES."
@@ -1118,11 +1128,12 @@
       (format nil "~A~%~%~A" keys-section presets-section))))
 
 (defun render-box-with-title (title content &key min-width)
-  "Render a box with a title label on the top border line and drop shadow.
-   ╭──┤ TITLE ├─────────────────────────╮
-   │ content                            │
-   ╰────────────────────────────────────╯
-   If MIN-WIDTH is specified, the box will be at least that wide (inner content area)."
+  "Render a box with a title label on the top border line using double-line borders.
+   ╔══╡ TITLE ╞═════════════════════════╗
+   ║ content                            ║
+   ╚════════════════════════════════════╝
+   If MIN-WIDTH is specified, the box will be at least that wide (inner content area).
+   Shadow should be added at composition time using composite-with-shadow."
   (let* ((content-lines (tui:split-string-by-newline content))
          (natural-width (if content-lines
                             (apply #'max (mapcar #'tui:visible-length content-lines))
@@ -1136,28 +1147,26 @@
          ;; Box inner width = content + 2 for padding
          (box-inner-width (+ content-width 2))
          ;; Width after title to right edge
-         (right-width (max 0 (- box-inner-width indent title-len 2)))  ; -2 for ┤ and ├
+         (right-width (max 0 (- box-inner-width indent title-len 2)))  ; -2 for ╡ and ╞
          (reset (format nil "~C[0m" #\Escape)))  ; ANSI reset to prevent color bleed
-    (let ((box (with-output-to-string (s)
-                 ;; Top border with embedded title
-                 (format s "~A╭~A┤~A├~A╮~%"
-                         reset
-                         (make-string indent :initial-element #\─)
-                         (tui:bold padded-title)
-                         (make-string right-width :initial-element #\─))
-                 ;; Content rows
-                 (dolist (line content-lines)
-                   (let ((padding (max 0 (- content-width (tui:visible-length line)))))
-                     (format s "~A│ ~A~A │~%"
-                             reset
-                             line
-                             (make-string padding :initial-element #\Space))))
-                 ;; Bottom border
-                 (format s "~A╰~A╯"
-                         reset
-                         (make-string box-inner-width :initial-element #\─)))))
-      ;; Add shadow to the box
-      (tui:render-shadow box :style :medium))))
+    (with-output-to-string (s)
+      ;; Top border with embedded title (double-line)
+      (format s "~A╔~A╡~A╞~A╗~%"
+              reset
+              (make-string indent :initial-element #\═)
+              (tui:bold padded-title)
+              (make-string right-width :initial-element #\═))
+      ;; Content rows (double-line)
+      (dolist (line content-lines)
+        (let ((padding (max 0 (- content-width (tui:visible-length line)))))
+          (format s "~A║ ~A~A ║~%"
+                  reset
+                  line
+                  (make-string padding :initial-element #\Space))))
+      ;; Bottom border (double-line)
+      (format s "~A╚~A╝"
+              reset
+              (make-string box-inner-width :initial-element #\═)))))
 
 (defun render-help-view (model)
   "Render the help view as an overlay dialog on the list view."
@@ -1166,7 +1175,9 @@
          (footer (tui:colored "Press any key to close" :fg tui:*fg-bright-black*))
          (inner (format nil "~%~A~%~A" content footer))
          (modal (render-box-with-title "KEYBOARD SHORTCUTS" inner)))
-    (tui:overlay-centered modal background)))
+    (tui:composite-with-shadow modal background
+                               :x-position tui:+center+
+                               :y-position tui:+middle+)))
 
 (defun render-inline-tag-editor (model)
   "Render the inline tag editor as an overlay on the list view."
@@ -1218,7 +1229,9 @@
              (format c "~A"
                      (tui:colored "Enter:add/save  Backspace:remove  Esc:save" :fg tui:*fg-bright-black*))))
          (modal (render-box-with-title "EDIT TAGS" content)))
-    (tui:overlay-centered modal background)))
+    (tui:composite-with-shadow modal background
+                               :x-position tui:+center+
+                               :y-position tui:+middle+)))
 
 (defun render-form-date-edit-view (model)
   "Render the date picker view for add/edit form scheduled/due dates."
@@ -1371,12 +1384,12 @@
          (background (render-list-view model))
          ;; Build the modal box with border
          (modal-content (render-date-modal-box model))
-         (modal-bordered (tui:render-shadow
-                          (tui:render-border modal-content tui:*border-rounded*
-                                            :fg-color tui:*fg-blue*)
-                          :style :medium)))
-    ;; Use the new overlay-centered to composite the modal on top
-    (tui:overlay-centered modal-bordered background)))
+         (modal-bordered (tui:render-border modal-content tui:*border-double*
+                                            :fg-color tui:*fg-blue*)))
+    ;; Use composite-with-shadow for semi-transparent shadow
+    (tui:composite-with-shadow modal-bordered background
+                               :x-position tui:+center+
+                               :y-position tui:+middle+)))
 
 ;;── Main View Method ───────────────────────────────────────────────────────────
 
