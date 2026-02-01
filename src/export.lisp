@@ -28,7 +28,7 @@
   (let* ((now (local-today))
          (target (lt:timestamp-minimize-part timestamp :hour))
          (diff-seconds (lt:timestamp-difference target now)))
-    (round (/ diff-seconds 86400))))
+    (round diff-seconds 86400)))
 
 (defun format-scheduled-indicator (todo)
   "Format the scheduled/due date indicator (e.g., 'Sched.232x:' or 'Due.5d:')."

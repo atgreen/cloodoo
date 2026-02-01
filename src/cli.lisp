@@ -1635,22 +1635,23 @@ URL format: http://HOST:PORT/pair/TOKEN"
                     (cond
                       (pdf-mode
                        ;; PDF export
-                       (if (export-todos-pdf filtered output-file :title title :by-tag by-tag)
-                           (format t "~A Exported ~D TODO~:P to ~A~%"
-                                  (tui:colored "✓" :fg tui:*fg-green*)
-                                  (length filtered)
-                                  output-file)
-                           (progn
-                             (format t "~A No PDF converter found (wkhtmltopdf, pandoc, or enscript).~%"
-                                    (tui:colored "✗" :fg tui:*fg-red*))
-                             (format t "  Falling back to text export...~%")
-                             (let ((text-file (format nil "~A.txt" (pathname-name output-file))))
-                               (with-open-file (stream text-file :direction :output :if-exists :supersede)
-                                 (export-todos-text filtered :stream stream :title title :by-tag by-tag))
-                               (format t "~A Exported ~D TODO~:P to ~A~%"
-                                      (tui:colored "✓" :fg tui:*fg-green*)
-                                      (length filtered)
-                                      text-file)))))
+                       (cond
+                         ((export-todos-pdf filtered output-file :title title :by-tag by-tag)
+                          (format t "~A Exported ~D TODO~:P to ~A~%"
+                                 (tui:colored "✓" :fg tui:*fg-green*)
+                                 (length filtered)
+                                 output-file))
+                         (t
+                          (format t "~A No PDF converter found (wkhtmltopdf, pandoc, or enscript).~%"
+                                 (tui:colored "✗" :fg tui:*fg-red*))
+                          (format t "  Falling back to text export...~%")
+                          (let ((text-file (format nil "~A.txt" (pathname-name output-file))))
+                            (with-open-file (stream text-file :direction :output :if-exists :supersede)
+                              (export-todos-text filtered :stream stream :title title :by-tag by-tag))
+                            (format t "~A Exported ~D TODO~:P to ~A~%"
+                                   (tui:colored "✓" :fg tui:*fg-green*)
+                                   (length filtered)
+                                   text-file)))))
                       (t
                        ;; Text export
                        (with-open-file (stream output-file :direction :output :if-exists :supersede)
@@ -1670,11 +1671,12 @@ URL format: http://HOST:PORT/pair/TOKEN"
    :handler (lambda (cmd)
               (declare (ignore cmd))
               (let ((context (load-user-context)))
-                (if context
-                    (progn
-                      (format t "~%~A~%~%" (tui:bold "User Context:"))
-                      (format t "~A~%" context))
-                    (format t "~%No user context configured.~%"))))))
+                (cond
+                  (context
+                   (format t "~%~A~%~%" (tui:bold "User Context:"))
+                   (format t "~A~%" context))
+                  (t
+                   (format t "~%No user context configured.~%")))))))
 
 (defun make-context-edit-command ()
   "Create the 'context edit' subcommand."
@@ -1694,18 +1696,19 @@ URL format: http://HOST:PORT/pair/TOKEN"
                 ;; Open in editor
                 (let ((status (uiop:run-program (list editor (namestring temp-file))
                                                 :ignore-error-status t)))
-                  (if (zerop status)
-                      (progn
-                        ;; Read back and save
-                        (let ((new-context (uiop:read-file-string temp-file)))
-                          (save-user-context new-context)
-                          (format t "~A User context saved~%"
-                                  (tui:colored "✓" :fg tui:*fg-green*)))
-                        ;; Clean up temp file
-                        (when (probe-file temp-file)
-                          (delete-file temp-file)))
-                      (format t "~A Editor exited with error~%"
-                              (tui:colored "✗" :fg tui:*fg-red*))))))))
+                  (cond
+                    ((zerop status)
+                     ;; Read back and save
+                     (let ((new-context (uiop:read-file-string temp-file)))
+                       (save-user-context new-context)
+                       (format t "~A User context saved~%"
+                               (tui:colored "✓" :fg tui:*fg-green*)))
+                     ;; Clean up temp file
+                     (when (probe-file temp-file)
+                       (delete-file temp-file)))
+                    (t
+                     (format t "~A Editor exited with error~%"
+                             (tui:colored "✗" :fg tui:*fg-red*))))))))))
 
 (defun make-context-set-command ()
   "Create the 'context set' subcommand."
@@ -1715,15 +1718,16 @@ URL format: http://HOST:PORT/pair/TOKEN"
    :usage "<text>"
    :handler (lambda (cmd)
               (let ((args (clingon:command-arguments cmd)))
-                (if args
-                    (let ((text (format nil "~{~A~^ ~}" args)))
-                      (save-user-context text)
-                      (format t "~A User context set~%"
-                              (tui:colored "✓" :fg tui:*fg-green*)))
-                    (progn
-                      (format t "~A Error: no text provided~%"
-                              (tui:colored "✗" :fg tui:*fg-red*))
-                      (format t "Usage: cloodoo context set <text>~%")))))))
+                (cond
+                  (args
+                   (let ((text (format nil "~{~A~^ ~}" args)))
+                     (save-user-context text)
+                     (format t "~A User context set~%"
+                             (tui:colored "✓" :fg tui:*fg-green*))))
+                  (t
+                   (format t "~A Error: no text provided~%"
+                           (tui:colored "✗" :fg tui:*fg-red*))
+                   (format t "Usage: cloodoo context set <text>~%")))))))
 
 (defun make-context-command ()
   "Create the 'context' command with subcommands."

@@ -412,19 +412,18 @@
   "One-time migration of context.txt from file to database.
    Renames the file to context.txt.migrated after successful migration."
   (let ((context-file (merge-pathnames "context.txt" (config-directory))))
-    (when (probe-file context-file)
-      ;; Check if already migrated
-      (unless (db-load-setting "user_context")
-        (let ((content (uiop:read-file-string context-file)))
-          (when (and content (> (length content) 0))
-            ;; Save to database
-            (db-save-setting "user_context" content)
-            ;; Rename file
-            (let ((backup-file (merge-pathnames "context.txt.migrated"
-                                               (config-directory))))
-              (rename-file context-file backup-file)
-              (format t "~&Migrated user context to database (backup: ~A)~%"
-                      backup-file))))))))
+    (when (and (probe-file context-file)
+               (not (db-load-setting "user_context")))
+      (let ((content (uiop:read-file-string context-file)))
+        (when (and content (> (length content) 0))
+          ;; Save to database
+          (db-save-setting "user_context" content)
+          ;; Rename file
+          (let ((backup-file (merge-pathnames "context.txt.migrated"
+                                             (config-directory))))
+            (rename-file context-file backup-file)
+            (format t "~&Migrated user context to database (backup: ~A)~%"
+                    backup-file)))))))
 
 ;;── Row to TODO Conversion ────────────────────────────────────────────────────
 
