@@ -650,15 +650,8 @@
   (setf *settings-change-hook* nil)
 
   ;; Close channel to unblock stream-read-message
+  ;; This will cause stream-read-message to return nil, exiting the loop
   (cleanup-sync-client)
-
-  ;; Interrupt the thread to break out of sleep or make-channel
-  (when (and *sync-client-thread* (bt:thread-alive-p *sync-client-thread*))
-    (handler-case
-        (bt:interrupt-thread *sync-client-thread*
-                             (lambda () (error "sync client shutting down")))
-      (error (e)
-        (llog:warn "Error interrupting sync thread" :error (princ-to-string e)))))
 
   ;; Wait for the thread to finish
   (when (and *sync-client-thread* (bt:thread-alive-p *sync-client-thread*))
