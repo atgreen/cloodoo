@@ -23,18 +23,26 @@ fun formatDate(dateStr: String): String {
 
 fun parseDateToMillis(dateStr: String): Long? {
     return try {
+        // Parse the ISO date string and extract just the date part
         val zdt = ZonedDateTime.parse(dateStr)
-        zdt.toInstant().toEpochMilli()
+        val localDate = zdt.toLocalDate()
+
+        // DatePicker expects UTC midnight, so convert the date to UTC midnight millis
+        localDate.atStartOfDay(ZoneId.of("UTC")).toInstant().toEpochMilli()
     } catch (e: Exception) {
         null
     }
 }
 
 fun millisToIsoDate(millis: Long): String {
-    // DatePicker returns UTC midnight for the selected date
-    // We need to interpret this as a date, not convert from UTC
-    val instant = Instant.ofEpochMilli(millis)
-    val localDate = instant.atZone(ZoneId.of("UTC")).toLocalDate()
-    val zdt = localDate.atStartOfDay(ZoneId.systemDefault())
-    return zdt.format(DateTimeFormatter.ISO_OFFSET_DATE_TIME)
+    // Material3 DatePicker returns millis representing the selected date at UTC midnight.
+    // We want to save this as the same calendar date at local midnight.
+    // Extract the date components from UTC and create local midnight from those.
+    val utcDate = Instant.ofEpochMilli(millis)
+        .atZone(ZoneId.of("UTC"))
+        .toLocalDate()
+
+    // Create a ZonedDateTime for that date at local midnight
+    val localMidnight = utcDate.atStartOfDay(ZoneId.systemDefault())
+    return localMidnight.format(DateTimeFormatter.ISO_OFFSET_DATE_TIME)
 }
