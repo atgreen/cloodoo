@@ -11,6 +11,8 @@ import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
@@ -41,9 +43,11 @@ import com.cloodoo.app.ui.theme.PriorityColorScheme
 import com.cloodoo.app.ui.util.parseTags
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
+import java.time.DayOfWeek
 import java.time.LocalDate
 import java.time.ZonedDateTime
 import java.time.format.DateTimeFormatter
+import java.time.temporal.TemporalAdjusters
 
 private fun getPriorityColor(priority: String, colors: PriorityColorScheme): Color {
     return when (priority.lowercase()) {
@@ -57,7 +61,7 @@ private fun getPriorityColor(priority: String, colors: PriorityColorScheme): Col
 @Composable
 fun TodoItem(
     todo: TodoEntity,
-    onClick: (String) -> Unit,
+    onClick: ((String) -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     val isCompleted = todo.status == "completed"
@@ -67,7 +71,7 @@ fun TodoItem(
     Card(
         modifier = modifier
             .fillMaxWidth()
-            .clickable { onClick(todo.id) },
+            .then(if (onClick != null) Modifier.clickable { onClick(todo.id) } else Modifier),
         shape = RoundedCornerShape(8.dp),
         colors = CardDefaults.cardColors(
             containerColor = if (isCompleted) {
@@ -164,15 +168,18 @@ fun TodoItem(
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class, ExperimentalMaterial3Api::class)
 @Composable
 fun SwipeableTodoItem(
     todo: TodoEntity,
     onToggleComplete: (String) -> Unit,
     onClick: (String) -> Unit,
     onCancel: (String) -> Unit,
+    onPostpone: ((String, PostponeOption) -> Unit)? = null,
     enableCancel: Boolean = true,
     modifier: Modifier = Modifier
 ) {
+    var showPostponeSheet by remember { mutableStateOf(false) }
     val isDone = todo.status == "completed" || todo.status == "cancelled"
     val density = LocalDensity.current
     val swipeThreshold = with(density) { 100.dp.toPx() }
@@ -272,12 +279,31 @@ fun SwipeableTodoItem(
                         }
                     )
                 }
+                .combinedClickable(
+                    onClick = { onClick(todo.id) },
+                    onLongClick = {
+                        if (onPostpone != null) {
+                            showPostponeSheet = true
+                        }
+                    }
+                )
         ) {
             TodoItem(
                 todo = todo,
-                onClick = onClick
+                onClick = null // Click handled by combinedClickable above
             )
         }
+    }
+
+    // Postpone bottom sheet
+    if (showPostponeSheet && onPostpone != null) {
+        PostponeBottomSheet(
+            onDismiss = { showPostponeSheet = false },
+            onSelect = { option ->
+                onPostpone(todo.id, option)
+                showPostponeSheet = false
+            }
+        )
     }
 }
 
@@ -405,5 +431,68 @@ private fun parseLocationName(locationJson: String): String? {
         map["name"] as? String
     } catch (e: Exception) {
         null
+    }
+}
+
+/**
+ * Options for postponing a task
+ */
+enum class PostponeOption(val label: String, val icon: androidx.compose.ui.graphics.vector.ImageVector) {
+    TOMORROW("Tomorrow", Icons.Default.Done),
+    PLUS_ONE_DAY("+1 Day", Icons.Default.Done),
+    NEXT_WEEK("Next Week", Icons.Default.Done),
+    PLUS_ONE_WEEK("+1 Week", Icons.Default.Done),
+    NEXT_MONDAY("Next Monday", Icons.Default.Done);
+
+    fun calculateNewDate(currentDate: LocalDate = LocalDate.now()): LocalDate {
+        return when (this) {
+            TOMORROW -> currentDate.plusDays(1)
+            PLUS_ONE_DAY -> currentDate.plusDays(1)
+            NEXT_WEEK -> currentDate.plusWeeks(1)
+            PLUS_ONE_WEEK -> currentDate.plusWeeks(1)
+            NEXT_MONDAY -> currentDate.with(TemporalAdjusters.next(DayOfWeek.MONDAY))
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun PostponeBottomSheet(
+    onDismiss: () -> Unit,
+    onSelect: (PostponeOption) -> Unit
+) {
+    val sheetState = rememberModalBottomSheetState()
+
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(bottom = 32.dp)
+        ) {
+            Text(
+                text = "Postpone Task",
+                style = MaterialTheme.typography.titleMedium,
+                modifier = Modifier.padding(horizontal = 24.dp, vertical = 16.dp)
+            )
+
+            val today = LocalDate.now()
+
+            PostponeOption.entries.forEach { option ->
+                val targetDate = option.calculateNewDate(today)
+                val dateLabel = when {
+                    targetDate == today.plusDays(1) -> "Tomorrow"
+                    else -> targetDate.format(DateTimeFormatter.ofPattern("EEE, MMM d"))
+                }
+
+                ListItem(
+                    headlineContent = { Text(option.label) },
+                    supportingContent = { Text(dateLabel) },
+                    modifier = Modifier.clickable { onSelect(option) }
+                )
+            }
+        }
     }
 }

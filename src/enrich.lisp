@@ -180,6 +180,12 @@ CRITICAL RULES FOR TITLES:
 - \"dentist appointment at Dr Smith\" -> \"Dentist Appointment at Dr. Smith\" (keep doctor name!)
 - Fix typos and capitalize properly, but DO NOT summarize away important details
 
+CRITICAL RULES FOR URLs:
+- If a URL appears ANYWHERE in the input (title or notes), you MUST extract it to the \"url\" field
+- NEVER remove or lose URLs - they are critical reference information
+- URLs may be email links (message://), web links (https://), or file links (file://)
+- If multiple URLs exist, extract the most relevant one to \"url\" and keep others in description
+
 Output Schema (JSON):
 Return ONLY a valid JSON object with these keys:
 - task_title: (Action-oriented title that PRESERVES all important details like destinations, names, locations)
@@ -191,6 +197,7 @@ Return ONLY a valid JSON object with these keys:
 - due_date: (ISO 8601 date when task must be completed by, e.g. \"2026-01-25\", or null)
 - repeat_interval: (Integer for recurrence, e.g. 1 for every 1 unit, 2 for every 2 units, or null if not recurring)
 - repeat_unit: (One of: \"day\", \"week\", \"month\", \"year\", or null if not recurring)
+- url: (Any URL found in the input - email links, web links, file links - MUST be preserved, or null if none)
 - location: (Object with business/place info, or null if no location mentioned)
   - name: (Business or place name, properly formatted)
   - address: (Full street address if known or can be inferred, otherwise null)
@@ -384,6 +391,7 @@ Respond with ONLY the JSON object, no markdown formatting or additional text.")
                      (repeat-interval (when (and raw-repeat-interval (numberp raw-repeat-interval) (> raw-repeat-interval 0))
                                         (truncate raw-repeat-interval)))
                      (repeat-unit (when repeat-interval (parse-repeat-unit raw-repeat-unit)))
+                     (extracted-url (json-null-to-nil (gethash "url" data)))
                      (result (list :title (json-null-to-nil (gethash "task_title" data))
                                    :description (json-null-to-nil (gethash "description" data))
                                    :category (json-null-to-nil (gethash "category" data))
@@ -399,6 +407,7 @@ Respond with ONLY the JSON object, no markdown formatting or additional text.")
                                    :due-date due-date
                                    :repeat-interval repeat-interval
                                    :repeat-unit repeat-unit
+                                   :url extracted-url
                                    :location-info location-info)))
                 (llog:info "Successfully parsed enrichment response"
                            :title (getf result :title)
@@ -411,7 +420,8 @@ Respond with ONLY the JSON object, no markdown formatting or additional text.")
                                       (lt:format-rfc3339-timestring nil due-date))
                            :has-location (if location-info "yes" "no")
                            :repeat-interval repeat-interval
-                           :repeat-unit repeat-unit)
+                           :repeat-unit repeat-unit
+                           :url extracted-url)
                 (when location-info
                   (llog:debug "Location info extracted"
                               :location-name (getf location-info :name)

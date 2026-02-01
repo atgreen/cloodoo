@@ -21,6 +21,7 @@ import com.cloodoo.app.data.remote.SyncManager
 import com.cloodoo.app.data.repository.TodoRepository
 import com.cloodoo.app.data.security.CertificateManager
 import com.cloodoo.app.ui.components.DateGroup
+import com.cloodoo.app.ui.components.PostponeOption
 import com.cloodoo.app.ui.components.TodoGroupData
 import com.cloodoo.app.ui.components.groupTodosByDate
 import kotlinx.coroutines.flow.*
@@ -294,6 +295,33 @@ class TodoListViewModel(
             if (updated != null) {
                 syncManager.sendTodoUpsert(updated)
             }
+        }
+    }
+
+    fun postponeTodo(todoId: String, option: PostponeOption) {
+        viewModelScope.launch {
+            val todo = _uiState.value.todos.find { it.id == todoId } ?: return@launch
+
+            // Calculate new date based on the postpone option
+            // Use scheduled date if present, otherwise use due date, otherwise use today
+            val currentDate = todo.scheduledDate?.let {
+                try { ZonedDateTime.parse(it).toLocalDate() } catch (e: Exception) { null }
+            } ?: todo.dueDate?.let {
+                try { ZonedDateTime.parse(it).toLocalDate() } catch (e: Exception) { null }
+            } ?: java.time.LocalDate.now()
+
+            val newDate = option.calculateNewDate(currentDate)
+            val newDateStr = newDate.atStartOfDay(java.time.ZoneId.systemDefault())
+                .format(DateTimeFormatter.ISO_OFFSET_DATE_TIME)
+
+            // Update scheduled date (primary for task scheduling)
+            repository.updateTodo(todoId, scheduledDate = newDateStr)
+            val updated = database.todoDao().getCurrentById(todoId)
+            if (updated != null) {
+                syncManager.sendTodoUpsert(updated)
+            }
+
+            Log.d(TAG, "Postponed task $todoId to $newDate using ${option.name}")
         }
     }
 

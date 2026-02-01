@@ -240,6 +240,9 @@
                                           (setf (todo-due-date todo) (getf enriched-data :due-date)))
                                         (when (getf enriched-data :location-info)
                                           (setf (todo-location-info todo) (getf enriched-data :location-info)))
+                                        ;; Only set URL if todo doesn't already have one (preserve original URLs)
+                                        (when (and (getf enriched-data :url) (not (todo-url todo)))
+                                          (setf (todo-url todo) (getf enriched-data :url)))
                                         (llog:info "Enriched TODO from sync" :id (todo-id todo))))
                                   (error (e)
                                     (llog:warn "Enrichment failed, using original TODO"

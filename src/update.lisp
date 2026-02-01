@@ -2169,7 +2169,10 @@
         (when (getf data :repeat-interval)
           (setf (todo-repeat-interval todo) (getf data :repeat-interval)))
         (when (getf data :repeat-unit)
-          (setf (todo-repeat-unit todo) (getf data :repeat-unit))))
+          (setf (todo-repeat-unit todo) (getf data :repeat-unit)))
+        ;; Only set URL if todo doesn't already have one (preserve original URLs)
+        (when (and (getf data :url) (not (todo-url todo)))
+          (setf (todo-url todo) (getf data :url))))
       ;; Save updated todo
       (save-todo todo)
       ;; Refresh tags cache since enrichment may add tags

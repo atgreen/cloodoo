@@ -31,6 +31,7 @@ import java.time.format.DateTimeFormatter
 import java.util.Locale
 import com.cloodoo.app.data.local.TodoEntity
 import com.cloodoo.app.ui.components.DateGroup
+import com.cloodoo.app.ui.components.PostponeOption
 import com.cloodoo.app.ui.components.SectionHeader
 import com.cloodoo.app.ui.components.SwipeableTodoItem
 import com.cloodoo.app.ui.util.parseTags
@@ -218,6 +219,9 @@ fun InboxScreen(
                                     onClick = { selectedTodo = uiState.todos.find { t -> t.id == it } },
                                     onCancel = { todoId ->
                                         todoToConfirmCancel = uiState.todos.find { t -> t.id == todoId }
+                                    },
+                                    onPostpone = { todoId, option ->
+                                        viewModel.postponeTodo(todoId, option)
                                     }
                                 )
                             }

@@ -248,6 +248,7 @@ fun CollapsibleTodoSection(
     onToggleComplete: (String) -> Unit,
     onTodoClick: (String) -> Unit,
     onTodoCancel: (String) -> Unit,
+    onTodoPostpone: ((String, PostponeOption) -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     Column(modifier = modifier) {
@@ -270,7 +271,8 @@ fun CollapsibleTodoSection(
                             todo = todo,
                             onToggleComplete = onToggleComplete,
                             onClick = onTodoClick,
-                            onCancel = onTodoCancel
+                            onCancel = onTodoCancel,
+                            onPostpone = onTodoPostpone
                         )
                     }
                 }
