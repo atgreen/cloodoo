@@ -212,8 +212,8 @@
                               ;; Set device-id from the change envelope (not from local server)
                               (setf (todo-device-id todo) origin-device-id)
 
-                              ;; Try to enrich the TODO
-                              (when *enrichment-enabled*
+                              ;; Try to enrich the TODO only if it's marked as needing enrichment
+                              (when (and *enrichment-enabled* (todo-enriching-p todo))
                                 (handler-case
                                     (let ((enriched-data (enrich-todo-input
                                                           (todo-title todo)
