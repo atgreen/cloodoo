@@ -1969,6 +1969,12 @@
   "Handle sync refresh - model already updated, just trigger redraw."
   (values model nil))
 
+(defmethod tui:update-message ((model app-model) (msg sync-reload-msg))
+  "Handle sync reload - reload todos from database and trigger redraw."
+  (setf (model-todos model) (load-todos))
+  (setf (model-visible-todos-dirty model) t)
+  (values model nil))
+
 (defmethod tui:update-message ((model app-model) (msg tui:mouse-scroll-event))
   "Handle mouse scroll by scrolling the viewport."
   (when (eql (model-view-state model) :list)
