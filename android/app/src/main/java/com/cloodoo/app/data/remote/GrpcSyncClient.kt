@@ -13,8 +13,10 @@ import com.cloodoo.app.proto.TodoSyncGrpc
 import io.grpc.ManagedChannel
 import io.grpc.okhttp.OkHttpChannelBuilder
 import io.grpc.stub.StreamObserver
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.buffer
 import kotlinx.coroutines.flow.callbackFlow
 import java.util.concurrent.TimeUnit
 
@@ -38,7 +40,7 @@ class GrpcSyncClient(
      * @param since Timestamp to sync from (ISO 8601), or null for full sync
      * @return Flow of incoming SyncMessages from the server
      */
-    fun connect(deviceId: String, since: String?): Flow<SyncMessage> = callbackFlow {
+    fun connect(deviceId: String, since: String?): Flow<SyncMessage> = callbackFlow<SyncMessage> {
         val serverAddress = certificateManager.getServerAddress()
             ?: throw IllegalStateException("Server address not configured")
         val serverPort = certificateManager.getServerPort()
@@ -121,7 +123,7 @@ class GrpcSyncClient(
             Log.d(TAG, "Flow closed, cleaning up")
             disconnect()
         }
-    }
+    }.buffer(Channel.UNLIMITED)  // Prevent message loss during large sync batches
 
     /**
      * Send a todo change to the server.

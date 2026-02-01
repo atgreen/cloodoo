@@ -40,6 +40,7 @@ class SyncManager(
     private var lastServerTime: String? = null
     private var pendingAckServerTime: String? = null
     private var pendingChangesRemaining: Int = 0
+    private var pendingChangesTotal: Int = 0
 
     private val _connectionState = MutableStateFlow(ConnectionState.DISCONNECTED)
     val connectionState: StateFlow<ConnectionState> = _connectionState.asStateFlow()
@@ -258,6 +259,7 @@ class SyncManager(
                     // Defer advancing lastServerTime until all pending changes are received
                     pendingAckServerTime = ack.serverTime
                     pendingChangesRemaining = ack.pendingChanges
+                    pendingChangesTotal = ack.pendingChanges
                 } else {
                     lastServerTime = ack.serverTime
                 }
@@ -286,9 +288,12 @@ class SyncManager(
                 if (pendingChangesRemaining > 0) {
                     pendingChangesRemaining--
                     if (pendingChangesRemaining == 0) {
-                        lastServerTime = pendingAckServerTime
+                        val serverTime = pendingAckServerTime ?: ""
+                        lastServerTime = serverTime
                         pendingAckServerTime = null
                         Log.d(TAG, "All pending changes received, advancing lastServerTime to $lastServerTime")
+                        _syncEvents.emit(SyncEvent.InitialSyncComplete(serverTime, pendingChangesTotal))
+                        pendingChangesTotal = 0
                     }
                 }
             }
@@ -412,6 +417,7 @@ enum class ConnectionState {
 
 sealed class SyncEvent {
     data class Connected(val serverTime: String, val pendingChanges: Int) : SyncEvent()
+    data class InitialSyncComplete(val serverTime: String, val changesReceived: Int) : SyncEvent()
     data class Received(val todoId: String, val type: SyncEventType) : SyncEvent()
     data class Sent(val todoId: String) : SyncEvent()
     data class Error(val message: String) : SyncEvent()

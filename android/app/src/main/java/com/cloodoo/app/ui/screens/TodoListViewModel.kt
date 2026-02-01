@@ -98,8 +98,12 @@ class TodoListViewModel(
             syncManager.syncEvents.collect { event ->
                 when (event) {
                     is SyncEvent.Connected -> {
-                        _lastSyncTime.value = event.serverTime
-                        saveLastSyncTime(getApplication())
+                        // Only save lastSyncTime when there are no pending changes
+                        // If there are pending changes, wait until they're all received
+                        if (event.pendingChanges == 0) {
+                            _lastSyncTime.value = event.serverTime
+                            saveLastSyncTime(getApplication())
+                        }
                         _uiState.update {
                             it.copy(
                                 isSyncing = false,
@@ -108,6 +112,15 @@ class TodoListViewModel(
                                 else
                                     "Connected - up to date"
                             )
+                        }
+                    }
+                    is SyncEvent.InitialSyncComplete -> {
+                        // All pending changes received - now safe to save server time
+                        _lastSyncTime.value = event.serverTime
+                        saveLastSyncTime(getApplication())
+                        Log.d(TAG, "Initial sync complete: ${event.changesReceived} changes received")
+                        _uiState.update {
+                            it.copy(lastSyncResult = "Synced ${event.changesReceived} items")
                         }
                     }
                     is SyncEvent.Received -> {

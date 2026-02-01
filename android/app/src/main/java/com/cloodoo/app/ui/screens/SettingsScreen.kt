@@ -6,7 +6,10 @@
 
 package com.cloodoo.app.ui.screens
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Cloud
@@ -152,38 +155,46 @@ fun SettingsScreen(
             style = MaterialTheme.typography.titleMedium,
             color = MaterialTheme.colorScheme.primary
         )
-        Card(modifier = Modifier.fillMaxWidth()) {
+        Card(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable { showContextEditor = true }
+        ) {
             Column(
                 modifier = Modifier.padding(16.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp)
+                verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                Text(
-                    text = "User Context",
-                    style = MaterialTheme.typography.bodyLarge
-                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "User Context",
+                        style = MaterialTheme.typography.bodyLarge
+                    )
+                    Text(
+                        text = "Tap to edit",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                }
                 Text(
                     text = if (userContext.isBlank()) {
-                        "Not set"
+                        "Not set - tap to add context for LLM enrichment"
                     } else {
-                        val preview = userContext.take(60)
-                        if (userContext.length > 60) "$preview..." else preview
+                        val preview = userContext.take(100)
+                        if (userContext.length > 100) "$preview..." else preview
                     },
                     style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(vertical = 4.dp)
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 if (userContext.isNotBlank()) {
                     Text(
                         text = "${userContext.length} characters",
                         style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                        color = MaterialTheme.colorScheme.outline
                     )
-                }
-                Button(
-                    onClick = { showContextEditor = true },
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Text(if (userContext.isBlank()) "Set Context" else "Edit Context")
                 }
             }
         }
@@ -273,10 +284,15 @@ fun UserContextEditorDialog(
         onDismissRequest = { handleDismiss() },
         properties = androidx.compose.ui.window.DialogProperties(
             usePlatformDefaultWidth = false,
-            dismissOnBackPress = false
+            dismissOnBackPress = false,
+            decorFitsSystemWindows = false
         )
     ) {
         Scaffold(
+            modifier = Modifier
+                .fillMaxSize()
+                .systemBarsPadding()
+                .imePadding(),
             topBar = {
                 TopAppBar(
                     title = { Text("User Context") },
@@ -302,25 +318,20 @@ fun UserContextEditorDialog(
                 )
             }
         ) { paddingValues ->
-            Column(
+            OutlinedTextField(
+                value = editedContext,
+                onValueChange = { editedContext = it },
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(paddingValues)
-            ) {
-                OutlinedTextField(
-                    value = editedContext,
-                    onValueChange = { editedContext = it },
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(16.dp),
-                    placeholder = { Text("Enter context for LLM enrichment...\n\nExample:\n- I'm a software developer\n- I prefer concise descriptions\n- Tag work items with 'work'") },
-                    textStyle = MaterialTheme.typography.bodyMedium,
-                    colors = OutlinedTextFieldDefaults.colors(
-                        unfocusedContainerColor = MaterialTheme.colorScheme.surface,
-                        focusedContainerColor = MaterialTheme.colorScheme.surface
-                    )
+                    .padding(16.dp),
+                placeholder = { Text("Enter context for LLM enrichment...\n\nExample:\n- I'm a software developer\n- I prefer concise descriptions\n- Tag work items with 'work'") },
+                textStyle = MaterialTheme.typography.bodyMedium,
+                colors = OutlinedTextFieldDefaults.colors(
+                    unfocusedContainerColor = MaterialTheme.colorScheme.surface,
+                    focusedContainerColor = MaterialTheme.colorScheme.surface
                 )
-            }
+            )
         }
     }
 
