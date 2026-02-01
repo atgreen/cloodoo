@@ -1705,10 +1705,10 @@ URL format: http://HOST:PORT/pair/TOKEN"
                                (tui:colored "✓" :fg tui:*fg-green*)))
                      ;; Clean up temp file
                      (when (probe-file temp-file)
-                       (delete-file temp-file)))
+                       (delete-file temp-file))))
                     (t
                      (format t "~A Editor exited with error~%"
-                             (tui:colored "✗" :fg tui:*fg-red*))))))))))
+                             (tui:colored "✗" :fg tui:*fg-red*))))))))
 
 (defun make-context-set-command ()
   "Create the 'context set' subcommand."
