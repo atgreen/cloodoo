@@ -793,8 +793,10 @@
         ;; Pad to full width
         (let ((inner-width (- term-width 2)))
           (format s "~A~%"
-                  (tui:render-border (pad-content-to-width content inner-width)
-                                     tui:*border-double*))))
+                  (tui:render-shadow
+                   (tui:render-border (pad-content-to-width content inner-width)
+                                      tui:*border-double*)
+                   :style :medium))))
 
       ;; Help bar
       (let ((help " RET:apply  ESC:cancel "))
@@ -928,8 +930,10 @@
         ;; Pad to full width
         (let ((inner-width (- term-width 2)))
           (format s "~A~%"
-                  (tui:render-border (pad-content-to-width content inner-width)
-                                     tui:*border-double*))))
+                  (tui:render-shadow
+                   (tui:render-border (pad-content-to-width content inner-width)
+                                      tui:*border-double*)
+                   :style :medium))))
 
       ;; Help bar
       (let ((help " RET:import  ESC:cancel "))
@@ -1114,7 +1118,7 @@
       (format nil "~A~%~%~A" keys-section presets-section))))
 
 (defun render-box-with-title (title content &key min-width)
-  "Render a box with a title label on the top border line.
+  "Render a box with a title label on the top border line and drop shadow.
    ╭──┤ TITLE ├─────────────────────────╮
    │ content                            │
    ╰────────────────────────────────────╯
@@ -1134,24 +1138,26 @@
          ;; Width after title to right edge
          (right-width (max 0 (- box-inner-width indent title-len 2)))  ; -2 for ┤ and ├
          (reset (format nil "~C[0m" #\Escape)))  ; ANSI reset to prevent color bleed
-    (with-output-to-string (s)
-      ;; Top border with embedded title
-      (format s "~A╭~A┤~A├~A╮~%"
-              reset
-              (make-string indent :initial-element #\─)
-              (tui:bold padded-title)
-              (make-string right-width :initial-element #\─))
-      ;; Content rows
-      (dolist (line content-lines)
-        (let ((padding (max 0 (- content-width (tui:visible-length line)))))
-          (format s "~A│ ~A~A │~%"
-                  reset
-                  line
-                  (make-string padding :initial-element #\Space))))
-      ;; Bottom border
-      (format s "~A╰~A╯"
-              reset
-              (make-string box-inner-width :initial-element #\─)))))
+    (let ((box (with-output-to-string (s)
+                 ;; Top border with embedded title
+                 (format s "~A╭~A┤~A├~A╮~%"
+                         reset
+                         (make-string indent :initial-element #\─)
+                         (tui:bold padded-title)
+                         (make-string right-width :initial-element #\─))
+                 ;; Content rows
+                 (dolist (line content-lines)
+                   (let ((padding (max 0 (- content-width (tui:visible-length line)))))
+                     (format s "~A│ ~A~A │~%"
+                             reset
+                             line
+                             (make-string padding :initial-element #\Space))))
+                 ;; Bottom border
+                 (format s "~A╰~A╯"
+                         reset
+                         (make-string box-inner-width :initial-element #\─)))))
+      ;; Add shadow to the box
+      (tui:render-shadow box :style :medium))))
 
 (defun render-help-view (model)
   "Render the help view as an overlay dialog on the list view."
@@ -1365,8 +1371,10 @@
          (background (render-list-view model))
          ;; Build the modal box with border
          (modal-content (render-date-modal-box model))
-         (modal-bordered (tui:render-border modal-content tui:*border-rounded*
-                                           :fg-color tui:*fg-blue*)))
+         (modal-bordered (tui:render-shadow
+                          (tui:render-border modal-content tui:*border-rounded*
+                                            :fg-color tui:*fg-blue*)
+                          :style :medium)))
     ;; Use the new overlay-centered to composite the modal on top
     (tui:overlay-centered modal-bordered background)))
 
