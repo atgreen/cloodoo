@@ -538,6 +538,37 @@
                  #-(or linux darwin) "xdg-open"))
     (uiop:launch-program (list command url))))
 
+(defun open-attachment (hash)
+  "Open an attachment by hash. Extracts to cache directory and opens with system viewer."
+  (when hash
+    (with-db (db)
+      (multiple-value-bind (stored-hash content filename mime-type size created-at)
+          (resolve-attachment db hash)
+        (declare (ignore stored-hash size created-at))
+        (when content
+          ;; Determine file extension from mime-type or filename
+          (let* ((ext (cond
+                        ((and filename (str:contains? "." filename))
+                         (subseq filename (1+ (position #\. filename :from-end t))))
+                        ((string= mime-type "image/jpeg") "jpg")
+                        ((string= mime-type "image/png") "png")
+                        ((string= mime-type "image/gif") "gif")
+                        ((string= mime-type "image/webp") "webp")
+                        (t "bin")))
+                 (cache-dir (cache-directory))
+                 (cache-file (merge-pathnames (format nil "attachments/~A.~A" hash ext) cache-dir)))
+            ;; Ensure cache/attachments directory exists
+            (ensure-directories-exist cache-file)
+            ;; Write content to cache file if not already there
+            (unless (probe-file cache-file)
+              (with-open-file (out cache-file
+                                   :direction :output
+                                   :element-type '(unsigned-byte 8)
+                                   :if-exists :supersede)
+                (write-sequence content out)))
+            ;; Open with system viewer
+            (open-url (namestring cache-file))))))))
+
 ;;── TEA Methods ───────────────────────────────────────────────────────────────
 
 (defmethod tui:init ((model app-model))
@@ -1745,6 +1776,15 @@
                 (urls (get-todo-urls todo)))
            (when urls
              (open-url (first urls)))))
+       (values model nil))
+
+      ;; Open photo/attachment with 'p'
+      ((and (characterp key) (char= key #\p))
+       (when (< (model-cursor model) (length todos))
+         (let* ((todo (nth (model-cursor model) todos))
+                (hashes (todo-attachment-hashes todo)))
+           (when hashes
+             (open-attachment (first hashes)))))
        (values model nil))
 
       ;; Edit notes with 'n' - opens external editor

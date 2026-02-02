@@ -592,6 +592,15 @@
                                  (tui:wrap-text (tui:colored (todo-url todo) :fg tui:*fg-blue*)
                                                 content-width :indent 2 :continuation-indent 4)))
 
+                       ;; Attachments
+                       (when (todo-attachment-hashes todo)
+                         (let ((count (length (todo-attachment-hashes todo))))
+                           (format s "~%~%~A ~A"
+                                   (tui:bold (tui:colored "Attachments:" :fg tui:*fg-cyan*))
+                                   (tui:colored (format nil "~D photo~:P (press p to view)"
+                                                        count)
+                                               :fg tui:*fg-yellow*))))
+
                        ;; Metadata
                        (format s "~%~%~A"
                                (tui:colored
@@ -610,7 +619,7 @@
 
                        ;; Help line at bottom
                        (format s "~%~%~A"
-                               (tui:colored "RET/q:back  e:edit  n:notes  s:sched  d:deadline  o:url"
+                               (tui:colored "RET/q:back  e:edit  n:notes  s:sched  d:deadline  o:url  p:photo"
                                            :fg tui:*fg-bright-black*))))
                    (modal (render-box-with-title "ITEM DETAILS" content :min-width modal-width)))
               (tui:composite-with-shadow modal background
