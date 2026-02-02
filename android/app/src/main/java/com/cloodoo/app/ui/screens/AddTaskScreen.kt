@@ -21,6 +21,8 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.unit.dp
 import androidx.compose.runtime.mutableIntStateOf
+import com.cloodoo.app.ui.components.LocalAttachment
+import com.cloodoo.app.ui.components.PhotoAttachmentPicker
 import com.cloodoo.app.ui.util.formatDate
 import com.cloodoo.app.ui.util.millisToIsoDate
 import com.cloodoo.app.ui.util.tagsToStorageString
@@ -42,6 +44,7 @@ fun AddTaskScreen(
     var showScheduledDatePicker by remember { mutableStateOf(false) }
     var repeatUnit by remember { mutableStateOf<String?>(null) }
     var repeatInterval by remember { mutableIntStateOf(1) }
+    var attachments by remember { mutableStateOf<List<LocalAttachment>>(emptyList()) }
 
     val focusRequester = remember { FocusRequester() }
     LaunchedEffect(Unit) { focusRequester.requestFocus() }
@@ -66,7 +69,8 @@ fun AddTaskScreen(
                                 scheduledDate = scheduledDate,
                                 tags = if (tags.isNotEmpty()) tagsToStorageString(tags) else null,
                                 repeatInterval = if (repeatUnit != null) repeatInterval else null,
-                                repeatUnit = repeatUnit
+                                repeatUnit = repeatUnit,
+                                attachments = attachments.ifEmpty { null }
                             )
                             onNavigateBack()
                         },
@@ -239,6 +243,13 @@ fun AddTaskScreen(
                     )
                 }
             }
+
+            // Attachments
+            Text("Attachments", style = MaterialTheme.typography.labelLarge)
+            PhotoAttachmentPicker(
+                attachments = attachments,
+                onAttachmentsChanged = { attachments = it }
+            )
         }
     }
 

@@ -15,6 +15,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.unit.dp
+import com.cloodoo.app.ui.components.LocalAttachment
+import com.cloodoo.app.ui.components.PhotoAttachmentPicker
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -23,6 +25,7 @@ fun QuickAddScreen(
     onNavigateBack: () -> Unit
 ) {
     var text by remember { mutableStateOf("") }
+    var attachments by remember { mutableStateOf<List<LocalAttachment>>(emptyList()) }
     val focusRequester = remember { FocusRequester() }
 
     LaunchedEffect(Unit) { focusRequester.requestFocus() }
@@ -39,7 +42,10 @@ fun QuickAddScreen(
                 actions = {
                     TextButton(
                         onClick = {
-                            viewModel.createTodo(title = text.trim())
+                            viewModel.createTodo(
+                                title = text.trim(),
+                                attachments = attachments.ifEmpty { null }
+                            )
                             onNavigateBack()
                         },
                         enabled = text.isNotBlank()
@@ -70,6 +76,13 @@ fun QuickAddScreen(
                 text = "Dates, priority, and tags are parsed automatically",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            PhotoAttachmentPicker(
+                attachments = attachments,
+                onAttachmentsChanged = { attachments = it }
             )
         }
     }

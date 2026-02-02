@@ -19,10 +19,8 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.FlashOn
-import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -35,8 +33,6 @@ import androidx.compose.ui.unit.dp
 @Composable
 fun SpeedDialFab(
     onTypeClick: () -> Unit,
-    onSpeakClick: () -> Unit,
-    onCameraClick: () -> Unit,
     onQuickAddClick: () -> Unit,
 ) {
     var expanded by remember { mutableStateOf(false) }
@@ -89,24 +85,6 @@ fun SpeedDialFab(
                     horizontalAlignment = Alignment.End,
                     verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
-                    MiniFabWithLabel(
-                        label = "Scan",
-                        icon = Icons.Default.CameraAlt,
-                        contentDescription = "OCR capture",
-                        onClick = {
-                            expanded = false
-                            onCameraClick()
-                        }
-                    )
-                    MiniFabWithLabel(
-                        label = "Speak",
-                        icon = Icons.Default.Mic,
-                        contentDescription = "Voice add",
-                        onClick = {
-                            expanded = false
-                            onSpeakClick()
-                        }
-                    )
                     MiniFabWithLabel(
                         label = "Form",
                         icon = Icons.Default.Edit,

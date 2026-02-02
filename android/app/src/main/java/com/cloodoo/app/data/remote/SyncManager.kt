@@ -371,6 +371,17 @@ class SyncManager(
     }
 
     private fun TodoEntity.toProto(): TodoData {
+        // Parse attachment hashes from JSON array string
+        val attachmentHashesList = attachmentHashes?.let { json ->
+            try {
+                org.json.JSONArray(json).let { arr ->
+                    (0 until arr.length()).map { arr.getString(it) }
+                }
+            } catch (e: Exception) {
+                emptyList()
+            }
+        } ?: emptyList()
+
         return TodoData.newBuilder()
             .setId(id)
             .setTitle(title)
@@ -387,10 +398,16 @@ class SyncManager(
             .setParentId(parentId ?: "")
             .setRepeatInterval(repeatInterval ?: 0)
             .setRepeatUnit(repeatUnit ?: "")
+            .addAllAttachmentHashes(attachmentHashesList)
             .build()
     }
 
     private fun TodoData.toEntity(validFrom: String): TodoEntity {
+        // Convert attachment hashes list to JSON array string
+        val attachmentHashesJson = if (attachmentHashesList.isNotEmpty()) {
+            org.json.JSONArray(attachmentHashesList).toString()
+        } else null
+
         return TodoEntity(
             id = id,
             title = title,
@@ -405,6 +422,7 @@ class SyncManager(
             parentId = parentId.ifEmpty { null },
             repeatInterval = if (repeatInterval > 0) repeatInterval else null,
             repeatUnit = repeatUnit.ifEmpty { null },
+            attachmentHashes = attachmentHashesJson,
             createdAt = createdAt,
             completedAt = completedAt.ifEmpty { null },
             validFrom = validFrom,

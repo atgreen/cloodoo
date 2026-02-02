@@ -20,6 +20,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Done
+import androidx.compose.material.icons.filled.Photo
 import androidx.compose.material.icons.filled.Repeat
 import androidx.compose.material.icons.automirrored.filled.Undo
 import androidx.compose.material.icons.outlined.Place
@@ -62,6 +63,7 @@ private fun getPriorityColor(priority: String, colors: PriorityColorScheme): Col
 fun TodoItem(
     todo: TodoEntity,
     onClick: ((String) -> Unit)? = null,
+    onAttachmentClick: ((List<String>) -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     val isCompleted = todo.status == "completed"
@@ -114,10 +116,12 @@ fun TodoItem(
                     overflow = TextOverflow.Ellipsis
                 )
 
-                // Dates, location, repeat, and tags on one line
+                // Dates, location, repeat, attachments, and tags on one line
                 val tags = parseTags(todo.tags)
                 val hasRepeat = todo.repeatInterval != null && todo.repeatInterval > 0 && !todo.repeatUnit.isNullOrEmpty()
-                val hasMetadata = todo.dueDate != null || todo.locationInfo != null || tags.isNotEmpty() || hasRepeat
+                val attachmentCount = parseAttachmentCount(todo.attachmentHashes)
+                val hasAttachments = attachmentCount > 0
+                val hasMetadata = todo.dueDate != null || todo.locationInfo != null || tags.isNotEmpty() || hasRepeat || hasAttachments
                 if (hasMetadata && !isCompleted) {
                     Spacer(modifier = Modifier.height(3.dp))
                     Row(
@@ -139,6 +143,19 @@ fun TodoItem(
                                 icon = Icons.Default.Repeat,
                                 text = repeatLabel
                             )
+                        }
+                        if (hasAttachments) {
+                            val hashes = parseAttachmentHashes(todo.attachmentHashes)
+                            Box(
+                                modifier = if (onAttachmentClick != null) {
+                                    Modifier.clickable { onAttachmentClick(hashes) }
+                                } else Modifier
+                            ) {
+                                MetadataChip(
+                                    icon = Icons.Default.Photo,
+                                    text = if (attachmentCount == 1) "1 photo" else "$attachmentCount photos"
+                                )
+                            }
                         }
                         todo.dueDate?.let { dateStr ->
                             DueDateChip(dateStr = dateStr)
@@ -176,6 +193,7 @@ fun SwipeableTodoItem(
     onClick: (String) -> Unit,
     onCancel: (String) -> Unit,
     onPostpone: ((String, PostponeOption) -> Unit)? = null,
+    onAttachmentClick: ((List<String>) -> Unit)? = null,
     enableCancel: Boolean = true,
     modifier: Modifier = Modifier
 ) {
@@ -290,7 +308,8 @@ fun SwipeableTodoItem(
         ) {
             TodoItem(
                 todo = todo,
-                onClick = null // Click handled by combinedClickable above
+                onClick = null, // Click handled by combinedClickable above
+                onAttachmentClick = onAttachmentClick
             )
         }
     }
@@ -434,22 +453,32 @@ private fun parseLocationName(locationJson: String): String? {
     }
 }
 
+private fun parseAttachmentCount(attachmentHashes: String?): Int {
+    return parseAttachmentHashes(attachmentHashes).size
+}
+
+private fun parseAttachmentHashes(attachmentHashes: String?): List<String> {
+    if (attachmentHashes.isNullOrBlank()) return emptyList()
+    return try {
+        val type = object : TypeToken<List<String>>() {}.type
+        Gson().fromJson(attachmentHashes, type)
+    } catch (e: Exception) {
+        emptyList()
+    }
+}
+
 /**
  * Options for postponing a task
  */
 enum class PostponeOption(val label: String, val icon: androidx.compose.ui.graphics.vector.ImageVector) {
     TOMORROW("Tomorrow", Icons.Default.Done),
-    PLUS_ONE_DAY("+1 Day", Icons.Default.Done),
     NEXT_WEEK("Next Week", Icons.Default.Done),
-    PLUS_ONE_WEEK("+1 Week", Icons.Default.Done),
     NEXT_MONDAY("Next Monday", Icons.Default.Done);
 
     fun calculateNewDate(currentDate: LocalDate = LocalDate.now()): LocalDate {
         return when (this) {
             TOMORROW -> currentDate.plusDays(1)
-            PLUS_ONE_DAY -> currentDate.plusDays(1)
             NEXT_WEEK -> currentDate.plusWeeks(1)
-            PLUS_ONE_WEEK -> currentDate.plusWeeks(1)
             NEXT_MONDAY -> currentDate.with(TemporalAdjusters.next(DayOfWeek.MONDAY))
         }
     }

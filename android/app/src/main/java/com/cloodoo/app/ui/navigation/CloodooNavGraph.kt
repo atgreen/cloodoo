@@ -7,6 +7,7 @@
 package com.cloodoo.app.ui.navigation
 
 import android.app.Application
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
@@ -19,8 +20,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.cloodoo.app.R
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -106,27 +109,24 @@ fun CloodooApp(openQuickAdd: Boolean = false) {
             Scaffold(
                 topBar = {
                     if (showBottomBar) {
-                        TopAppBar(
+                        CenterAlignedTopAppBar(
+                            navigationIcon = {
+                                Image(
+                                    painter = painterResource(id = R.drawable.ic_cloodoo_logo),
+                                    contentDescription = "Cloodoo",
+                                    modifier = Modifier
+                                        .padding(start = 12.dp)
+                                        .size(48.dp)
+                                )
+                            },
                             title = {
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.Start
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Default.Check,
-                                        contentDescription = "Cloodoo",
-                                        modifier = Modifier.padding(end = 12.dp)
-                                    )
-                                    Column {
-                                        Text(
-                                            text = LocalDate.now().format(
-                                                DateTimeFormatter.ofPattern("EEEE, MMMM d", Locale.getDefault())
-                                            ),
-                                            style = MaterialTheme.typography.titleMedium,
-                                            fontWeight = FontWeight.Medium
-                                        )
-                                    }
-                                }
+                                Text(
+                                    text = LocalDate.now().format(
+                                        DateTimeFormatter.ofPattern("EEEE, MMMM d", Locale.getDefault())
+                                    ),
+                                    style = MaterialTheme.typography.titleMedium,
+                                    fontWeight = FontWeight.Medium
+                                )
                             },
                             actions = {
                                 IconButton(onClick = { viewModel.connect() }) {
@@ -257,8 +257,6 @@ fun CloodooApp(openQuickAdd: Boolean = false) {
             if (showFab) {
                 SpeedDialFab(
                     onTypeClick = { navController.navigate(Screen.AddTask.route) },
-                    onSpeakClick = { navController.navigate(Screen.VoiceAdd.route) },
-                    onCameraClick = { navController.navigate(Screen.OcrCapture.route) },
                     onQuickAddClick = { navController.navigate(Screen.QuickAdd.route) }
                 )
             }

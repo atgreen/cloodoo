@@ -6,8 +6,10 @@
 
 package com.cloodoo.app.ui.screens
 
+import android.net.Uri
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -22,13 +24,18 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
 import androidx.navigation.NavController
+import coil.compose.AsyncImage
+import java.io.File
 import java.time.LocalDate
 import java.time.format.DateTimeFormatter
 import java.util.Locale
+import kotlinx.coroutines.launch
 import com.cloodoo.app.data.local.TodoEntity
 import com.cloodoo.app.ui.components.DateGroup
 import com.cloodoo.app.ui.components.PostponeOption
@@ -49,6 +56,24 @@ fun InboxScreen(
     var selectedTodo by remember { mutableStateOf<TodoEntity?>(null) }
     var todoToConfirmComplete by remember { mutableStateOf<TodoEntity?>(null) }
     var todoToConfirmCancel by remember { mutableStateOf<TodoEntity?>(null) }
+
+    // Attachment viewer state
+    var attachmentHashesToView by remember { mutableStateOf<List<String>>(emptyList()) }
+    var attachmentPaths by remember { mutableStateOf<Map<String, String?>>(emptyMap()) }
+    var currentAttachmentIndex by remember { mutableIntStateOf(0) }
+    val coroutineScope = rememberCoroutineScope()
+
+    // Load attachment paths when hashes change
+    LaunchedEffect(attachmentHashesToView) {
+        if (attachmentHashesToView.isNotEmpty()) {
+            attachmentHashesToView.forEach { hash ->
+                coroutineScope.launch {
+                    val path = viewModel.getAttachmentPath(hash)
+                    attachmentPaths = attachmentPaths + (hash to path)
+                }
+            }
+        }
+    }
 
     val allTags = remember(uiState.todos) {
         uiState.todos
@@ -206,6 +231,11 @@ fun InboxScreen(
                                     },
                                     onPostpone = { todoId, option ->
                                         viewModel.postponeTodo(todoId, option)
+                                    },
+                                    onAttachmentClick = { hashes ->
+                                        attachmentHashesToView = hashes
+                                        currentAttachmentIndex = 0
+                                        attachmentPaths = emptyMap()
                                     }
                                 )
                             }
@@ -233,7 +263,8 @@ fun InboxScreen(
             },
             onEdit = { todoId ->
                 navController.navigate(com.cloodoo.app.ui.navigation.Screen.EditTask.createRoute(todoId))
-            }
+            },
+            getAttachmentPath = { hash -> viewModel.getAttachmentPath(hash) }
         )
     }
 
@@ -296,5 +327,48 @@ fun InboxScreen(
                 }
             }
         )
+    }
+
+    // Attachment photo viewer
+    if (attachmentHashesToView.isNotEmpty()) {
+        val currentHash = attachmentHashesToView.getOrNull(currentAttachmentIndex)
+        val currentPath = currentHash?.let { attachmentPaths[it] }
+
+        Dialog(onDismissRequest = { attachmentHashesToView = emptyList() }) {
+            Surface(
+                modifier = Modifier.fillMaxSize(),
+                color = MaterialTheme.colorScheme.scrim.copy(alpha = 0.95f)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .clickable { attachmentHashesToView = emptyList() },
+                    contentAlignment = Alignment.Center
+                ) {
+                    if (currentPath != null) {
+                        AsyncImage(
+                            model = Uri.fromFile(File(currentPath)),
+                            contentDescription = "Attachment",
+                            modifier = Modifier.fillMaxWidth(),
+                            contentScale = ContentScale.Fit
+                        )
+                    } else {
+                        CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
+                    }
+
+                    // Photo counter for multiple photos
+                    if (attachmentHashesToView.size > 1) {
+                        Text(
+                            text = "${currentAttachmentIndex + 1} / ${attachmentHashesToView.size}",
+                            style = MaterialTheme.typography.labelLarge,
+                            color = MaterialTheme.colorScheme.onPrimary,
+                            modifier = Modifier
+                                .align(Alignment.TopCenter)
+                                .padding(top = 48.dp)
+                        )
+                    }
+                }
+            }
+        }
     }
 }

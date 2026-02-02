@@ -118,7 +118,8 @@ fun CompletedScreen(
             },
             onEdit = { todoId ->
                 navController.navigate(com.cloodoo.app.ui.navigation.Screen.EditTask.createRoute(todoId))
-            }
+            },
+            getAttachmentPath = { hash -> viewModel.getAttachmentPath(hash) }
         )
     }
 }

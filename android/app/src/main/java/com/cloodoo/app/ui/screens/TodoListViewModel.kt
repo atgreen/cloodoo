@@ -18,7 +18,10 @@ import com.cloodoo.app.data.local.TodoEntity
 import com.cloodoo.app.data.remote.ConnectionState
 import com.cloodoo.app.data.remote.SyncEvent
 import com.cloodoo.app.data.remote.SyncManager
+import com.cloodoo.app.data.repository.AttachmentRepository
 import com.cloodoo.app.data.repository.TodoRepository
+import com.cloodoo.app.ui.components.LocalAttachment
+import org.json.JSONArray
 import com.cloodoo.app.data.security.CertificateManager
 import com.cloodoo.app.ui.components.DateGroup
 import com.cloodoo.app.ui.components.PostponeOption
@@ -41,6 +44,7 @@ class TodoListViewModel(
     private val deviceId = certificateManager.getDeviceName() ?: "unknown"
     private val database = CloodooDatabase.getDatabase(application)
     private val repository = TodoRepository(database, deviceId)
+    private val attachmentRepository = AttachmentRepository(application, database.attachmentDao())
     private val syncManager = SyncManager(database, certificateManager, deviceId)
 
     // UI State
@@ -186,11 +190,31 @@ class TodoListViewModel(
         scheduledDate: String? = null,
         tags: String? = null,
         repeatInterval: Int? = null,
-        repeatUnit: String? = null
+        repeatUnit: String? = null,
+        attachments: List<LocalAttachment>? = null
     ) {
         if (title.isBlank()) return
 
         viewModelScope.launch {
+            // Register pre-stored attachments in the database
+            val attachmentHashes = attachments?.map { attachment ->
+                // File is already stored in app storage by PhotoAttachmentPicker
+                // Just register it in the database for sync tracking
+                attachmentRepository.registerExisting(
+                    hash = attachment.hash,
+                    filename = attachment.filename,
+                    mimeType = attachment.mimeType,
+                    size = attachment.size,
+                    localPath = attachment.localPath
+                )
+                attachment.hash
+            }
+
+            // Convert hashes to JSON array string for storage
+            val attachmentHashesJson = if (!attachmentHashes.isNullOrEmpty()) {
+                JSONArray(attachmentHashes).toString()
+            } else null
+
             val todo = repository.createTodo(
                 title = title.trim(),
                 description = description,
@@ -199,9 +223,12 @@ class TodoListViewModel(
                 scheduledDate = scheduledDate,
                 tags = tags,
                 repeatInterval = repeatInterval,
-                repeatUnit = repeatUnit
+                repeatUnit = repeatUnit,
+                attachmentHashes = attachmentHashesJson
             )
             syncManager.sendTodoUpsert(todo)
+
+            // TODO: Upload attachments to server (via AttachmentSyncManager)
         }
     }
 
@@ -404,6 +431,14 @@ class TodoListViewModel(
             // Broadcast to sync server
             syncManager.sendSettingsChange("user_context", context, now)
         }
+    }
+
+    /**
+     * Get the local file path for an attachment by its hash.
+     * Returns null if the attachment is not cached locally.
+     */
+    suspend fun getAttachmentPath(hash: String): String? {
+        return attachmentRepository.getLocalPath(hash)
     }
 
     class Factory(

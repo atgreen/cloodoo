@@ -39,6 +39,7 @@ data class TodoEntity(
     val parentId: String? = null,
     val repeatInterval: Int? = null,
     val repeatUnit: String? = null,  // "day", "week", "month", "year"
+    val attachmentHashes: String? = null,  // JSON array stored as string
     val createdAt: String,
     val completedAt: String? = null,
     val validFrom: String,

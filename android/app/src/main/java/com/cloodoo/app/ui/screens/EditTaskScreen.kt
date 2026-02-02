@@ -6,9 +6,12 @@
 
 package com.cloodoo.app.ui.screens
 
+import android.net.Uri
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Clear
@@ -17,14 +20,22 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
 import androidx.compose.runtime.mutableIntStateOf
+import coil.compose.AsyncImage
 import com.cloodoo.app.ui.util.formatDate
 import com.cloodoo.app.ui.util.millisToIsoDate
 import com.cloodoo.app.ui.util.parseTags
 import com.cloodoo.app.ui.util.tagsToStorageString
+import com.google.gson.Gson
+import com.google.gson.reflect.TypeToken
+import kotlinx.coroutines.launch
+import java.io.File
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -59,6 +70,34 @@ fun EditTaskScreen(
     var showScheduledDatePicker by remember { mutableStateOf(false) }
     var repeatUnit by remember { mutableStateOf<String?>(initialTodo.repeatUnit) }
     var repeatInterval by remember { mutableIntStateOf(initialTodo.repeatInterval ?: 1) }
+
+    // Parse attachment hashes
+    val attachmentHashes = remember(initialTodo.attachmentHashes) {
+        if (initialTodo.attachmentHashes.isNullOrBlank()) {
+            emptyList()
+        } else {
+            try {
+                val type = object : TypeToken<List<String>>() {}.type
+                Gson().fromJson<List<String>>(initialTodo.attachmentHashes, type)
+            } catch (e: Exception) {
+                emptyList()
+            }
+        }
+    }
+
+    // Load attachment file paths
+    var attachmentPaths by remember { mutableStateOf<Map<String, String?>>(emptyMap()) }
+    var selectedImagePath by remember { mutableStateOf<String?>(null) }
+    val coroutineScope = rememberCoroutineScope()
+
+    LaunchedEffect(attachmentHashes) {
+        attachmentHashes.forEach { hash ->
+            coroutineScope.launch {
+                val path = viewModel.getAttachmentPath(hash)
+                attachmentPaths = attachmentPaths + (hash to path)
+            }
+        }
+    }
 
     val focusRequester = remember { FocusRequester() }
     LaunchedEffect(Unit) { focusRequester.requestFocus() }
@@ -254,6 +293,77 @@ fun EditTaskScreen(
                             else -> ""
                         },
                         style = MaterialTheme.typography.bodyMedium
+                    )
+                }
+            }
+
+            // Attachments section
+            if (attachmentHashes.isNotEmpty()) {
+                Text("Attachments", style = MaterialTheme.typography.labelLarge)
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    attachmentHashes.forEach { hash ->
+                        val path = attachmentPaths[hash]
+                        Box(
+                            modifier = Modifier
+                                .size(80.dp)
+                                .clip(RoundedCornerShape(8.dp))
+                                .then(
+                                    if (path != null) Modifier.clickable {
+                                        selectedImagePath = path
+                                    } else Modifier
+                                )
+                        ) {
+                            if (path != null) {
+                                AsyncImage(
+                                    model = Uri.fromFile(File(path)),
+                                    contentDescription = "Attachment",
+                                    modifier = Modifier.fillMaxSize(),
+                                    contentScale = ContentScale.Crop
+                                )
+                            } else {
+                                // Loading or not available
+                                Surface(
+                                    modifier = Modifier.fillMaxSize(),
+                                    color = MaterialTheme.colorScheme.surfaceVariant
+                                ) {
+                                    Box(contentAlignment = Alignment.Center) {
+                                        CircularProgressIndicator(
+                                            modifier = Modifier.size(24.dp),
+                                            strokeWidth = 2.dp
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Fullscreen image viewer
+    if (selectedImagePath != null) {
+        Dialog(onDismissRequest = { selectedImagePath = null }) {
+            Surface(
+                modifier = Modifier.fillMaxSize(),
+                color = MaterialTheme.colorScheme.scrim.copy(alpha = 0.9f)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .clickable { selectedImagePath = null },
+                    contentAlignment = Alignment.Center
+                ) {
+                    AsyncImage(
+                        model = Uri.fromFile(File(selectedImagePath!!)),
+                        contentDescription = "Attachment fullscreen",
+                        modifier = Modifier.fillMaxWidth(),
+                        contentScale = ContentScale.Fit
                     )
                 }
             }

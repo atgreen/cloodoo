@@ -12,6 +12,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.Edit
@@ -19,9 +20,13 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
+import coil.compose.AsyncImage
 import com.cloodoo.app.data.local.TodoEntity
 import com.cloodoo.app.ui.components.ClickableTextWithLinks
 import com.cloodoo.app.ui.util.formatDate
@@ -29,6 +34,10 @@ import com.cloodoo.app.ui.util.millisToIsoDate
 import com.cloodoo.app.ui.util.parseDateToMillis
 import com.cloodoo.app.ui.util.parseTags
 import com.cloodoo.app.ui.util.tagsToStorageString
+import com.google.gson.Gson
+import com.google.gson.reflect.TypeToken
+import kotlinx.coroutines.launch
+import java.io.File
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -36,7 +45,8 @@ fun TodoDetailSheet(
     todo: TodoEntity,
     onDismiss: () -> Unit,
     onUpdate: (todoId: String, dueDate: String?, scheduledDate: String?, tags: String?) -> Unit,
-    onEdit: (todoId: String) -> Unit
+    onEdit: (todoId: String) -> Unit,
+    getAttachmentPath: (suspend (String) -> String?)? = null
 ) {
     val context = LocalContext.current
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
@@ -46,6 +56,36 @@ fun TodoDetailSheet(
     var newTagText by remember { mutableStateOf("") }
     var showDueDatePicker by remember { mutableStateOf(false) }
     var showScheduledDatePicker by remember { mutableStateOf(false) }
+
+    // Parse attachment hashes
+    val attachmentHashes = remember(todo.attachmentHashes) {
+        if (todo.attachmentHashes.isNullOrBlank()) {
+            emptyList()
+        } else {
+            try {
+                val type = object : TypeToken<List<String>>() {}.type
+                Gson().fromJson<List<String>>(todo.attachmentHashes, type)
+            } catch (e: Exception) {
+                emptyList()
+            }
+        }
+    }
+
+    // Load attachment paths
+    var attachmentPaths by remember { mutableStateOf<Map<String, String?>>(emptyMap()) }
+    var selectedImagePath by remember { mutableStateOf<String?>(null) }
+    val coroutineScope = rememberCoroutineScope()
+
+    LaunchedEffect(attachmentHashes, getAttachmentPath) {
+        if (getAttachmentPath != null && attachmentHashes.isNotEmpty()) {
+            attachmentHashes.forEach { hash ->
+                coroutineScope.launch {
+                    val path = getAttachmentPath(hash)
+                    attachmentPaths = attachmentPaths + (hash to path)
+                }
+            }
+        }
+    }
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -280,6 +320,85 @@ fun TodoDetailSheet(
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurface
                 )
+            }
+
+            // Attachments section
+            if (attachmentHashes.isNotEmpty()) {
+                Spacer(modifier = Modifier.height(16.dp))
+                HorizontalDivider()
+                Spacer(modifier = Modifier.height(16.dp))
+
+                Text(
+                    text = "Attachments",
+                    style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    attachmentHashes.forEach { hash ->
+                        val path = attachmentPaths[hash]
+                        Box(
+                            modifier = Modifier
+                                .size(80.dp)
+                                .clip(RoundedCornerShape(8.dp))
+                                .then(
+                                    if (path != null) Modifier.clickable {
+                                        selectedImagePath = path
+                                    } else Modifier
+                                )
+                        ) {
+                            if (path != null) {
+                                AsyncImage(
+                                    model = Uri.fromFile(File(path)),
+                                    contentDescription = "Attachment",
+                                    modifier = Modifier.fillMaxSize(),
+                                    contentScale = ContentScale.Crop
+                                )
+                            } else {
+                                Surface(
+                                    modifier = Modifier.fillMaxSize(),
+                                    color = MaterialTheme.colorScheme.surfaceVariant
+                                ) {
+                                    Box(contentAlignment = Alignment.Center) {
+                                        CircularProgressIndicator(
+                                            modifier = Modifier.size(24.dp),
+                                            strokeWidth = 2.dp
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Fullscreen image viewer
+    if (selectedImagePath != null) {
+        Dialog(onDismissRequest = { selectedImagePath = null }) {
+            Surface(
+                modifier = Modifier.fillMaxSize(),
+                color = MaterialTheme.colorScheme.scrim.copy(alpha = 0.95f)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .clickable { selectedImagePath = null },
+                    contentAlignment = Alignment.Center
+                ) {
+                    AsyncImage(
+                        model = Uri.fromFile(File(selectedImagePath!!)),
+                        contentDescription = "Attachment fullscreen",
+                        modifier = Modifier.fillMaxWidth(),
+                        contentScale = ContentScale.Fit
+                    )
+                }
             }
         }
     }

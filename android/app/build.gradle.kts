@@ -129,6 +129,9 @@ dependencies {
     implementation("io.grpc:grpc-protobuf-lite:1.60.0")
     implementation("com.google.protobuf:protobuf-kotlin-lite:3.25.1")
 
+    // Coil for image loading
+    implementation("io.coil-kt:coil-compose:2.5.0")
+
     // Konfetti for celebration effects
     implementation("nl.dionsegijn:konfetti-compose:2.0.4")
 

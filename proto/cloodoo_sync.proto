@@ -92,3 +92,47 @@ service TodoSync {
   // Server sends: SyncMessage(ack) first, then SyncMessage(change) for remote changes
   rpc SyncStream(stream SyncMessage) returns (stream SyncMessage);
 }
+
+// Attachment metadata
+message AttachmentMeta {
+  string hash = 1;        // SHA256 hash (content-addressed storage)
+  string filename = 2;    // Original filename
+  string mime_type = 3;   // MIME type (e.g., "image/jpeg")
+  int64 size = 4;         // Size in bytes
+}
+
+// Streaming upload request
+message AttachmentUploadRequest {
+  oneof request {
+    AttachmentMeta metadata = 1;  // First message: metadata
+    bytes chunk = 2;               // Subsequent messages: file chunks
+  }
+}
+
+// Upload response
+message AttachmentUploadResponse {
+  string hash = 1;   // Confirmed hash
+  string error = 2;  // Error message if failed
+}
+
+// Download request
+message AttachmentDownloadRequest {
+  string hash = 1;  // Hash of attachment to download
+}
+
+// Streaming download response
+message AttachmentDownloadResponse {
+  oneof response {
+    AttachmentMeta metadata = 1;  // First message: metadata
+    bytes chunk = 2;               // Subsequent messages: file chunks
+  }
+  string error = 3;  // Error message if failed
+}
+
+// Attachment upload/download service
+service AttachmentService {
+  // Upload an attachment (streaming)
+  rpc UploadAttachment(stream AttachmentUploadRequest) returns (AttachmentUploadResponse);
+  // Download an attachment (streaming)
+  rpc DownloadAttachment(AttachmentDownloadRequest) returns (stream AttachmentDownloadResponse);
+}

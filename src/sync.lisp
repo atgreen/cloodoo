@@ -343,6 +343,9 @@
                    :repeat-unit (let ((u (gethash "repeat_unit" ht)))
                                   (when (and u (not (eq u 'null)) (stringp u))
                                     (intern (string-upcase u) :keyword)))
+                   :attachment-hashes (let ((ah (gethash "attachment_hashes" ht)))
+                                        (when (and ah (not (eq ah 'null)) (stringp ah))
+                                          (coerce (jzon:parse ah) 'list)))
                    :created-at (lt:parse-timestring (gethash "created_at" ht))
                    :completed-at (parse-timestamp (gethash "completed_at" ht)))))
 
@@ -386,6 +389,9 @@
      :response-type 'proto-sync-message
      :client-streaming t
      :server-streaming t)
+
+    ;; Register the AttachmentService handlers
+    (register-attachment-service *grpc-server*)
 
     ;; Register change hooks so local TUI changes are broadcast to sync clients
     (setf *todo-change-hook* #'notify-todo-changed)
@@ -865,3 +871,170 @@
   (notify-settings-changed key value)
   ;; Send to server (if we're connected as client)
   (sync-client-send-settings key value))
+
+;;══════════════════════════════════════════════════════════════════════════════
+;;  ATTACHMENT SERVICE - Upload/download attachments via gRPC
+;;══════════════════════════════════════════════════════════════════════════════
+
+(defvar *attachment-chunk-size* 65536
+  "Size of chunks for streaming attachment transfers (64KB).")
+
+(defun handle-upload-attachment (ctx stream)
+  "Handler for AttachmentService.UploadAttachment RPC.
+   Receives streaming chunks from client, stores in attachments table."
+  (declare (ignore ctx))
+  (let ((metadata nil)
+        (content-buffer nil)
+        (total-size 0))
+    (handler-case
+        (block upload-handler
+          ;; First message should be metadata
+          (let ((first-msg (ag-grpc:stream-recv stream)))
+            (unless first-msg
+              (let ((resp (make-instance 'proto-attachment-upload-response
+                                         :error "No metadata received")))
+                (return-from upload-handler resp)))
+
+            ;; Check if it's metadata
+            (unless (eql (proto-attachment-upload-request-case first-msg) :metadata)
+              (let ((resp (make-instance 'proto-attachment-upload-response
+                                         :error "First message must be metadata")))
+                (return-from upload-handler resp)))
+
+            (setf metadata (proto-attachment-upload-request-metadata first-msg))
+            (llog:info "Attachment upload started"
+                       :hash (proto-attachment-meta-hash metadata)
+                       :filename (proto-attachment-meta-filename metadata)
+                       :size (proto-attachment-meta-size metadata)))
+
+          ;; Receive content chunks
+          (setf content-buffer (make-array 0 :element-type '(unsigned-byte 8)
+                                            :adjustable t :fill-pointer 0))
+          (loop
+            (let ((msg (ag-grpc:stream-recv stream)))
+              (unless msg
+                ;; End of stream
+                (return))
+
+              (when (eql (proto-attachment-upload-request-case msg) :chunk)
+                (let ((chunk (proto-attachment-upload-request-chunk msg)))
+                  (loop for byte across chunk
+                        do (vector-push-extend byte content-buffer))
+                  (incf total-size (length chunk))))))
+
+          ;; Verify hash
+          (let* ((received-hash (proto-attachment-meta-hash metadata))
+                 (computed-hash (ironclad:byte-array-to-hex-string
+                                 (ironclad:digest-sequence :sha256 content-buffer))))
+            (unless (string-equal received-hash computed-hash)
+              (llog:warn "Attachment hash mismatch"
+                         :expected received-hash
+                         :computed computed-hash)
+              (let ((resp (make-instance 'proto-attachment-upload-response
+                                         :error "Hash mismatch")))
+                (return-from upload-handler resp)))
+
+            ;; Store in database
+            (with-db (db)
+              (sqlite:execute-non-query db
+                "INSERT OR IGNORE INTO attachments (hash, content, filename, mime_type, size, created_at)
+                 VALUES (?, ?, ?, ?, ?, ?)"
+                received-hash
+                content-buffer
+                (proto-attachment-meta-filename metadata)
+                (proto-attachment-meta-mime-type metadata)
+                (proto-attachment-meta-size metadata)
+                (now-iso)))
+
+            (llog:info "Attachment stored" :hash received-hash :size total-size)
+
+            ;; Return success response
+            (make-instance 'proto-attachment-upload-response
+                           :hash received-hash)))
+
+      (error (e)
+        (llog:error "Attachment upload failed" :error (princ-to-string e))
+        (make-instance 'proto-attachment-upload-response
+                       :error (princ-to-string e))))))
+
+(defun handle-download-attachment (ctx request stream)
+  "Handler for AttachmentService.DownloadAttachment RPC.
+   Streams attachment content to client in chunks."
+  (declare (ignore ctx))
+  (let ((hash (proto-attachment-download-request-hash request)))
+    (handler-case
+        (multiple-value-bind (stored-hash content filename mime-type size created-at)
+            (resolve-attachment nil hash)  ; passing nil, will use with-db internally
+          (declare (ignore created-at))
+
+          (unless stored-hash
+            ;; Attachment not found - resolve-attachment opens its own db connection
+            (with-db (db)
+              (let ((row (sqlite:execute-one-row-m-v db
+                          "SELECT hash, content, filename, mime_type, size, created_at
+                           FROM attachments WHERE hash = ?" hash)))
+                (when row
+                  (setf stored-hash (first row)
+                        content (second row)
+                        filename (third row)
+                        mime-type (fourth row)
+                        size (fifth row)))))
+
+            (unless stored-hash
+              (llog:warn "Attachment not found" :hash hash)
+              (let ((resp (make-instance 'proto-attachment-download-response
+                                         :error "Attachment not found")))
+                (ag-grpc:stream-send stream resp))
+              (return-from handle-download-attachment)))
+
+          ;; Send metadata first
+          (let* ((meta (make-instance 'proto-attachment-meta
+                                      :hash stored-hash
+                                      :filename filename
+                                      :mime-type mime-type
+                                      :size size))
+                 (resp (make-instance 'proto-attachment-download-response
+                                      :metadata meta)))
+            (ag-grpc:stream-send stream resp))
+
+          ;; Send content in chunks
+          (let ((content-vec (if (vectorp content)
+                                 content
+                                 (flexi-streams:string-to-octets content :external-format :utf-8))))
+            (loop with len = (length content-vec)
+                  for offset from 0 below len by *attachment-chunk-size*
+                  for end = (min (+ offset *attachment-chunk-size*) len)
+                  for chunk = (subseq content-vec offset end)
+                  do (let ((resp (make-instance 'proto-attachment-download-response
+                                                :chunk chunk)))
+                       (ag-grpc:stream-send stream resp))))
+
+          (llog:info "Attachment sent" :hash hash :size size))
+
+      (error (e)
+        (llog:error "Attachment download failed" :hash hash :error (princ-to-string e))
+        (let ((resp (make-instance 'proto-attachment-download-response
+                                   :error (princ-to-string e))))
+          (ag-grpc:stream-send stream resp))))))
+
+(defun register-attachment-service (server)
+  "Register the AttachmentService handlers with the gRPC server."
+  ;; Upload handler (client streaming)
+  (ag-grpc:server-register-handler
+   server
+   "/cloodoo.AttachmentService/UploadAttachment"
+   #'handle-upload-attachment
+   :request-type 'proto-attachment-upload-request
+   :response-type 'proto-attachment-upload-response
+   :client-streaming t
+   :server-streaming nil)
+
+  ;; Download handler (server streaming)
+  (ag-grpc:server-register-handler
+   server
+   "/cloodoo.AttachmentService/DownloadAttachment"
+   #'handle-download-attachment
+   :request-type 'proto-attachment-download-request
+   :response-type 'proto-attachment-download-response
+   :client-streaming nil
+   :server-streaming t))
