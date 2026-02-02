@@ -715,7 +715,7 @@
              (chunks nil))
         ;; Read all responses from the stream
         (loop
-          (let ((response (ag-grpc:stream-read-message stream)))
+          (let ((response (ag-grpc:stream-receive-message stream)))
             (unless response
               (return))  ; End of stream
             ;; Check for error
