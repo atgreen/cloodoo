@@ -705,18 +705,47 @@
              (t
               (llog:info "Sync connected" :server-time server-time :pending pending)
               (update-sync-status :connected)
-             ;; Save server time for next reconnect (avoid full resync)
-             (when (and server-time (plusp (length server-time)))
-               (save-last-sync-timestamp server-time))
-             (setf *sync-pending-count* pending)
-             (setf *sync-received-count* 0)
-             (llog:info "Expecting pending changes" :count pending)
-             (when *sync-model-ref*
-               (setf (model-sync-pending-count *sync-model-ref*) pending))
-             ;; Send local settings to server on connect
-             (let ((settings-hash (db-load-all-settings)))
-               (when (> (hash-table-count settings-hash) 0)
-                 (sync-client-send-settings nil nil)))))))
+             ;; Load old last-sync timestamp before updating it
+             (let ((old-last-sync (load-last-sync-timestamp)))
+               ;; Save server time for next reconnect (avoid full resync)
+               (when (and server-time (plusp (length server-time)))
+                 (save-last-sync-timestamp server-time))
+
+               (setf *sync-pending-count* pending)
+               (setf *sync-received-count* 0)
+               (llog:info "Expecting pending changes" :count pending)
+               (when *sync-model-ref*
+                 (setf (model-sync-pending-count *sync-model-ref*) pending))
+
+               ;; Send local changes that occurred since last sync
+               ;; This handles changes that failed to send due to connection errors
+               (when (plusp (length old-last-sync))
+                 (handler-case
+                     (let* ((effective-since (if (plusp (length old-last-sync))
+                                                 old-last-sync
+                                                 "1970-01-01T00:00:00Z"))
+                            (local-changes (db-load-current-rows-since effective-since))
+                            (local-count (length local-changes)))
+                       (when (plusp local-count)
+                         (llog:info "Resending local changes" :count local-count :since effective-since)
+                         (dolist (row local-changes)
+                           (let* ((todo (db-row-to-todo row))
+                                  (valid-from (gethash "valid_from" row))
+                                  (change-msg (make-sync-upsert-message-with-timestamp
+                                               (get-device-id) todo valid-from)))
+                             (handler-case
+                                 (ag-grpc:stream-send *sync-client-stream* change-msg)
+                               (error (e)
+                                 (llog:error "Failed to resend local change"
+                                            :id (todo-id todo)
+                                            :error (princ-to-string e))))))))
+                   (error (e)
+                     (llog:warn "Failed to load/send local changes" :error (princ-to-string e)))))
+
+               ;; Send local settings to server on connect
+               (let ((settings-hash (db-load-all-settings)))
+                 (when (> (hash-table-count settings-hash) 0)
+                   (sync-client-send-settings nil nil))))))))
 
     (:change
      (let ((change (proto-msg-change msg)))
