@@ -704,9 +704,13 @@
     (return-from download-attachment-from-server nil))
 
   (handler-case
-      (let* ((stub (make-attachment-service-stub *sync-client-channel*))
-             (request (make-instance 'proto-attachment-download-request :hash hash))
-             (stream (attachment-service-download-attachment stub request))
+      (let* ((request (make-instance 'proto-attachment-download-request :hash hash))
+             ;; Use call-server-stream directly (the generated stub uses wrong function name)
+             (stream (ag-grpc:call-server-stream
+                      *sync-client-channel*
+                      "/cloodoo.AttachmentService/DownloadAttachment"
+                      request
+                      :response-type 'proto-attachment-download-response))
              (metadata nil)
              (chunks nil))
         ;; Read all responses from the stream
