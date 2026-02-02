@@ -696,6 +696,55 @@
         (llog:warn "Error closing channel" :error (princ-to-string e)))))
   (setf *sync-client-channel* nil))
 
+(defun download-attachment-from-server (hash)
+  "Download an attachment from the sync server by hash.
+   Returns T if successful, NIL if failed or not connected."
+  (unless *sync-client-channel*
+    (llog:warn "Cannot download attachment: not connected to sync server")
+    (return-from download-attachment-from-server nil))
+
+  (handler-case
+      (let* ((stub (make-attachment-service-stub *sync-client-channel*))
+             (request (make-instance 'proto-attachment-download-request :hash hash))
+             (stream (attachment-service-download-attachment stub request))
+             (metadata nil)
+             (chunks nil))
+        ;; Read all responses from the stream
+        (loop
+          (let ((response (ag-grpc:stream-read-message stream)))
+            (unless response
+              (return))  ; End of stream
+            ;; Check for error
+            (let ((error-msg (proto-attachment-download-response-error response)))
+              (when (and error-msg (plusp (length error-msg)))
+                (llog:warn "Attachment download error" :hash hash :error error-msg)
+                (return-from download-attachment-from-server nil)))
+            ;; Collect metadata or chunk
+            (let ((meta (proto-attachment-download-response-metadata response))
+                  (chunk (proto-attachment-download-response-chunk response)))
+              (when meta
+                (setf metadata meta))
+              (when chunk
+                (push chunk chunks)))))
+        ;; Assemble and store the attachment
+        (when (and metadata chunks)
+          (let* ((content (apply #'concatenate '(vector (unsigned-byte 8))
+                                 (nreverse chunks)))
+                 (filename (proto-attachment-meta-filename metadata))
+                 (mime-type (proto-attachment-meta-mime-type metadata))
+                 (size (length content)))
+            ;; Store in local database
+            (with-db (db)
+              (sqlite:execute-non-query db
+                "INSERT OR IGNORE INTO attachments (hash, content, filename, mime_type, size, created_at)
+                 VALUES (?, ?, ?, ?, ?, ?)"
+                hash content filename mime-type size (lt:format-timestring nil (lt:now))))
+            (llog:info "Downloaded attachment" :hash hash :size size)
+            t)))
+    (error (e)
+      (llog:error "Failed to download attachment" :hash hash :error (princ-to-string e))
+      nil)))
+
 (defun handle-sync-client-message (msg)
   "Handle a message received from the sync server."
   (case (proto-msg-case msg)

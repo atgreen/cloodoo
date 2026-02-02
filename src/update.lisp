@@ -539,35 +539,45 @@
     (uiop:launch-program (list command url))))
 
 (defun open-attachment (hash)
-  "Open an attachment by hash. Extracts to cache directory and opens with system viewer."
+  "Open an attachment by hash. Extracts to cache directory and opens with system viewer.
+   Downloads from sync server if not available locally."
   (when hash
+    ;; First check if we have it locally
     (with-db (db)
       (multiple-value-bind (stored-hash content filename mime-type size created-at)
           (resolve-attachment db hash)
         (declare (ignore stored-hash size created-at))
-        (when content
-          ;; Determine file extension from mime-type or filename
-          (let* ((ext (cond
-                        ((and filename (str:contains? "." filename))
-                         (subseq filename (1+ (position #\. filename :from-end t))))
-                        ((string= mime-type "image/jpeg") "jpg")
-                        ((string= mime-type "image/png") "png")
-                        ((string= mime-type "image/gif") "gif")
-                        ((string= mime-type "image/webp") "webp")
-                        (t "bin")))
-                 (cache-dir (cache-directory))
-                 (cache-file (merge-pathnames (format nil "attachments/~A.~A" hash ext) cache-dir)))
-            ;; Ensure cache/attachments directory exists
-            (ensure-directories-exist cache-file)
-            ;; Write content to cache file if not already there
-            (unless (probe-file cache-file)
-              (with-open-file (out cache-file
-                                   :direction :output
-                                   :element-type '(unsigned-byte 8)
-                                   :if-exists :supersede)
-                (write-sequence content out)))
-            ;; Open with system viewer
-            (open-url (namestring cache-file))))))))
+        ;; If not found locally, try to download from server
+        (unless content
+          (when (download-attachment-from-server hash)
+            ;; Re-fetch after download
+            (multiple-value-setq (stored-hash content filename mime-type size created-at)
+              (resolve-attachment db hash))))
+        (if content
+            ;; Determine file extension from mime-type or filename
+            (let* ((ext (cond
+                          ((and filename (str:contains? "." filename))
+                           (subseq filename (1+ (position #\. filename :from-end t))))
+                          ((string= mime-type "image/jpeg") "jpg")
+                          ((string= mime-type "image/png") "png")
+                          ((string= mime-type "image/gif") "gif")
+                          ((string= mime-type "image/webp") "webp")
+                          (t "bin")))
+                   (cache-dir (cache-directory))
+                   (cache-file (merge-pathnames (format nil "attachments/~A.~A" hash ext) cache-dir)))
+              ;; Ensure cache/attachments directory exists
+              (ensure-directories-exist cache-file)
+              ;; Write content to cache file if not already there
+              (unless (probe-file cache-file)
+                (with-open-file (out cache-file
+                                     :direction :output
+                                     :element-type '(unsigned-byte 8)
+                                     :if-exists :supersede)
+                  (write-sequence content out)))
+              ;; Open with system viewer
+              (open-url (namestring cache-file)))
+            ;; No content available
+            (llog:warn "Attachment not available" :hash hash))))))
 
 ;;── TEA Methods ───────────────────────────────────────────────────────────────
 
