@@ -1,6 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="128" height="128">
-  <rect width="512" height="512" rx="108" fill="#FFFFFF"/>
-  <text x="80" y="350" font-family="'Georgia', 'Times New Roman', serif" font-size="380" fill="#3949AB">(</text>
-  <text x="320" y="350" font-family="'Georgia', 'Times New Roman', serif" font-size="380" fill="#3949AB">)</text>
+  <path d="M 140 128 Q 64 128 64 256 Q 64 384 140 384" stroke="#3949AB" stroke-width="48" fill="none" stroke-linecap="round"/>
+  <path d="M 372 128 Q 448 128 448 256 Q 448 384 372 384" stroke="#3949AB" stroke-width="48" fill="none" stroke-linecap="round"/>
   <polyline points="195,275 255,340 345,205" stroke="#3949AB" stroke-width="36" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
 </svg>
