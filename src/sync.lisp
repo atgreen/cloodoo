@@ -715,23 +715,24 @@
             (unless response
               (return))  ; End of stream
             ;; Check for error
-            (let ((error-msg (proto-attachment-download-response-error response)))
+            (let ((error-msg (proto-error response)))
               (when (and error-msg (plusp (length error-msg)))
                 (llog:warn "Attachment download error" :hash hash :error error-msg)
                 (return-from download-attachment-from-server nil)))
-            ;; Collect metadata or chunk
-            (let ((meta (proto-attachment-download-response-metadata response))
-                  (chunk (proto-attachment-download-response-chunk response)))
-              (when meta
-                (setf metadata meta))
-              (when chunk
-                (push chunk chunks)))))
+            ;; Collect metadata or chunk based on response-case
+            (case (response-case response)
+              (:metadata
+               (setf metadata (proto-metadata response)))
+              (:chunk
+               (let ((chunk (proto-chunk response)))
+                 (when (and chunk (plusp (length chunk)))
+                   (push chunk chunks)))))))
         ;; Assemble and store the attachment
         (when (and metadata chunks)
           (let* ((content (apply #'concatenate '(vector (unsigned-byte 8))
                                  (nreverse chunks)))
-                 (filename (proto-attachment-meta-filename metadata))
-                 (mime-type (proto-attachment-meta-mime-type metadata))
+                 (filename (proto-filename metadata))
+                 (mime-type (proto-mime-type metadata))
                  (size (length content)))
             ;; Store in local database
             (with-db (db)
