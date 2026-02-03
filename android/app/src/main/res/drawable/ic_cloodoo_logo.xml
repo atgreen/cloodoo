@@ -1,16 +1,17 @@
-<!-- Cloodoo Logo - Checkmark in Circle -->
+<!-- Cloodoo Logo - Checkmark in Parentheses (✓) -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="48dp"
     android:height="48dp"
     android:viewportWidth="48"
     android:viewportHeight="48">
 
-    <!-- Outer circle -->
+    <!-- Left parenthesis -->
     <path
         android:fillColor="#00000000"
         android:strokeColor="#1976D2"
         android:strokeWidth="3"
-        android:pathData="M24,24m-20,0a20,20 0,1,1 40,0a20,20 0,1,1 -40,0"/>
+        android:strokeLineCap="round"
+        android:pathData="M18,12 Q12,24 18,36"/>
 
     <!-- Checkmark -->
     <path
@@ -19,5 +20,13 @@
         android:strokeWidth="3.5"
         android:strokeLineCap="round"
         android:strokeLineJoin="round"
-        android:pathData="M14,24l6,6l14,-14"/>
+        android:pathData="M20,24l4,4l8,-10"/>
+
+    <!-- Right parenthesis -->
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#1976D2"
+        android:strokeWidth="3"
+        android:strokeLineCap="round"
+        android:pathData="M35,12 Q41,24 35,36"/>
 </vector>
