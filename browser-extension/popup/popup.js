@@ -221,13 +221,29 @@ document.addEventListener('DOMContentLoaded', async () => {
     return EMAIL_SITES.some(site => url.includes(site));
   }
 
+  // Sanitize text by removing invisible Unicode characters that can break TUI rendering
+  // Removes: zero-width spaces, combining marks, non-breaking spaces, figure spaces, etc.
+  function sanitizeText(text) {
+    if (!text) return text;
+    return text
+      // Remove zero-width characters
+      .replace(/[\u034F\u200B\u200C\u200D\uFEFF]/g, '')
+      // Replace non-breaking spaces and figure spaces with regular spaces
+      .replace(/[\u00A0\u2007]/g, ' ')
+      // Collapse multiple spaces
+      .replace(/  +/g, ' ')
+      .trim();
+  }
+
   // Pre-fill the form from email data (used by both pending stash and content-script paths)
   function prefillFromEmailData(data) {
     if (data.subject) {
-      titleInput.value = data.subject;
+      titleInput.value = sanitizeText(data.subject);
     }
     if (data.snippet) {
-      descriptionInput.value = `Email from: ${data.sender || 'Unknown'}\n\n${data.snippet}`;
+      const sender = sanitizeText(data.sender) || 'Unknown';
+      const snippet = sanitizeText(data.snippet);
+      descriptionInput.value = `Email from: ${sender}\n\n${snippet}`;
     }
     if (data.sender) {
       tagsInput.value = 'email';

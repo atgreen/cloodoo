@@ -167,10 +167,10 @@
     // Extract subject - for Outlook, prefer title attribute
     const subjectEl = queryWithFallbacks(selectors.subject);
     if (subjectEl) {
-      const subject = (subjectEl.getAttribute('title') ||
-                      subjectEl.textContent || '').trim();
+      const subject = sanitizeText(subjectEl.getAttribute('title') ||
+                                    subjectEl.textContent || '');
       // Only set if non-empty after trimming
-      if (subject.length > 0) {
+      if (subject && subject.length > 0) {
         data.subject = subject;
       }
     }
@@ -185,12 +185,12 @@
       const fromMatch = ariaLabel.match(/^From:\s*([^<]+)/);
       const nameFromLabel = fromMatch ? fromMatch[1].trim() : null;
 
-      const sender = (senderEl.getAttribute('email') ||
-                     senderEl.getAttribute('data-hovercard-id') ||
-                     (emailMatch ? emailMatch[1] : null) ||
-                     nameFromLabel ||
-                     senderEl.textContent || '').trim();
-      if (sender.length > 0) {
+      const sender = sanitizeText(senderEl.getAttribute('email') ||
+                                   senderEl.getAttribute('data-hovercard-id') ||
+                                   (emailMatch ? emailMatch[1] : null) ||
+                                   nameFromLabel ||
+                                   senderEl.textContent || '');
+      if (sender && sender.length > 0) {
         data.sender = sender;
       }
     }
@@ -198,8 +198,8 @@
     // Extract body snippet
     const bodyEl = queryWithFallbacks(selectors.body);
     if (bodyEl) {
-      const text = (bodyEl.textContent || '').trim();
-      if (text.length > 0) {
+      const text = sanitizeText(bodyEl.textContent || '');
+      if (text && text.length > 0) {
         data.snippet = text.substring(0, 200) + (text.length > 200 ? '...' : '');
       }
     }
@@ -216,6 +216,20 @@
     }
 
     return data;
+  }
+
+  // Sanitize text by removing invisible Unicode characters that can break TUI rendering
+  // Removes: zero-width spaces, combining marks, non-breaking spaces, figure spaces, etc.
+  function sanitizeText(text) {
+    if (!text) return text;
+    return text
+      // Remove zero-width characters
+      .replace(/[\u034F\u200B\u200C\u200D\uFEFF]/g, '')
+      // Replace non-breaking spaces and figure spaces with regular spaces
+      .replace(/[\u00A0\u2007]/g, ' ')
+      // Collapse multiple spaces
+      .replace(/  +/g, ' ')
+      .trim();
   }
 
   // Check if data has meaningful content (not just whitespace)
