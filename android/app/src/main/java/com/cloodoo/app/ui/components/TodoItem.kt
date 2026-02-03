@@ -86,11 +86,15 @@ fun TodoItem(
             defaultElevation = if (isCompleted) 0.dp else 1.dp
         )
     ) {
-        Row(modifier = Modifier.fillMaxWidth()) {
-            // Priority accent strip (width of 'm' character ~24dp)
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(IntrinsicSize.Min)
+        ) {
+            // Priority accent strip
             Box(
                 modifier = Modifier
-                    .width(24.dp)
+                    .width(12.dp)
                     .fillMaxHeight()
                     .background(
                         if (isCompleted) priorityColor.copy(alpha = 0.3f)
