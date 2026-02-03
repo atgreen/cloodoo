@@ -1,0 +1,23 @@
+<!-- Cloodoo Logo - Checkmark in Circle -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="48dp"
+    android:height="48dp"
+    android:viewportWidth="48"
+    android:viewportHeight="48">
+
+    <!-- Outer circle -->
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#1976D2"
+        android:strokeWidth="3"
+        android:pathData="M24,24m-20,0a20,20 0,1,1 40,0a20,20 0,1,1 -40,0"/>
+
+    <!-- Checkmark -->
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#1976D2"
+        android:strokeWidth="3.5"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:pathData="M14,24l6,6l14,-14"/>
+</vector>
