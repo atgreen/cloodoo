@@ -665,9 +665,9 @@
                                (tui:colored "RET/q:back  e:edit  n:notes  s:sched  d:deadline  o:url  p:photo"
                                            :fg tui:*fg-bright-black*))))
                    (modal (render-box-with-title "ITEM DETAILS" content :min-width modal-width)))
-              (tui:composite-with-shadow modal background
-                                         :x-position tui:+center+
-                                         :y-position tui:+middle+))))
+              (tui:composite modal background
+                            :x-position tui:+center+
+                            :y-position tui:+middle+))))
     (error (e)
       (llog:error "Error rendering detail view"
                   :error-type (type-of e)
