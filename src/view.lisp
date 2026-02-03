@@ -772,47 +772,45 @@
                                :y-position tui:+middle+)))
 
 (defun render-search-view (model)
-  "Render the search view."
-  (let* ((term-width (model-term-width model))
-         (todos (get-visible-todos model)))
-    (with-output-to-string (s)
-      ;; Title bar
-      (let* ((title " SEARCH ")
-             (pad (max 0 (- term-width (length title)))))
-        (format s "~A~%"
-                (tui:bold (tui:colored
-                          (format nil "~A~A" title (make-string pad :initial-element #\─))
-                          :fg tui:*fg-white* :bg tui:*bg-blue*))))
+  "Render the search view as an overlay dialog on the list view."
+  (let* ((background (render-list-view model))
+         (term-width (model-term-width model))
+         (todos (get-visible-todos model))
+         (modal-width (min 60 (max 40 (- term-width 10))))
+         (content
+           (with-output-to-string (c)
+             ;; Search input
+             (format c "~A~%~%" (tui.textinput:textinput-view (model-search-input model)))
 
-      ;; Build content
-      (let ((content
-              (with-output-to-string (c)
-                (format c "~A" (tui.textinput:textinput-view (model-search-input model)))
-                (format c "~%~%~A"
-                        (tui:colored (format nil "~D match~:P" (length todos))
-                                    :fg tui:*fg-bright-black*))
+             ;; Match count
+             (format c "~A~%"
+                     (tui:colored (format nil "~D match~:P" (length todos))
+                                 :fg tui:*fg-bright-black*))
 
-                (when todos
-                  (loop for todo in (subseq todos 0 (min 5 (length todos)))
-                        do (format c "~%  ~A ~A ~A"
-                                  (org-status-colored (todo-status todo))
-                                  (org-priority-colored (todo-priority todo))
-                                  (sanitize-title-for-display (todo-title todo))))
-                  (when (> (length todos) 5)
-                    (format c "~%  ~A"
-                            (tui:colored (format nil "... and ~D more" (- (length todos) 5))
-                                        :fg tui:*fg-bright-black*)))))))
+             ;; Preview of results
+             (when todos
+               (format c "~%")
+               (loop for todo in (subseq todos 0 (min 5 (length todos)))
+                     do (format c "~A ~A ~A~%"
+                               (org-status-colored (todo-status todo))
+                               (org-priority-colored (todo-priority todo))
+                               (let* ((title (sanitize-title-for-display (todo-title todo)))
+                                      (max-len (- modal-width 20)))
+                                 (if (> (length title) max-len)
+                                     (concatenate 'string (subseq title 0 (max 0 (- max-len 2))) "..")
+                                     title))))
+               (when (> (length todos) 5)
+                 (format c "~%~A"
+                         (tui:colored (format nil "... and ~D more" (- (length todos) 5))
+                                     :fg tui:*fg-bright-black*))))
 
-        ;; Pad to full width
-        (let ((inner-width (- term-width 2)))
-          (format s "~A~%"
-                  (tui:render-border (pad-content-to-width content inner-width)
-                                     tui:*border-double*))))
-
-      ;; Help bar
-      (let ((help " RET:apply  ESC:cancel "))
-        (format s "~A"
-                (render-help-line help term-width :fg tui:*fg-yellow* :bg tui:*bg-blue*))))))
+             ;; Help line
+             (format c "~%~%~A"
+                     (tui:colored "RET:apply  ESC:cancel" :fg tui:*fg-bright-black*))))
+         (modal (render-box-with-title "SEARCH" content :min-width modal-width)))
+    (tui:composite-with-shadow modal background
+                               :x-position tui:+center+
+                               :y-position tui:+middle+)))
 
 (defun render-delete-confirm-view (model)
   "Render the delete confirmation dialog as an overlay."
