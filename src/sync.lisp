@@ -668,12 +668,20 @@
   ;; This will cause stream-read-message to return nil, exiting the loop
   (cleanup-sync-client)
 
-  ;; Wait for the thread to finish
+  ;; Wait for the thread to finish (with timeout to prevent hanging on exit)
   (when (and *sync-client-thread* (bt:thread-alive-p *sync-client-thread*))
     (handler-case
-        (bt:join-thread *sync-client-thread*)
+        (let ((timeout 2)  ; 2 second timeout
+              (elapsed 0)
+              (step 0.1))  ; Check every 100ms
+          (loop while (and (< elapsed timeout) (bt:thread-alive-p *sync-client-thread*))
+                do (sleep step)
+                   (incf elapsed step))
+          (when (bt:thread-alive-p *sync-client-thread*)
+            (llog:warn "Sync thread did not exit cleanly within ~Ds, destroying thread" :timeout timeout)
+            (bt:destroy-thread *sync-client-thread*)))
       (error (e)
-        (llog:warn "Error joining sync thread" :error (princ-to-string e)))))
+        (llog:warn "Error waiting for sync thread" :error (princ-to-string e)))))
   (setf *sync-client-thread* nil)
 
   (update-sync-status :disconnected)
