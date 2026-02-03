@@ -981,22 +981,6 @@
       ((and (characterp key) (char= key #\U))
        (values model (make-user-context-editor-cmd)))
 
-      ;; Set priority B=Medium, C=Low (org-mode style)
-      ;; Note: A is now used for add-child
-      ((and (characterp key) (char-equal key #\B))
-       (when (< (model-cursor model) (length todos))
-         (let ((todo (nth (model-cursor model) todos)))
-           (setf (todo-priority todo) :medium)
-           (save-todo todo)))
-       (values model nil))
-
-      ((and (characterp key) (char-equal key #\C))
-       (when (< (model-cursor model) (length todos))
-         (let ((todo (nth (model-cursor model) todos)))
-           (setf (todo-priority todo) :low)
-           (save-todo todo)))
-       (values model nil))
-
       ;; Filter by status (f cycles through)
       ((and (characterp key) (char= key #\f))
        (invalidate-visible-todos-cache model)

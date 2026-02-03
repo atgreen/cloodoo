@@ -1133,8 +1133,8 @@
                   ("a/A" . "Add/Add child")
                   ("e" . "Edit item")
                   ("DEL/D" . "Delete item/done")
-                  ("B/C" . "Priority B/C")
-                  ("S-↑/↓" . "Priority +/-"))))
+                  ("S-↑/↓" . "Priority +/-")
+                  ("" . ""))))
          (col2 (render-help-column "ORGANIZE"
                 '((">" . "Indent (child)")
                   ("<" . "Outdent")
