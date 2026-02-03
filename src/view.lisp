@@ -1284,66 +1284,63 @@
                                :y-position tui:+middle+)))
 
 (defun render-form-date-edit-view (model)
-  "Render the date picker view for add/edit form scheduled/due dates."
-  (let* ((term-width (model-term-width model))
+  "Render the date picker view for add/edit form as an overlay on the form."
+  (let* ((background (render-add-edit-view model))
+         (term-width (model-term-width model))
          (picker (model-date-picker model))
          (date-type (model-editing-date-type model))
-         (is-edit (model-edit-todo-id model))
-         (title (format nil " SET ~A DATE (~A) "
-                        (if (eql date-type :scheduled) "SCHEDULED" "DUE")
-                        (if is-edit "Edit" "New")))
+         (modal-width (min 56 (max 44 (- term-width 8))))
+         (title (if (eql date-type :scheduled) "SET SCHEDULED DATE" "SET DEADLINE"))
          (current-date (case date-type
                          (:scheduled (model-edit-scheduled-date model))
                          (:due (model-edit-due-date model))))
-         (selected (tui.datepicker:datepicker-selected picker)))
-    (with-output-to-string (s)
-      ;; Title bar
-      (let ((pad (max 0 (- term-width (length title)))))
-        (format s "~A~%"
-                (tui:bold (tui:colored
-                          (format nil "~A~A" title (make-string pad :initial-element #\─))
-                          :fg tui:*fg-white* :bg tui:*bg-magenta*))))
+         (cursor-date (tui.datepicker:datepicker-time picker))
+         (current-str (if current-date
+                         (lt:format-timestring nil current-date
+                                              :format '(:short-month " " :day ", " :year))
+                         "Not set"))
+         (cursor-str (when cursor-date
+                       (multiple-value-bind (sec min hour day month year)
+                           (decode-universal-time cursor-date)
+                         (declare (ignore sec min hour))
+                         (format nil "~A ~D, ~D"
+                                (aref #("Jan" "Feb" "Mar" "Apr" "May" "Jun"
+                                       "Jul" "Aug" "Sep" "Oct" "Nov" "Dec")
+                                      (1- month))
+                                day year))))
+         (picker-view (tui.datepicker:datepicker-view picker))
+         (picker-lines (uiop:split-string picker-view :separator '(#\Newline)))
+         (content
+           (with-output-to-string (c)
+             ;; Current value
+             (format c "Current: ~A~%~%"
+                     (tui:colored current-str :fg tui:*fg-cyan*))
 
-      ;; Current date status
-      (format s "~%~A ~A~%"
-              (tui:bold (if (eql date-type :scheduled) "SCHEDULED:" "DUE:"))
-              (if current-date
-                  (tui:colored
-                   (lt:format-timestring nil current-date
-                                        :format '(:long-weekday " " :short-month " " :day " " :year))
-                   :fg tui:*fg-cyan*)
-                  (tui:colored "Not set" :fg tui:*fg-bright-black*)))
+             ;; Datepicker calendar (centered)
+             (loop for picker-line in picker-lines
+                   for line-content = (string-trim '(#\Space #\Newline) picker-line)
+                   when (> (length line-content) 0)
+                   do (let* ((vis-len (tui:visible-length line-content))
+                             (pad-left (max 0 (floor (- (- modal-width 4) vis-len) 2))))
+                        (format c "~A~A~%"
+                                (make-string pad-left :initial-element #\Space)
+                                line-content)))
 
-      ;; Datepicker calendar
-      (format s "~%~A~%" (tui.datepicker:datepicker-view picker))
+             ;; Blank line
+             (format c "~%")
 
-      ;; Selected date
-      (format s "~%~A ~A~%"
-              (tui:bold "Selected:")
-              (if selected
-                  (multiple-value-bind (sec min hour day month year)
-                      (decode-universal-time selected)
-                    (declare (ignore sec min hour))
-                    (tui:colored (format nil "~A ~D, ~D"
-                                         (aref #("Jan" "Feb" "Mar" "Apr" "May" "Jun"
-                                                "Jul" "Aug" "Sep" "Oct" "Nov" "Dec")
-                                               (1- month))
-                                         day year)
-                                :fg tui:*fg-green*))
-                  (tui:colored "None" :fg tui:*fg-bright-black*)))
+             ;; New/selected date
+             (format c "New: ~A~%~%"
+                     (tui:colored (or cursor-str "None") :fg tui:*fg-green*))
 
-      ;; Navigation help
-      (format s "~%~A~%"
-              (tui:colored "Navigation: ←→ or h/l = day  ↑↓ or j/k = week  [/] = month  {/} = year  Home = today"
-                          :fg tui:*fg-bright-black*))
-      (format s "~A~%"
-              (tui:colored "Actions:    Space = select date  Enter = save & close  Backspace = clear  Esc = cancel"
-                          :fg tui:*fg-bright-black*))
-
-      ;; Help bar
-      (let ((help " ←↑↓→/hjkl:day/week  []:month  {}:year  Home:today  Space:select  Enter:save  Del:clear  Esc:cancel "))
-        (format s "~%~A"
-                (render-help-line help term-width :fg tui:*fg-yellow* :bg tui:*bg-magenta*))))))
+             ;; Help line
+             (format c "~A"
+                     (tui:colored "hjkl:nav  []:month  {}:year  Home:today  RET:save  DEL:clear  ESC:cancel"
+                                 :fg tui:*fg-bright-black*))))
+         (modal (render-box-with-title title content :min-width modal-width)))
+    (tui:composite-with-shadow modal background
+                               :x-position tui:+center+
+                               :y-position tui:+middle+)))
 
 ;;── Modal Overlay Helpers ──────────────────────────────────────────────────────
 
