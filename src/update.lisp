@@ -2017,7 +2017,10 @@
            (todos (get-visible-todos model))
            (groups (group-todos-by-date todos))
            (num-lines (max 1 (+ (length todos) (* (length groups) +header-lines+))))
-           (viewport-height (max 5 (- (model-term-height model) 3)))
+           ;; Account for filter banner height
+           (has-filters (has-active-filters-p model))
+           (filter-banner-height (if has-filters 1 0))
+           (viewport-height (max 5 (- (model-term-height model) 3 filter-banner-height)))
            (max-offset (max 0 (- num-lines viewport-height)))
            (offset (model-scroll-offset model))
            (new-offset (case direction
@@ -2051,9 +2054,12 @@
       ;; List view click handling
       ((eql view-state :list)
        (let* ((screen-x (1- (tui:mouse-event-x msg)))  ; Convert to 0-based
+              ;; Account for filter banner height (same as render-list-view)
+              (has-filters (has-active-filters-p model))
+              (filter-banner-height (if has-filters 1 0))
               (screen-line (- (tui:mouse-event-y msg) 2))
-              (list-line (- screen-line +list-top-lines+))
-              (available-height (max 5 (- (model-term-height model) 3)))
+              (list-line (- screen-line filter-banner-height))
+              (available-height (max 5 (- (model-term-height model) 3 filter-banner-height)))
               (term-width (model-term-width model))
               (scrollbar-col (1- term-width))  ; Rightmost column
               ;; Calculate sidebar width (same logic as render-list-view)
@@ -2132,9 +2138,11 @@
   "Handle mouse drag for scrollbar."
   (when (and (eql (model-view-state model) :list)
              (model-scrollbar-dragging model))
-    (let* ((screen-line (- (tui:mouse-event-y msg) 2))
-           (list-line (- screen-line +list-top-lines+))
-           (available-height (max 5 (- (model-term-height model) 3))))
+    (let* ((has-filters (has-active-filters-p model))
+           (filter-banner-height (if has-filters 1 0))
+           (screen-line (- (tui:mouse-event-y msg) 2))
+           (list-line (- screen-line filter-banner-height))
+           (available-height (max 5 (- (model-term-height model) 3 filter-banner-height))))
       (scroll-to-y-position model (max 0 (min (1- available-height) list-line)) available-height)))
   (values model nil))
 
