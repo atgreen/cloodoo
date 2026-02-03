@@ -664,11 +664,10 @@
                        (format s "~%~%~A"
                                (tui:colored "RET/q:back  e:edit  n:notes  s:sched  d:deadline  o:url  p:photo"
                                            :fg tui:*fg-bright-black*))))
-                   (modal-text (render-box-with-title "ITEM DETAILS" content :min-width modal-width))
-                   (modal-lines (uiop:split-string modal-text :separator '(#\Newline)))
-                   (modal-height (length modal-lines))
-                   (term-height (model-term-height model)))
-              (overlay-modal background modal-text term-width term-height modal-width modal-height))))
+                   (modal (render-box-with-title "ITEM DETAILS" content :min-width modal-width)))
+              (tui:composite-with-shadow modal background
+                                         :x-position tui:+center+
+                                         :y-position tui:+middle+))))
     (error (e)
       (llog:error "Error rendering detail view"
                   :error-type (type-of e)
@@ -1178,48 +1177,46 @@
            (presets-section (render-presets-row presets)))
       (format nil "~A~%~%~A" keys-section presets-section))))
 
-(defun apply-background-to-text (text bg-color)
-  "Apply background color to text while preserving existing foreground colors."
-  (let ((lines (tui:split-string-by-newline text)))
-    (with-output-to-string (s)
-      (loop for line in lines
-            for i from 0
-            do (when (> i 0) (format s "~%"))
-               ;; Apply background color to each line
-               (format s "~A" (tui:colored line :bg bg-color))))))
-
 (defun render-box-with-title (title content &key min-width)
   "Render a box with a title label on the top border line using double-line borders.
-   Uses tuition's render-border with :title and :bg-color support.
-   Dialog boxes have a subtle gray background to distinguish them from the main view."
-  (let* ((dialog-bg tui:*bg-bright-black*)
-         ;; Apply background to content before adding borders
-         (content-with-bg (apply-background-to-text content dialog-bg))
-         ;; Add padding for min-width if needed
-         (content-lines (tui:split-string-by-newline content-with-bg))
+   ╔══╡ TITLE ╞═════════════════════════╗
+   ║ content                            ║
+   ╚════════════════════════════════════╝
+   If MIN-WIDTH is specified, the box will be at least that wide (inner content area).
+   Shadow should be added at composition time using composite-with-shadow."
+  (let* ((content-lines (tui:split-string-by-newline content))
          (natural-width (if content-lines
                             (apply #'max (mapcar #'tui:visible-length content-lines))
                             40))
-         (target-width (if min-width
-                           (max natural-width (- min-width 4))
-                           natural-width))
-         ;; Pad each line to target width
-         (padded-content
-           (with-output-to-string (s)
-             (loop for line in content-lines
-                   for i from 0
-                   do (when (> i 0) (format s "~%"))
-                      (let* ((vis-len (tui:visible-length line))
-                             (padding (max 0 (- target-width vis-len))))
-                        (format s "~A~A"
-                                line
-                                (tui:colored (make-string padding :initial-element #\Space)
-                                            :bg dialog-bg)))))))
-    ;; Use tuition's render-border with title and background support
-    (tui:render-border padded-content tui:*border-double*
-                       :title (format nil " ~A " title)
-                       :title-position :left
-                       :bg-color dialog-bg)))
+         (content-width (if min-width
+                            (max natural-width (- min-width 4))  ; -4 for border and padding
+                            natural-width))
+         (indent 2)  ; Title starts 2 chars from left
+         (padded-title (format nil " ~A " title))
+         (title-len (length padded-title))
+         ;; Box inner width = content + 2 for padding
+         (box-inner-width (+ content-width 2))
+         ;; Width after title to right edge
+         (right-width (max 0 (- box-inner-width indent title-len 2)))  ; -2 for ╡ and ╞
+         (reset (format nil "~C[0m" #\Escape)))  ; ANSI reset to prevent color bleed
+    (with-output-to-string (s)
+      ;; Top border with embedded title (double-line)
+      (format s "~A╔~A╡~A╞~A╗~%"
+              reset
+              (make-string indent :initial-element #\═)
+              (tui:bold padded-title)
+              (make-string right-width :initial-element #\═))
+      ;; Content rows (double-line)
+      (dolist (line content-lines)
+        (let ((padding (max 0 (- content-width (tui:visible-length line)))))
+          (format s "~A║ ~A~A ║~%"
+                  reset
+                  line
+                  (make-string padding :initial-element #\Space))))
+      ;; Bottom border (double-line)
+      (format s "~A╚~A╝"
+              reset
+              (make-string box-inner-width :initial-element #\═)))))
 
 (defun render-help-view (model)
   "Render the help view as an overlay dialog on the list view."
