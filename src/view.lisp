@@ -385,6 +385,42 @@
                           (format c "~A" clamped-content))))
                   (incf current-idx)))))))))
 
+(defun has-active-filters-p (model)
+  "Check if any filters are currently active."
+  (or (plusp (length (model-search-query model)))
+      (model-filter-status model)
+      (model-filter-priority model)
+      (plusp (hash-table-count (model-selected-tags model)))))
+
+(defun render-filter-banner (model term-width)
+  "Render a banner showing active filters."
+  (let ((search (model-search-query model))
+        (status (model-filter-status model))
+        (priority (model-filter-priority model))
+        (tags (model-selected-tags model))
+        (parts nil))
+    ;; Build filter description parts
+    (when (plusp (length search))
+      (push (format nil "Search: \"~A\"" search) parts))
+    (when status
+      (push (format nil "Status: ~A" (string-capitalize (symbol-name status))) parts))
+    (when priority
+      (push (format nil "Priority: ~A" (string-capitalize (symbol-name priority))) parts))
+    (when (plusp (hash-table-count tags))
+      (push (format nil "Labels: ~D selected" (hash-table-count tags)) parts))
+
+    (when parts
+      (let* ((filter-text (format nil "Filtered: ~{~A~^, ~}" (nreverse parts)))
+             (clear-hint " (press 'c' to clear)")
+             (full-text (concatenate 'string filter-text clear-hint))
+             (padding (max 0 (- term-width (length full-text)))))
+        (tui:colored
+         (format nil "~A~A~A"
+                 filter-text
+                 (tui:colored clear-hint :fg tui:*fg-bright-black*)
+                 (make-string padding :initial-element #\Space))
+         :fg tui:*fg-black* :bg tui:*bg-yellow*)))))
+
 (defun render-list-view (model)
   "Render the main agenda view."
   (let* ((term-height (model-term-height model))
@@ -398,13 +434,19 @@
          (sidebar-visible-effective (> sidebar-width 0))
          (divider-width (if sidebar-visible-effective 1 0))
          (list-width (- term-width sidebar-width divider-width))
-         (available-height (max 5 (- term-height 3))))
+         (has-filters (has-active-filters-p model))
+         (filter-banner-height (if has-filters 1 0))
+         (available-height (max 5 (- term-height 3 filter-banner-height))))
 
     (adjust-scroll model available-height)
 
     (with-output-to-string (s)
       ;; Header bar with version, date, sync status, task count
       (format s "~A~%" (render-app-title-bar model))
+
+      ;; Filter banner (if any filters are active)
+      (when has-filters
+        (format s "~A~%" (render-filter-banner model term-width)))
 
       ;; Main content area with optional sidebar
       (if sidebar-visible-effective
@@ -476,8 +518,9 @@
 
       ;; Help bar
       (let* ((base-help "Keys: jk/↑↓ move  SPC toggle  l sidebar  Tab focus")
+             (filter-help (if has-filters "  c clear" ""))
              (more-help "  a add  e edit  d del  / search  q quit")
-             (help (concatenate 'string base-help more-help)))
+             (help (concatenate 'string base-help filter-help more-help)))
         (format s "~A"
                 (render-help-line help term-width :fg tui:*fg-bright-black*))))))
 
