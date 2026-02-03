@@ -87,10 +87,10 @@ fun TodoItem(
         )
     ) {
         Row(modifier = Modifier.fillMaxWidth()) {
-            // Priority accent strip
+            // Priority accent strip (width of 'm' character ~24dp)
             Box(
                 modifier = Modifier
-                    .width(6.dp)
+                    .width(24.dp)
                     .fillMaxHeight()
                     .background(
                         if (isCompleted) priorityColor.copy(alpha = 0.3f)
