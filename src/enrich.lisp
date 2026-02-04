@@ -161,6 +161,87 @@
              :provider *llm-provider*
              :model *llm-model*))
 
+;;── URL Metadata Fetching ─────────────────────────────────────────────────────
+
+(defparameter *url-fetch-timeout* 5
+  "Timeout in seconds for fetching URL metadata.")
+
+(defun extract-url-from-text (text)
+  "Extract the first URL from text. Returns the URL string or NIL."
+  (when (and text (stringp text) (> (length text) 0))
+    (let ((patterns '("https?://[^\\s<>\"'`\\)\\]\\}]+")))
+      (dolist (pattern patterns)
+        (multiple-value-bind (match-start match-end)
+            (ppcre:scan pattern text)
+          (when match-start
+            (return-from extract-url-from-text
+              (subseq text match-start match-end)))))
+      nil)))
+
+(defun extract-html-title (html)
+  "Extract the <title> content from HTML. Returns string or NIL."
+  (when html
+    (multiple-value-bind (match groups)
+        (ppcre:scan-to-strings "(?is)<title[^>]*>([^<]*)</title>" html)
+      (declare (ignore match))
+      (when (and groups (> (length groups) 0))
+        (let ((title (string-trim '(#\Space #\Tab #\Newline #\Return) (aref groups 0))))
+          (when (> (length title) 0)
+            title))))))
+
+(defun extract-meta-description (html)
+  "Extract the meta description from HTML. Returns string or NIL."
+  (when html
+    ;; Try both name= and property= variants
+    (let ((patterns '("(?is)<meta[^>]+(?:name|property)=[\"'](?:description|og:description)[\"'][^>]+content=[\"']([^\"']*)[\"']"
+                      "(?is)<meta[^>]+content=[\"']([^\"']*)[\"'][^>]+(?:name|property)=[\"'](?:description|og:description)[\"']")))
+      (dolist (pattern patterns)
+        (multiple-value-bind (match groups)
+            (ppcre:scan-to-strings pattern html)
+          (declare (ignore match))
+          (when (and groups (> (length groups) 0))
+            (let ((desc (string-trim '(#\Space #\Tab #\Newline #\Return) (aref groups 0))))
+              (when (> (length desc) 0)
+                (return-from extract-meta-description desc))))))
+      nil)))
+
+(defun fetch-url-metadata (url)
+  "Fetch a URL and extract title and description metadata.
+   Returns a plist (:url :title :description) or NIL on failure.
+   Uses a timeout to avoid blocking on slow/unresponsive sites."
+  (when (and url (stringp url) (> (length url) 0))
+    (llog:debug "Fetching URL metadata" :url url)
+    (handler-case
+        (let ((response (dex:get url
+                                  :read-timeout *url-fetch-timeout*
+                                  :connect-timeout *url-fetch-timeout*
+                                  :keep-alive nil
+                                  :headers '(("User-Agent" . "Mozilla/5.0 (compatible; Cloodoo/1.0)")
+                                            ("Accept" . "text/html,*/*")))))
+          (when response
+            (let* ((html (if (stringp response)
+                             response
+                             (babel:octets-to-string response :encoding :utf-8 :errorp nil)))
+                   (title (extract-html-title html))
+                   (description (extract-meta-description html)))
+              (llog:info "URL metadata fetched"
+                         :url url
+                         :title title
+                         :description-length (when description (length description)))
+              (list :url url
+                    :title title
+                    :description (when description
+                                   ;; Truncate long descriptions
+                                   (if (> (length description) 500)
+                                       (concatenate 'string (subseq description 0 497) "...")
+                                       description))))))
+      (error (e)
+        (let ((error-str (format nil "~A" e)))
+          (if (search "timeout" (string-downcase error-str))
+              (llog:warn "URL fetch timed out" :url url :timeout *url-fetch-timeout*)
+              (llog:warn "URL fetch failed" :url url :error error-str)))
+        nil))))
+
 (defparameter *enrichment-system-prompt-template*
   "Role: You are a Task Optimization Assistant. Your goal is to transform rough, fragmented user input into structured, actionable, and categorized TODO items.
 
@@ -172,6 +253,23 @@ Primary Objectives:
 - Date Extraction: Parse any date/time references into scheduled_date and due_date.
 - Contextualization: Make the task title action-oriented but PRESERVE ALL IMPORTANT DETAILS.
 - Location Awareness: When a business, place, or location is mentioned, extract useful contact info.
+
+USER CONTEXT GUIDELINES:
+- You may receive User Context describing the user's life, work, relationships, and preferences
+- If a person's name is mentioned, check User Context for their relationship/role to better categorize the task
+- Use User Context to infer the user's location for local business lookups
+- Apply domain knowledge from User Context (e.g., if user works in tech, \"deploy\" means software deployment)
+- Respect any preferences mentioned in User Context (e.g., preferred doctors, stores, etc.)
+
+PRIORITY INTELLIGENCE:
+Assign priority based on these signals:
+- HIGH (A): Contains \"urgent\", \"ASAP\", \"emergency\", \"critical\", \"important\"
+- HIGH (A): Deadline within 24-48 hours, health/safety related, financial deadlines
+- HIGH (A): Blocking other work, time-sensitive appointments, legal/compliance matters
+- MEDIUM (B): Deadline within 1 week, important but not urgent, routine appointments
+- MEDIUM (B): Regular work tasks, scheduled meetings, planned activities
+- LOW (C): No deadline mentioned, \"someday\", \"when I have time\", nice-to-have
+- LOW (C): Ideas to explore, optional improvements, leisure activities
 
 CRITICAL RULES FOR TITLES:
 - Start with an action verb (Call, Go to, Buy, Schedule, etc.)
@@ -191,7 +289,7 @@ Return ONLY a valid JSON object with these keys:
 - task_title: (Action-oriented title that PRESERVES all important details like destinations, names, locations)
 - description: (Clean up any typos in the user's notes, or null if no notes provided)
 - category: (One of: Work, Personal, Health, Finance, Home, Family, Shopping, Travel, Learning, Other)
-- priority: (P1 for urgent/important, P2 for important, P3 for can wait)
+- priority: (One of: \"high\", \"medium\", \"low\" - use Priority Intelligence rules above)
 - estimated_minutes: (Integer estimate)
 - scheduled_date: (ISO 8601 date when task should be worked on, e.g. \"2026-01-20\" or \"2026-01-20T14:00:00\", or null)
 - due_date: (ISO 8601 date when task must be completed by, e.g. \"2026-01-25\", or null)
@@ -235,10 +333,10 @@ Rules for Processing:
 - Phone Calls: If the task involves calling someone (title contains \"call\" or implies phone contact), include the phone number in the description field if you know it, but do NOT guess why the user is calling - just provide the number (e.g., \"Phone: (555) 123-4567\") ; lint:suppress max-line-length
 
 Examples:
-Input: title=\"dentist next tues\" notes=\"dr tam @ lawernce dentust\" -> {\"task_title\": \"Schedule Dentist Appointment\", \"description\": \"Dr. Tam @ Lawrence Dentist\", \"category\": \"Health\", \"priority\": \"P2\", \"estimated_minutes\": 60, \"scheduled_date\": \"2026-01-21\", \"due_date\": null, \"location\": {\"name\": \"Lawrence Family Dentist\", \"address\": null, \"phone\": null, \"map_url\": \"https://www.google.com/maps/search/?api=1&query=Lawrence+Family+Dentist\", \"website\": null}} ; lint:suppress max-line-length
-Input: title=\"report due friday\" notes=\"quarterly sales\" -> {\"task_title\": \"Complete Quarterly Sales Report\", \"description\": \"Quarterly sales\", \"category\": \"Work\", \"priority\": \"P1\", \"estimated_minutes\": 120, \"scheduled_date\": null, \"due_date\": \"2026-01-24\", \"location\": null} ; lint:suppress max-line-length
-Input: title=\"dinner at joes pizza\" notes=\"6pm friday\" -> {\"task_title\": \"Dinner at Joe's Pizza\", \"description\": null, \"category\": \"Personal\", \"priority\": \"P2\", \"estimated_minutes\": 90, \"scheduled_date\": \"2026-01-24T18:00:00\", \"due_date\": null, \"location\": {\"name\": \"Joe's Pizza\", \"address\": null, \"phone\": null, \"map_url\": \"https://www.google.com/maps/search/?api=1&query=Joe%27s+Pizza\", \"website\": null}} ; lint:suppress max-line-length
-Input: title=\"call dr smith\" notes=\"\" -> {\"task_title\": \"Call Dr. Smith\", \"description\": null, \"category\": \"Health\", \"priority\": \"P2\", \"estimated_minutes\": 10, \"scheduled_date\": null, \"due_date\": null, \"location\": null} ; lint:suppress max-line-length
+Input: title=\"dentist next tues\" notes=\"dr tam @ lawernce dentust\" -> {\"task_title\": \"Schedule Dentist Appointment\", \"description\": \"Dr. Tam @ Lawrence Dentist\", \"category\": \"Health\", \"priority\": \"medium\", \"estimated_minutes\": 60, \"scheduled_date\": \"2026-01-21\", \"due_date\": null, \"location\": {\"name\": \"Lawrence Family Dentist\", \"address\": null, \"phone\": null, \"map_url\": \"https://www.google.com/maps/search/?api=1&query=Lawrence+Family+Dentist\", \"website\": null}} ; lint:suppress max-line-length
+Input: title=\"report due friday\" notes=\"quarterly sales\" -> {\"task_title\": \"Complete Quarterly Sales Report\", \"description\": \"Quarterly sales\", \"category\": \"Work\", \"priority\": \"high\", \"estimated_minutes\": 120, \"scheduled_date\": null, \"due_date\": \"2026-01-24\", \"location\": null} ; lint:suppress max-line-length
+Input: title=\"dinner at joes pizza\" notes=\"6pm friday\" -> {\"task_title\": \"Dinner at Joe's Pizza\", \"description\": null, \"category\": \"Personal\", \"priority\": \"medium\", \"estimated_minutes\": 90, \"scheduled_date\": \"2026-01-24T18:00:00\", \"due_date\": null, \"location\": {\"name\": \"Joe's Pizza\", \"address\": null, \"phone\": null, \"map_url\": \"https://www.google.com/maps/search/?api=1&query=Joe%27s+Pizza\", \"website\": null}} ; lint:suppress max-line-length
+Input: title=\"call dr smith\" notes=\"\" -> {\"task_title\": \"Call Dr. Smith\", \"description\": null, \"category\": \"Health\", \"priority\": \"medium\", \"estimated_minutes\": 10, \"scheduled_date\": null, \"due_date\": null, \"location\": null} ; lint:suppress max-line-length
 
 Respond with ONLY the JSON object, no markdown formatting or additional text.")
 
@@ -397,9 +495,9 @@ Respond with ONLY the JSON object, no markdown formatting or additional text.")
                                    :category (json-null-to-nil (gethash "category" data))
                                    :priority (let ((p (gethash "priority" data)))
                                               (cond
-                                                ((string-equal p "P1") :high)
-                                                ((string-equal p "P2") :medium)
-                                                ((string-equal p "P3") :low)
+                                                ((or (string-equal p "high") (string-equal p "high") (string-equal p "A")) :high)
+                                                ((or (string-equal p "medium") (string-equal p "medium") (string-equal p "B")) :medium)
+                                                ((or (string-equal p "low") (string-equal p "low") (string-equal p "C")) :low)
                                                 (t :medium)))
                                    :estimated-minutes (let ((m (gethash "estimated_minutes" data)))
                                                        (if (numberp m) (truncate m) 15))
@@ -470,6 +568,17 @@ Respond with ONLY the JSON object, no markdown formatting or additional text.")
           (llog:warn "Failed to create LLM completer" :provider *llm-provider*)
           (return-from enrich-todo-input nil))
 
+        ;; Extract URL from title or notes and fetch metadata
+        (let* ((combined-text (format nil "~A ~@[~A~]" raw-title raw-notes))
+               (detected-url (extract-url-from-text combined-text))
+               (url-metadata (when detected-url (fetch-url-metadata detected-url)))
+               (url-context-str
+                 (when url-metadata
+                   (format nil "~%~%URL Content (fetched from shared link):~%URL: ~A~@[~%Page Title: ~A~]~@[~%Page Description: ~A~]"
+                           (getf url-metadata :url)
+                           (getf url-metadata :title)
+                           (getf url-metadata :description)))))
+
         (let* ((user-context (load-user-context))
                (system-prompt (get-enrichment-system-prompt))
                (user-input (if (and raw-notes (> (length raw-notes) 0))
@@ -483,14 +592,16 @@ Respond with ONLY the JSON object, no markdown formatting or additional text.")
                                  collect (if desc
                                              (format nil "- ~A: ~A" title desc)
                                              (format nil "- ~A" title))))))
-               (prompt (format nil "~A~@[~%~%User Context (use this to better understand the user):~%~A~]~@[~A~]~%~%User input: ~A"
-                               system-prompt user-context parent-context-str user-input)))
+               (prompt (format nil "~A~@[~%~%User Context (use this to better understand the user):~%~A~]~@[~A~]~@[~A~]~%~%User input: ~A"
+                               system-prompt user-context parent-context-str url-context-str user-input)))
 
           (llog:debug "Context status"
                       :has-user-context (if user-context "yes" "no")
                       :user-context-length (if user-context (length user-context) 0)
                       :has-parent-context (if parent-context "yes" "no")
-                      :parent-depth (if parent-context (length parent-context) 0))
+                      :parent-depth (if parent-context (length parent-context) 0)
+                      :detected-url detected-url
+                      :has-url-metadata (if url-metadata "yes" "no"))
 
           (llog:debug "Sending API request"
                       :prompt-length (length prompt)
@@ -532,7 +643,7 @@ Respond with ONLY the JSON object, no markdown formatting or additional text.")
                   (llog:warn "Enrichment parsing failed"
                              :raw-title raw-title
                              :response response))
-              result))))
+              result)))))
     (error (e)
       (llog:error "Enrichment API call failed"
                   :error-type (type-of e)
@@ -563,7 +674,7 @@ Return ONLY a valid JSON object with a \"todos\" key containing an array. Each i
 - task_title: (Concise, action-oriented title starting with a verb)
 - description: (Any notes or body text associated with the item, or null)
 - category: (One of: Work, Personal, Health, Finance, Home, Family, Shopping, Travel, Learning, Other)
-- priority: (P1 for urgent/important, P2 for important, P3 for can wait - infer from org priority cookies like [#A], [#B], [#C])
+- priority: (high for urgent/important, medium for important, low for can wait - infer from org priority cookies like [#A], [#B], [#C])
 - estimated_minutes: (Integer estimate based on task complexity)
 - scheduled_date: (ISO 8601 date from SCHEDULED: property, or null)
 - due_date: (ISO 8601 date from DEADLINE: property, or null)
@@ -577,7 +688,7 @@ Return ONLY a valid JSON object with a \"todos\" key containing an array. Each i
 Org-Mode Parsing Rules:
 - TODO keywords: TODO, NEXT, WAITING, HOLD, IN-PROGRESS, STARTED, etc. are active items
 - DONE keywords: DONE, COMPLETED, CANCELLED, CANCELED, ARCHIVED are completed - SKIP THESE
-- Priority cookies: [#A] = P1/high, [#B] = P2/medium, [#C] = P3/low
+- Priority cookies: [#A] = high/high, [#B] = medium/medium, [#C] = low/low
 - SCHEDULED: <date> means when to start working on it -> scheduled_date
 - DEADLINE: <date> means when it must be done -> due_date
 - Parse org dates like <2026-01-20 Mon> or <2026-01-20 Mon 14:00>
@@ -601,8 +712,8 @@ DEADLINE: <2026-01-25 Fri>
 
 Example Output:
 {\"todos\": [
-  {\"task_title\": \"Call Dentist for Appointment\", \"description\": \"Need to schedule cleaning\", \"category\": \"Health\", \"priority\": \"P1\", \"estimated_minutes\": 10, \"scheduled_date\": \"2026-01-20\", \"due_date\": null, \"location\": {\"name\": \"Downtown Dental\", \"address\": null, \"phone\": null, \"map_url\": \"https://www.google.com/maps/search/?api=1&query=Downtown+Dental\", \"website\": null}}, ; lint:suppress max-line-length
-  {\"task_title\": \"Review Quarterly Report\", \"description\": null, \"category\": \"Work\", \"priority\": \"P2\", \"estimated_minutes\": 60, \"scheduled_date\": null, \"due_date\": \"2026-01-25\", \"location\": null} ; lint:suppress max-line-length
+  {\"task_title\": \"Call Dentist for Appointment\", \"description\": \"Need to schedule cleaning\", \"category\": \"Health\", \"priority\": \"high\", \"estimated_minutes\": 10, \"scheduled_date\": \"2026-01-20\", \"due_date\": null, \"location\": {\"name\": \"Downtown Dental\", \"address\": null, \"phone\": null, \"map_url\": \"https://www.google.com/maps/search/?api=1&query=Downtown+Dental\", \"website\": null}}, ; lint:suppress max-line-length
+  {\"task_title\": \"Review Quarterly Report\", \"description\": null, \"category\": \"Work\", \"priority\": \"medium\", \"estimated_minutes\": 60, \"scheduled_date\": null, \"due_date\": \"2026-01-25\", \"location\": null} ; lint:suppress max-line-length
 ]}
 
 Note: The \"Buy groceries\" item was skipped because it was marked DONE.
@@ -640,9 +751,9 @@ Respond with ONLY the JSON object, no markdown formatting or additional text.")
                                                       :category (json-null-to-nil (gethash "category" item))
                                                       :priority (let ((p (gethash "priority" item)))
                                                                   (cond
-                                                                    ((string-equal p "P1") :high)
-                                                                    ((string-equal p "P2") :medium)
-                                                                    ((string-equal p "P3") :low)
+                                                                    ((string-equal p "high") :high)
+                                                                    ((string-equal p "medium") :medium)
+                                                                    ((string-equal p "low") :low)
                                                                     (t :medium)))
                                                       :estimated-minutes (let ((m (gethash "estimated_minutes" item)))
                                                                           (if (numberp m) (truncate m) 15))
