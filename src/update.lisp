@@ -1419,17 +1419,27 @@
                  ;; Refresh tags cache since new tags may have been added
                  (refresh-tags-cache model)
                  (setf (model-view-state model) :list)
-                 (llog:info "Created todo, starting async enrichment"
-                            :todo-id (todo-id new-todo)
-                            :title title)
-                 ;; Return command for async enrichment
-                 (return-from handle-add-edit-keys
-                   (values model (list (make-enrichment-cmd (todo-id new-todo)
-                                                            title
-                                                            desc-input
-                                                            nil)  ; No parent context
-                                       (make-spinner-start-cmd
-                                        (model-enrichment-spinner model)))))))))
+                 ;; If connected to sync server, let server enrich
+                 (cond
+                   ((sync-client-connected-p)
+                    (llog:info "Created todo, server will enrich"
+                               :todo-id (todo-id new-todo)
+                               :title title)
+                    (return-from handle-add-edit-keys
+                      (values model (list (make-spinner-start-cmd
+                                           (model-enrichment-spinner model))))))
+                   ;; Otherwise, do local enrichment
+                   (t
+                    (llog:info "Created todo, starting local enrichment"
+                               :todo-id (todo-id new-todo)
+                               :title title)
+                    (return-from handle-add-edit-keys
+                      (values model (list (make-enrichment-cmd (todo-id new-todo)
+                                                               title
+                                                               desc-input
+                                                               nil)
+                                          (make-spinner-start-cmd
+                                           (model-enrichment-spinner model)))))))))))
        (values model nil))
 
       ;; Pass key to active text input

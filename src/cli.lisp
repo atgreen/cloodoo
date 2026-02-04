@@ -950,38 +950,47 @@ URL format: http://HOST:PORT/pair/TOKEN"
    :handler (lambda (cmd)
               (declare (ignore cmd))
               (let* ((todos (load-todos))
-                     (pending (remove-if-not #'todo-enriching-p todos)))
+                     (pending (remove-if-not #'todo-enriching-p todos))
+                     (local-enrichment-needed nil))
                 (when pending
-                  (init-enrichment)
                   (dolist (todo pending)
-                    (handler-case
-                        (let ((enriched (enrich-todo-input (todo-title todo)
-                                                            (todo-description todo)
-                                                            nil)))
-                          (when enriched
-                            (when (getf enriched :title)
-                              (setf (todo-title todo) (getf enriched :title)))
-                            (when (getf enriched :description)
-                              (setf (todo-description todo) (getf enriched :description)))
-                            (when (getf enriched :priority)
-                              (setf (todo-priority todo) (getf enriched :priority)))
-                            (when (getf enriched :category)
-                              (let ((tag (category-to-tag (getf enriched :category))))
-                                (when tag
-                                  (setf (todo-tags todo) (list tag)))))
-                            (when (getf enriched :estimated-minutes)
-                              (setf (todo-estimated-minutes todo) (getf enriched :estimated-minutes)))
-                            (when (getf enriched :scheduled-date)
-                              (setf (todo-scheduled-date todo) (getf enriched :scheduled-date)))
-                            (when (getf enriched :due-date)
-                              (setf (todo-due-date todo) (getf enriched :due-date)))
-                            (when (getf enriched :location-info)
-                              (setf (todo-location-info todo) (getf enriched :location-info)))))
-                      (error (e)
-                        (declare (ignore e))))
-                    ;; Clear enriching flag regardless of success/failure
-                    (setf (todo-enriching-p todo) nil)
-                    (save-todo todo)))))))
+                    ;; Try sync first - if successful, server will enrich
+                    (let ((sync-pushed (sync-push-todo todo)))
+                      (unless sync-pushed
+                        ;; Sync failed, need local enrichment
+                        (push todo local-enrichment-needed))))
+                  ;; Do local enrichment for TODOs that couldn't sync
+                  (when local-enrichment-needed
+                    (init-enrichment)
+                    (dolist (todo (nreverse local-enrichment-needed))
+                      (handler-case
+                          (let ((enriched (enrich-todo-input (todo-title todo)
+                                                              (todo-description todo)
+                                                              nil)))
+                            (when enriched
+                              (when (getf enriched :title)
+                                (setf (todo-title todo) (getf enriched :title)))
+                              (when (getf enriched :description)
+                                (setf (todo-description todo) (getf enriched :description)))
+                              (when (getf enriched :priority)
+                                (setf (todo-priority todo) (getf enriched :priority)))
+                              (when (getf enriched :category)
+                                (let ((tag (category-to-tag (getf enriched :category))))
+                                  (when tag
+                                    (setf (todo-tags todo) (list tag)))))
+                              (when (getf enriched :estimated-minutes)
+                                (setf (todo-estimated-minutes todo) (getf enriched :estimated-minutes)))
+                              (when (getf enriched :scheduled-date)
+                                (setf (todo-scheduled-date todo) (getf enriched :scheduled-date)))
+                              (when (getf enriched :due-date)
+                                (setf (todo-due-date todo) (getf enriched :due-date)))
+                              (when (getf enriched :location-info)
+                                (setf (todo-location-info todo) (getf enriched :location-info)))))
+                        (error (e)
+                          (declare (ignore e))))
+                      ;; Clear enriching flag regardless of success/failure
+                      (setf (todo-enriching-p todo) nil)
+                      (save-todo todo))))))))
 
 ;;── Native Messaging for Browser Extension ────────────────────────────────────
 
@@ -1154,20 +1163,18 @@ URL format: http://HOST:PORT/pair/TOKEN"
           (setf (todo-enriching-p todo) t)
           (save-todo todo)
           (native-host-log "Created TODO: ~A (pending enrichment)" title)
-          ;; Push to sync server immediately (best-effort, non-fatal)
-          (sync-push-todo todo)
-          ;; Spawn background enrichment process (best-effort, must not
-          ;; prevent the success response from being sent — otherwise the
-          ;; extension thinks creation failed and retries every 5 minutes,
-          ;; creating duplicates)
-          (handler-case
-              (let ((exe-path (get-cloodoo-executable)))
-                (native-host-log "Spawning enrichment: ~A enrich-pending" exe-path)
-                (uiop:launch-program (list exe-path "enrich-pending")
-                                     :output nil
-                                     :error-output nil))
-            (error (e)
-              (native-host-log "Enrichment spawn failed (non-fatal): ~A" e)))
+          ;; Push to sync server - if successful, server will enrich
+          (let ((sync-pushed (sync-push-todo todo)))
+            ;; Only spawn local enrichment if sync push failed
+            (unless sync-pushed
+              (handler-case
+                  (let ((exe-path (get-cloodoo-executable)))
+                    (native-host-log "Sync unavailable, spawning local enrichment: ~A enrich-pending" exe-path)
+                    (uiop:launch-program (list exe-path "enrich-pending")
+                                         :output nil
+                                         :error-output nil))
+                (error (e)
+                  (native-host-log "Enrichment spawn failed (non-fatal): ~A" e)))))
           ;; Return success immediately
           (let ((response (make-hash-table :test #'equal)))
             (setf (gethash "success" response) t)
