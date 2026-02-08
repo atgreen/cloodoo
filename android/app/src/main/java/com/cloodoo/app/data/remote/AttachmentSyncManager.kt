@@ -19,7 +19,10 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import java.io.ByteArrayOutputStream
+import java.security.cert.X509Certificate
 import java.util.concurrent.TimeUnit
+import javax.net.ssl.HostnameVerifier
+import javax.net.ssl.SSLSession
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 
@@ -63,7 +66,7 @@ class AttachmentSyncManager(
                     "TLS_CHACHA20_POLY1305_SHA256"
                 )
             )
-            .hostnameVerifier { _, _ -> true }
+            .hostnameVerifier(createIpSanVerifier(serverAddress))
             .keepAliveTime(30, TimeUnit.SECONDS)
             .keepAliveTimeout(10, TimeUnit.SECONDS)
             .build()
@@ -272,4 +275,54 @@ class AttachmentSyncManager(
                 }
             })
         }
+}
+
+/**
+ * Creates a hostname verifier that validates IP addresses in certificate SANs.
+ * This is needed because the private CA issues certificates with IP SANs rather than DNS names,
+ * and the server IP may change across networks (Tailscale, LAN roaming).
+ *
+ * @param expectedIp The IP address we expect to find in the certificate's SAN
+ * @return A HostnameVerifier that validates the certificate contains the expected IP
+ */
+private fun createIpSanVerifier(expectedIp: String): HostnameVerifier {
+    return HostnameVerifier { _, session ->
+        try {
+            val peerCertificates = session.peerCertificates
+            if (peerCertificates.isEmpty()) {
+                Log.e("AttachmentSyncManager", "No peer certificates in session")
+                return@HostnameVerifier false
+            }
+
+            val cert = peerCertificates[0] as? X509Certificate
+            if (cert == null) {
+                Log.e("AttachmentSyncManager", "Peer certificate is not X509")
+                return@HostnameVerifier false
+            }
+
+            // Get Subject Alternative Names (type 7 = IP address)
+            val subjectAltNames = cert.subjectAlternativeNames
+            if (subjectAltNames == null) {
+                Log.e("AttachmentSyncManager", "Certificate has no Subject Alternative Names")
+                return@HostnameVerifier false
+            }
+
+            // Look for IP address SANs (type 7) matching the expected IP
+            for (san in subjectAltNames) {
+                val type = san[0] as? Int
+                val value = san[1] as? String
+
+                if (type == 7 && value == expectedIp) {
+                    Log.d("AttachmentSyncManager", "Certificate IP SAN verified: $expectedIp")
+                    return@HostnameVerifier true
+                }
+            }
+
+            Log.e("AttachmentSyncManager", "Certificate does not contain expected IP $expectedIp in SANs")
+            return@HostnameVerifier false
+        } catch (e: Exception) {
+            Log.e("AttachmentSyncManager", "Error verifying hostname", e)
+            return@HostnameVerifier false
+        }
+    }
 }

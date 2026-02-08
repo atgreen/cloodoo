@@ -18,7 +18,10 @@ import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.buffer
 import kotlinx.coroutines.flow.callbackFlow
+import java.security.cert.X509Certificate
 import java.util.concurrent.TimeUnit
+import javax.net.ssl.HostnameVerifier
+import javax.net.ssl.SSLSession
 
 /**
  * gRPC client for bidirectional streaming sync with mTLS authentication.
@@ -65,11 +68,7 @@ class GrpcSyncClient(
                     "TLS_CHACHA20_POLY1305_SHA256"
                 )
             )
-            // Accepted risk: hostname verification is disabled because the private CA
-            // issues certificates with IP SANs and the server IP may change across
-            // networks (e.g. Tailscale, LAN roaming). The CA-only trust anchor already
-            // prevents MITM — only certificates signed by our private CA are accepted.
-            .hostnameVerifier { _, _ -> true }
+            .hostnameVerifier(createIpSanVerifier(serverAddress))
             .keepAliveTime(30, TimeUnit.SECONDS)
             .keepAliveTimeout(10, TimeUnit.SECONDS)
             .keepAliveWithoutCalls(true)
@@ -123,7 +122,7 @@ class GrpcSyncClient(
             Log.d(TAG, "Flow closed, cleaning up")
             disconnect()
         }
-    }.buffer(Channel.UNLIMITED)  // Prevent message loss during large sync batches
+    }.buffer(capacity = 256)  // Bounded buffer to prevent OOM during large syncs
 
     /**
      * Send a todo change to the server.
@@ -217,6 +216,56 @@ class GrpcSyncClient(
      */
     fun isConnected(): Boolean {
         return managedChannel != null && !managedChannel!!.isShutdown
+    }
+}
+
+/**
+ * Creates a hostname verifier that validates IP addresses in certificate SANs.
+ * This is needed because the private CA issues certificates with IP SANs rather than DNS names,
+ * and the server IP may change across networks (Tailscale, LAN roaming).
+ *
+ * @param expectedIp The IP address we expect to find in the certificate's SAN
+ * @return A HostnameVerifier that validates the certificate contains the expected IP
+ */
+private fun createIpSanVerifier(expectedIp: String): HostnameVerifier {
+    return HostnameVerifier { _, session ->
+        try {
+            val peerCertificates = session.peerCertificates
+            if (peerCertificates.isEmpty()) {
+                Log.e("GrpcSyncClient", "No peer certificates in session")
+                return@HostnameVerifier false
+            }
+
+            val cert = peerCertificates[0] as? X509Certificate
+            if (cert == null) {
+                Log.e("GrpcSyncClient", "Peer certificate is not X509")
+                return@HostnameVerifier false
+            }
+
+            // Get Subject Alternative Names (type 7 = IP address)
+            val subjectAltNames = cert.subjectAlternativeNames
+            if (subjectAltNames == null) {
+                Log.e("GrpcSyncClient", "Certificate has no Subject Alternative Names")
+                return@HostnameVerifier false
+            }
+
+            // Look for IP address SANs (type 7) matching the expected IP
+            for (san in subjectAltNames) {
+                val type = san[0] as? Int
+                val value = san[1] as? String
+
+                if (type == 7 && value == expectedIp) {
+                    Log.d("GrpcSyncClient", "Certificate IP SAN verified: $expectedIp")
+                    return@HostnameVerifier true
+                }
+            }
+
+            Log.e("GrpcSyncClient", "Certificate does not contain expected IP $expectedIp in SANs")
+            return@HostnameVerifier false
+        } catch (e: Exception) {
+            Log.e("GrpcSyncClient", "Error verifying hostname", e)
+            return@HostnameVerifier false
+        }
     }
 }
 
