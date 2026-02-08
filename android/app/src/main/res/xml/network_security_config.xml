@@ -1,5 +1,17 @@
 <?xml version="1.0" encoding="utf-8"?>
 <network-security-config>
+    <!--
+        Cleartext traffic is permitted globally to support HTTP pairing server
+        on dynamic local IP addresses (192.168.x.x, 10.x.x.x, 100.x.x.x).
+
+        Android's network security config does not support CIDR notation, so we
+        cannot restrict cleartext to only private IP ranges. The alternative
+        would be HTTPS for pairing, but that adds UX complexity.
+
+        Security note: The actual sync protocol uses mTLS over gRPC, which
+        provides strong security. The HTTP server is only used for initial
+        certificate pairing and browser extension communication.
+    -->
     <base-config cleartextTrafficPermitted="true">
         <trust-anchors>
             <certificates src="system" />
