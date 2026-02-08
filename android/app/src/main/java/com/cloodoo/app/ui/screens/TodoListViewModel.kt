@@ -334,17 +334,13 @@ class TodoListViewModel(
 
     fun postponeTodo(todoId: String, option: PostponeOption) {
         viewModelScope.launch {
-            val todo = _uiState.value.todos.find { it.id == todoId } ?: return@launch
+            // Verify the todo exists before postponing
+            _uiState.value.todos.find { it.id == todoId } ?: return@launch
 
             // Calculate new date based on the postpone option
-            // Use scheduled date if present, otherwise use due date, otherwise use today
-            val currentDate = todo.scheduledDate?.let {
-                try { ZonedDateTime.parse(it).toLocalDate() } catch (e: Exception) { null }
-            } ?: todo.dueDate?.let {
-                try { ZonedDateTime.parse(it).toLocalDate() } catch (e: Exception) { null }
-            } ?: java.time.LocalDate.now()
-
-            val newDate = option.calculateNewDate(currentDate)
+            // Always use today as the base, not the task's current date
+            // (so "Tomorrow" means tomorrow, not "current date + 1 day")
+            val newDate = option.calculateNewDate()
             val newDateStr = newDate.atStartOfDay(java.time.ZoneId.systemDefault())
                 .format(DateTimeFormatter.ISO_OFFSET_DATE_TIME)
 
