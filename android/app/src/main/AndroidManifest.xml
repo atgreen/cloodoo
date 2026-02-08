@@ -65,19 +65,19 @@
     
     <!-- Required: set your sentry.io project identifier (DSN) -->
     <meta-data android:name="io.sentry.dsn" android:value="https://7f5035d7593a66c06dfa61c720409f42@o4509558962651136.ingest.us.sentry.io/4510849835139072" />
-    <!-- Add data like request headers, user ip address and device name, see https://docs.sentry.io/platforms/android/data-management/data-collected/ for more info -->
-    <meta-data android:name="io.sentry.send-default-pii" android:value="true" />
 
-    <!-- enable automatic breadcrumbs for user interactions (clicks, swipes, scrolls) -->
+    <!-- Privacy-safe settings for production (PII/screenshots disabled) -->
+    <meta-data android:name="io.sentry.send-default-pii" android:value="false" />
+    <meta-data android:name="io.sentry.attach-screenshot" android:value="false" />
+    <meta-data android:name="io.sentry.attach-view-hierarchy" android:value="false" />
+
+    <!-- Enable automatic breadcrumbs for user interactions (non-PII) -->
     <meta-data android:name="io.sentry.traces.user-interaction.enable" android:value="true" />
-    <!-- enable screenshot for crashes (could contain sensitive/PII data) -->
-    <meta-data android:name="io.sentry.attach-screenshot" android:value="true" />
-    <!-- enable view hierarchy for crashes -->
-    <meta-data android:name="io.sentry.attach-view-hierarchy" android:value="true" />
 
-    <!-- enable the performance API by setting a sample-rate, adjust in production env -->
-    <meta-data android:name="io.sentry.traces.sample-rate" android:value="1.0" />
-    <!-- enable Sentry Logs -->
+    <!-- Performance monitoring at 20% sample rate for production -->
+    <meta-data android:name="io.sentry.traces.sample-rate" android:value="0.2" />
+
+    <!-- Enable Sentry Logs -->
     <meta-data android:name="io.sentry.logs.enabled" android:value="true" />
 </application>
 
