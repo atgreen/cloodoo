@@ -44,7 +44,8 @@ class TodoRepository(
         tags: String? = null,
         repeatInterval: Int? = null,
         repeatUnit: String? = null,
-        attachmentHashes: String? = null
+        attachmentHashes: String? = null,
+        enrichingP: Boolean = false
     ): TodoEntity {
         val now = nowIso()
         val todoId = generateId()
@@ -60,6 +61,7 @@ class TodoRepository(
             repeatInterval = repeatInterval,
             repeatUnit = repeatUnit,
             attachmentHashes = attachmentHashes,
+            enrichingP = enrichingP,
             createdAt = now,
             validFrom = now,
             deviceId = deviceId

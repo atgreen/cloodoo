@@ -40,6 +40,7 @@ data class TodoEntity(
     val repeatInterval: Int? = null,
     val repeatUnit: String? = null,  // "day", "week", "month", "year"
     val attachmentHashes: String? = null,  // JSON array stored as string
+    val enrichingP: Boolean = false,  // True if server-side LLM enrichment requested
     val createdAt: String,
     val completedAt: String? = null,
     val validFrom: String,

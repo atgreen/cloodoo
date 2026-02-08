@@ -13,7 +13,7 @@ import androidx.room.RoomDatabase
 
 @Database(
     entities = [TodoEntity::class, PendingSyncEntity::class, AppSettingsEntity::class, AttachmentEntity::class],
-    version = 5,
+    version = 6,
     exportSchema = false
 )
 abstract class CloodooDatabase : RoomDatabase() {

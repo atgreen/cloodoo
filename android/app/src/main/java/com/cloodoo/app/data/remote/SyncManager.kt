@@ -399,6 +399,7 @@ class SyncManager(
             .setRepeatInterval(repeatInterval ?: 0)
             .setRepeatUnit(repeatUnit ?: "")
             .addAllAttachmentHashes(attachmentHashesList)
+            .setEnrichingP(enrichingP)
             .build()
     }
 
@@ -423,6 +424,7 @@ class SyncManager(
             repeatInterval = if (repeatInterval > 0) repeatInterval else null,
             repeatUnit = repeatUnit.ifEmpty { null },
             attachmentHashes = attachmentHashesJson,
+            enrichingP = enrichingP,
             createdAt = createdAt,
             completedAt = completedAt.ifEmpty { null },
             validFrom = validFrom,

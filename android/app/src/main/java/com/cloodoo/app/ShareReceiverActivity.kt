@@ -39,7 +39,7 @@ class ShareReceiverActivity : ComponentActivity() {
                 val syncManager = SyncManager(database, certificateManager, deviceId)
 
                 lifecycleScope.launch {
-                    val todo = repository.createTodo(title = text.trim())
+                    val todo = repository.createTodo(title = text.trim(), enrichingP = true)
                     syncManager.sendTodoUpsert(todo)
                     val display = if (text.length > 40) text.take(40) + "..." else text
                     Toast.makeText(
