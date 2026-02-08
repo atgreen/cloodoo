@@ -11,6 +11,8 @@ import com.cloodoo.app.data.local.CloodooDatabase
 import com.cloodoo.app.data.local.TodoEntity
 import com.cloodoo.app.data.security.CertificateManager
 import com.cloodoo.app.proto.CloodooSync.*
+import io.sentry.Sentry
+import io.sentry.SentryLevel
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
 import java.time.Instant
@@ -89,6 +91,19 @@ class SyncManager(
                 _connectionState.value = ConnectionState.DISCONNECTED
             } catch (e: Exception) {
                 Log.e(TAG, "Sync connection error", e)
+
+                // Report to Sentry with context
+                Sentry.withScope { scope ->
+                    scope.setContexts("sync", mapOf(
+                        "autoReconnect" to autoReconnect,
+                        "reconnectDelay" to currentReconnectDelay,
+                        "lastServerTime" to (lastServerTime ?: "null"),
+                        "pendingChanges" to pendingChangesRemaining
+                    ))
+                    scope.level = if (autoReconnect) SentryLevel.WARNING else SentryLevel.ERROR
+                    Sentry.captureException(e)
+                }
+
                 if (autoReconnect) {
                     // Transient error - will reconnect, don't show error to user
                     _connectionState.value = ConnectionState.DISCONNECTED
@@ -252,6 +267,18 @@ class SyncManager(
                 // Check if server rejected the connection (e.g., clock skew)
                 if (ack.error.isNotEmpty()) {
                     Log.e(TAG, "Server rejected connection: ${ack.error}")
+
+                    // Report server rejection to Sentry
+                    Sentry.withScope { scope ->
+                        scope.setContexts("sync", mapOf(
+                            "serverError" to ack.error,
+                            "serverTime" to ack.serverTime,
+                            "deviceId" to deviceId
+                        ))
+                        scope.level = SentryLevel.ERROR
+                        Sentry.captureMessage("Server rejected sync connection: ${ack.error}")
+                    }
+
                     _connectionState.value = ConnectionState.ERROR
                     _syncEvents.emit(SyncEvent.Error(ack.error))
                     // Don't auto-reconnect for clock skew errors - user needs to fix their clock
@@ -400,6 +427,17 @@ class SyncManager(
                 zonedDateTime.toInstant()
             } catch (e2: Exception) {
                 Log.e(TAG, "Failed to parse timestamp: $timestamp", e2)
+
+                // Report unparseable timestamps to Sentry
+                Sentry.withScope { scope ->
+                    scope.setContexts("timestamp", mapOf(
+                        "value" to timestamp,
+                        "length" to timestamp.length
+                    ))
+                    scope.level = SentryLevel.ERROR
+                    Sentry.captureException(e2)
+                }
+
                 throw e2
             }
         }
