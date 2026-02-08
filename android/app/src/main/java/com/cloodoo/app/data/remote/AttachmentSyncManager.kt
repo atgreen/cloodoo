@@ -109,6 +109,7 @@ class AttachmentSyncManager(
 
     /**
      * Upload a single attachment to the server.
+     * Streams from file in chunks to avoid loading entire file into memory.
      */
     private suspend fun uploadAttachment(
         hash: String,
@@ -118,7 +119,7 @@ class AttachmentSyncManager(
     ) {
         val currentStub = stub ?: throw IllegalStateException("Not connected")
 
-        val content = attachmentRepository.readContent(hash)
+        val contentStream = attachmentRepository.openContentStream(hash)
             ?: throw IllegalStateException("Attachment content not found")
 
         suspendCancellableCoroutine { continuation ->
@@ -157,18 +158,16 @@ class AttachmentSyncManager(
                     .build()
                 requestObserver.onNext(metadataRequest)
 
-                // Send content in chunks
-                var offset = 0
-                while (offset < content.size) {
-                    val end = minOf(offset + CHUNK_SIZE, content.size)
-                    val chunk = content.copyOfRange(offset, end)
-
-                    val chunkRequest = AttachmentUploadRequest.newBuilder()
-                        .setChunk(ByteString.copyFrom(chunk))
-                        .build()
-                    requestObserver.onNext(chunkRequest)
-
-                    offset = end
+                // Stream content in chunks from file
+                contentStream.use { input ->
+                    val buffer = ByteArray(CHUNK_SIZE)
+                    var bytesRead: Int
+                    while (input.read(buffer).also { bytesRead = it } != -1) {
+                        val chunkRequest = AttachmentUploadRequest.newBuilder()
+                            .setChunk(ByteString.copyFrom(buffer, 0, bytesRead))
+                            .build()
+                        requestObserver.onNext(chunkRequest)
+                    }
                 }
 
                 requestObserver.onCompleted()
@@ -206,6 +205,7 @@ class AttachmentSyncManager(
 
     /**
      * Download an attachment from the server.
+     * Streams chunks directly to file to avoid loading entire file into memory.
      */
     private suspend fun downloadAttachment(hash: String): String? =
         suspendCancellableCoroutine { continuation ->
@@ -215,7 +215,10 @@ class AttachmentSyncManager(
             }
 
             var metadata: AttachmentMeta? = null
-            val contentBuffer = ByteArrayOutputStream()
+
+            // Use PipedOutputStream/PipedInputStream for streaming from gRPC to repository
+            val pipedOutputStream = java.io.PipedOutputStream()
+            val pipedInputStream = java.io.PipedInputStream(pipedOutputStream)
 
             val request = AttachmentDownloadRequest.newBuilder()
                 .setHash(hash)
@@ -224,45 +227,63 @@ class AttachmentSyncManager(
             currentStub.downloadAttachment(request, object : StreamObserver<AttachmentDownloadResponse> {
                 override fun onNext(response: AttachmentDownloadResponse) {
                     if (response.error.isNotEmpty()) {
+                        try {
+                            pipedOutputStream.close()
+                        } catch (_: Exception) {}
                         continuation.resumeWithException(RuntimeException(response.error))
                         return
                     }
 
-                    when (response.responseCase) {
-                        AttachmentDownloadResponse.ResponseCase.METADATA -> {
-                            metadata = response.metadata
-                            Log.d(TAG, "Received metadata for attachment $hash")
+                    try {
+                        when (response.responseCase) {
+                            AttachmentDownloadResponse.ResponseCase.METADATA -> {
+                                metadata = response.metadata
+                                Log.d(TAG, "Received metadata for attachment $hash")
+                            }
+                            AttachmentDownloadResponse.ResponseCase.CHUNK -> {
+                                pipedOutputStream.write(response.chunk.toByteArray())
+                            }
+                            else -> {}
                         }
-                        AttachmentDownloadResponse.ResponseCase.CHUNK -> {
-                            contentBuffer.write(response.chunk.toByteArray())
-                        }
-                        else -> {}
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Error writing chunk", e)
+                        continuation.resumeWithException(e)
                     }
                 }
 
                 override fun onError(t: Throwable) {
+                    try {
+                        pipedOutputStream.close()
+                    } catch (_: Exception) {}
                     continuation.resumeWithException(t)
                 }
 
                 override fun onCompleted() {
                     val meta = metadata
                     if (meta == null) {
+                        try {
+                            pipedOutputStream.close()
+                        } catch (_: Exception) {}
                         continuation.resumeWithException(RuntimeException("No metadata received"))
                         return
                     }
+
+                    // Close the output stream to signal EOF to the input stream
+                    try {
+                        pipedOutputStream.close()
+                    } catch (_: Exception) {}
 
                     // Note: We use runBlocking here because we're inside a callback
                     // This is acceptable since we're already on IO dispatcher
                     kotlinx.coroutines.runBlocking {
                         try {
-                            // Store locally
-                            val content = contentBuffer.toByteArray()
+                            // Store locally (streams from pipedInputStream)
                             attachmentRepository.storeFromServer(
                                 hash = meta.hash,
                                 filename = meta.filename,
                                 mimeType = meta.mimeType,
                                 size = meta.size,
-                                content = content
+                                contentStream = pipedInputStream
                             )
 
                             val localPath = attachmentRepository.getLocalPath(hash)
