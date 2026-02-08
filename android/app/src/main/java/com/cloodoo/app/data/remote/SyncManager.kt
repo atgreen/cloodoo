@@ -13,6 +13,7 @@ import com.cloodoo.app.data.security.CertificateManager
 import com.cloodoo.app.proto.CloodooSync.*
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
+import java.time.Instant
 
 /**
  * Manages bidirectional gRPC sync with the server.
@@ -322,9 +323,9 @@ class SyncManager(
     private suspend fun handleRemoteUpsert(todoData: TodoData, timestamp: String) {
         val entity = todoData.toEntity(timestamp)
 
-        // Check if we already have a more recent version
+        // Check if we already have a more recent version (compare as Instant to handle timezone offsets)
         val existing = todoDao.getCurrentById(entity.id)
-        if (existing != null && existing.validFrom >= entity.validFrom) {
+        if (existing != null && compareTimestamps(existing.validFrom, entity.validFrom) >= 0) {
             Log.d(TAG, "Skipping remote upsert - local version is newer")
             return
         }
@@ -357,7 +358,7 @@ class SyncManager(
         val appSettingsDao = database.appSettingsDao()
         val existing = appSettingsDao.getSetting(key)
 
-        if (existing == null || existing.updatedAt < updatedAt) {
+        if (existing == null || compareTimestamps(existing.updatedAt, updatedAt) < 0) {
             val entity = com.cloodoo.app.data.local.AppSettingsEntity(
                 key = key,
                 value = value,
@@ -368,6 +369,17 @@ class SyncManager(
         } else {
             Log.d(TAG, "Ignoring older settings change for $key")
         }
+    }
+
+    /**
+     * Compare two ISO 8601 timestamp strings by converting to Instant.
+     * This handles timezone offsets correctly and avoids lexicographic comparison bugs.
+     * @return negative if ts1 < ts2, zero if equal, positive if ts1 > ts2
+     */
+    private fun compareTimestamps(ts1: String, ts2: String): Int {
+        val instant1 = Instant.parse(ts1)
+        val instant2 = Instant.parse(ts2)
+        return instant1.compareTo(instant2)
     }
 
     private fun TodoEntity.toProto(): TodoData {
