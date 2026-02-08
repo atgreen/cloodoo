@@ -75,7 +75,6 @@ class GrpcSyncClient(
             .build()
 
         val stub = TodoSyncGrpc.newStub(managedChannel)
-            .withCompression("gzip")  // Enable gRPC compression for large syncs
 
         // Create response observer
         val responseObserver = object : StreamObserver<SyncMessage> {
