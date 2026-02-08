@@ -43,9 +43,15 @@ android {
     }
     buildFeatures {
         compose = true
+        buildConfig = true
     }
     composeOptions {
         kotlinCompilerExtensionVersion = "1.5.14"
+    }
+
+    // Room schema export for database migrations
+    ksp {
+        arg("room.schemaLocation", "$projectDir/schemas")
     }
     packaging {
         resources {
