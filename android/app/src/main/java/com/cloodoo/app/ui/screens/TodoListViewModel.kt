@@ -29,6 +29,7 @@ import com.cloodoo.app.ui.components.TodoGroupData
 import com.cloodoo.app.ui.components.groupTodosByDate
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.time.ZonedDateTime
 import java.time.format.DateTimeFormatter
 
@@ -60,8 +61,10 @@ class TodoListViewModel(
     private val _lastSyncTime = MutableStateFlow<String?>(null)
 
     init {
-        // Load last sync time from preferences
-        loadLastSyncTime(application)
+        // Load last sync time from preferences (on background thread)
+        viewModelScope.launch {
+            loadLastSyncTime(application)
+        }
 
         // Observe current TODOs and compute grouped data
         viewModelScope.launch {
@@ -170,7 +173,9 @@ class TodoListViewModel(
         disconnect()
         // Clear sync time to force full resync
         _lastSyncTime.value = null
-        saveLastSyncTime(getApplication())
+        viewModelScope.launch {
+            saveLastSyncTime(getApplication())
+        }
         connect()
     }
 
@@ -179,7 +184,9 @@ class TodoListViewModel(
         certificateManager.removeCertificate()
         // Clear sync timestamp to force full sync on next pairing
         _lastSyncTime.value = null
-        saveLastSyncTime(getApplication())
+        viewModelScope.launch {
+            saveLastSyncTime(getApplication())
+        }
     }
 
     fun createTodo(
@@ -393,16 +400,20 @@ class TodoListViewModel(
         disconnect()
     }
 
-    private fun loadLastSyncTime(application: Application) {
-        val prefs = application.getSharedPreferences("cloodoo_prefs", 0)
-        _lastSyncTime.value = prefs.getString("last_sync_time", null)
+    private suspend fun loadLastSyncTime(application: Application) {
+        withContext(kotlinx.coroutines.Dispatchers.IO) {
+            val prefs = application.getSharedPreferences("cloodoo_prefs", 0)
+            _lastSyncTime.value = prefs.getString("last_sync_time", null)
+        }
     }
 
-    private fun saveLastSyncTime(application: Application) {
-        val prefs = application.getSharedPreferences("cloodoo_prefs", 0)
-        prefs.edit()
-            .putString("last_sync_time", _lastSyncTime.value)
-            .apply()
+    private suspend fun saveLastSyncTime(application: Application) {
+        withContext(kotlinx.coroutines.Dispatchers.IO) {
+            val prefs = application.getSharedPreferences("cloodoo_prefs", 0)
+            prefs.edit()
+                .putString("last_sync_time", _lastSyncTime.value)
+                .commit()  // Use commit() instead of apply() to ensure write completes
+        }
     }
 
     // User Context (Enrichment) methods
