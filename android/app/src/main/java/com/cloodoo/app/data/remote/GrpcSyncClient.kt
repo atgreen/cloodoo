@@ -75,6 +75,7 @@ class GrpcSyncClient(
             .build()
 
         val stub = TodoSyncGrpc.newStub(managedChannel)
+            .withCompression("gzip")  // Enable gRPC compression for large syncs
 
         // Create response observer
         val responseObserver = object : StreamObserver<SyncMessage> {
@@ -122,7 +123,7 @@ class GrpcSyncClient(
             Log.d(TAG, "Flow closed, cleaning up")
             disconnect()
         }
-    }.buffer(capacity = 256)  // Bounded buffer to prevent OOM during large syncs
+    }.buffer(capacity = 2048)  // Buffer size to handle large initial syncs efficiently
 
     /**
      * Send a todo change to the server.

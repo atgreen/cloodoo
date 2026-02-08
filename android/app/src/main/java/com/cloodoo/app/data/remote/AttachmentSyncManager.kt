@@ -72,6 +72,7 @@ class AttachmentSyncManager(
             .build()
 
         stub = AttachmentServiceGrpc.newStub(channel)
+            .withCompression("gzip")  // Enable gRPC compression for attachment transfers
         Log.d(TAG, "Connected to attachment service at $serverAddress:$serverPort")
     }
 
