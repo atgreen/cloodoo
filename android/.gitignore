@@ -26,3 +26,6 @@ Thumbs.db
 # Release keystore
 *.jks
 *.keystore
+
+# Sentry Config File
+sentry.properties
