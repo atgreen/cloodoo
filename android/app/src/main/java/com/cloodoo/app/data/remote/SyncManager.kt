@@ -372,14 +372,37 @@ class SyncManager(
     }
 
     /**
-     * Compare two ISO 8601 timestamp strings by converting to Instant.
-     * This handles timezone offsets correctly and avoids lexicographic comparison bugs.
+     * Compare two timestamp strings by converting to Instant.
+     * Handles both ISO 8601 format and legacy space-separated format.
      * @return negative if ts1 < ts2, zero if equal, positive if ts1 > ts2
      */
     private fun compareTimestamps(ts1: String, ts2: String): Int {
-        val instant1 = Instant.parse(ts1)
-        val instant2 = Instant.parse(ts2)
+        val instant1 = parseTimestamp(ts1)
+        val instant2 = parseTimestamp(ts2)
         return instant1.compareTo(instant2)
+    }
+
+    /**
+     * Parse a timestamp string to Instant, handling multiple formats.
+     * Supports: ISO 8601 (2026-01-26T14:07:39Z) and legacy (2026-01-26 14:07:39)
+     */
+    private fun parseTimestamp(timestamp: String): Instant {
+        return try {
+            // Try ISO 8601 format first
+            Instant.parse(timestamp)
+        } catch (e: Exception) {
+            // Fall back to legacy format: "YYYY-MM-DD HH:MM:SS" (assume UTC)
+            try {
+                val zonedDateTime = java.time.ZonedDateTime.parse(
+                    timestamp.replace(' ', 'T') + "Z",
+                    java.time.format.DateTimeFormatter.ISO_DATE_TIME
+                )
+                zonedDateTime.toInstant()
+            } catch (e2: Exception) {
+                Log.e(TAG, "Failed to parse timestamp: $timestamp", e2)
+                throw e2
+            }
+        }
     }
 
     private fun TodoEntity.toProto(): TodoData {
