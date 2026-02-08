@@ -62,6 +62,23 @@
                 android:name="android.appwidget.provider"
                 android:resource="@xml/quick_add_widget_info" />
         </receiver>
-    </application>
+    
+    <!-- Required: set your sentry.io project identifier (DSN) -->
+    <meta-data android:name="io.sentry.dsn" android:value="https://7f5035d7593a66c06dfa61c720409f42@o4509558962651136.ingest.us.sentry.io/4510849835139072" />
+
+    <!-- Privacy-safe settings for production (PII/screenshots disabled) -->
+    <meta-data android:name="io.sentry.send-default-pii" android:value="false" />
+    <meta-data android:name="io.sentry.attach-screenshot" android:value="false" />
+    <meta-data android:name="io.sentry.attach-view-hierarchy" android:value="false" />
+
+    <!-- Enable automatic breadcrumbs for user interactions (non-PII) -->
+    <meta-data android:name="io.sentry.traces.user-interaction.enable" android:value="true" />
+
+    <!-- Performance monitoring at 20% sample rate for production -->
+    <meta-data android:name="io.sentry.traces.sample-rate" android:value="0.2" />
+
+    <!-- Enable Sentry Logs -->
+    <meta-data android:name="io.sentry.logs.enabled" android:value="true" />
+</application>
 
 </manifest>

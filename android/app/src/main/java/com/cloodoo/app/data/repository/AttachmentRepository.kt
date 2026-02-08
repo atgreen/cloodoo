@@ -32,6 +32,7 @@ class AttachmentRepository(
     /**
      * Store an attachment locally from a content URI.
      * Returns the AttachmentEntity with computed hash.
+     * Streams data while computing hash to avoid loading entire file into memory.
      */
     suspend fun storeLocally(
         uri: Uri,
@@ -41,32 +42,54 @@ class AttachmentRepository(
         val inputStream = context.contentResolver.openInputStream(uri)
             ?: throw IllegalArgumentException("Cannot open URI: $uri")
 
-        // Read content and compute hash
-        val content = inputStream.use { it.readBytes() }
-        val hash = computeHash(content)
+        // Use a temporary file while we compute the hash
+        val tempFile = File.createTempFile("attachment_", ".tmp", attachmentsDir)
+        val digest = MessageDigest.getInstance("SHA-256")
+        var fileSize = 0L
 
-        // Check if already exists
-        val existing = attachmentDao.getByHash(hash)
-        if (existing != null) {
-            return existing
+        try {
+            // Stream data while computing hash and writing to temp file
+            inputStream.use { input ->
+                FileOutputStream(tempFile).use { output ->
+                    val buffer = ByteArray(8192)
+                    var bytesRead: Int
+                    while (input.read(buffer).also { bytesRead = it } != -1) {
+                        digest.update(buffer, 0, bytesRead)
+                        output.write(buffer, 0, bytesRead)
+                        fileSize += bytesRead
+                    }
+                }
+            }
+
+            val hash = digest.digest().joinToString("") { "%02x".format(it) }
+
+            // Check if already exists
+            val existing = attachmentDao.getByHash(hash)
+            if (existing != null) {
+                tempFile.delete()
+                return existing
+            }
+
+            // Rename temp file to hash-based name
+            val localFile = File(attachmentsDir, hash)
+            tempFile.renameTo(localFile)
+
+            val entity = AttachmentEntity(
+                hash = hash,
+                filename = filename,
+                mimeType = mimeType,
+                size = fileSize,
+                createdAt = nowIso(),
+                localPath = localFile.absolutePath,
+                syncStatus = "pending_upload"
+            )
+
+            attachmentDao.insert(entity)
+            return entity
+        } catch (e: Exception) {
+            tempFile.delete()
+            throw e
         }
-
-        // Save to local file
-        val localFile = File(attachmentsDir, hash)
-        FileOutputStream(localFile).use { it.write(content) }
-
-        val entity = AttachmentEntity(
-            hash = hash,
-            filename = filename,
-            mimeType = mimeType,
-            size = content.size.toLong(),
-            createdAt = nowIso(),
-            localPath = localFile.absolutePath,
-            syncStatus = "pending_upload"
-        )
-
-        attachmentDao.insert(entity)
-        return entity
     }
 
     /**
@@ -134,44 +157,67 @@ class AttachmentRepository(
 
     /**
      * Store attachment content received from server.
+     * Streams data while verifying hash to avoid loading entire file into memory.
      */
     suspend fun storeFromServer(
         hash: String,
         filename: String,
         mimeType: String,
         size: Long,
-        content: ByteArray
+        contentStream: InputStream
     ): AttachmentEntity {
-        // Verify hash
-        val computedHash = computeHash(content)
-        if (computedHash != hash) {
-            throw IllegalArgumentException("Hash mismatch: expected $hash, got $computedHash")
+        val tempFile = File.createTempFile("attachment_", ".tmp", attachmentsDir)
+        val digest = MessageDigest.getInstance("SHA-256")
+
+        try {
+            // Stream data while computing hash
+            contentStream.use { input ->
+                FileOutputStream(tempFile).use { output ->
+                    val buffer = ByteArray(8192)
+                    var bytesRead: Int
+                    while (input.read(buffer).also { bytesRead = it } != -1) {
+                        digest.update(buffer, 0, bytesRead)
+                        output.write(buffer, 0, bytesRead)
+                    }
+                }
+            }
+
+            val computedHash = digest.digest().joinToString("") { "%02x".format(it) }
+            if (computedHash != hash) {
+                tempFile.delete()
+                throw IllegalArgumentException("Hash mismatch: expected $hash, got $computedHash")
+            }
+
+            // Rename temp file to hash-based name
+            val localFile = File(attachmentsDir, hash)
+            tempFile.renameTo(localFile)
+
+            val entity = AttachmentEntity(
+                hash = hash,
+                filename = filename,
+                mimeType = mimeType,
+                size = size,
+                createdAt = nowIso(),
+                localPath = localFile.absolutePath,
+                syncStatus = "cached"
+            )
+
+            attachmentDao.insert(entity)
+            return entity
+        } catch (e: Exception) {
+            tempFile.delete()
+            throw e
         }
-
-        // Save to local file
-        val localFile = File(attachmentsDir, hash)
-        FileOutputStream(localFile).use { it.write(content) }
-
-        val entity = AttachmentEntity(
-            hash = hash,
-            filename = filename,
-            mimeType = mimeType,
-            size = size,
-            createdAt = nowIso(),
-            localPath = localFile.absolutePath,
-            syncStatus = "cached"
-        )
-
-        attachmentDao.insert(entity)
-        return entity
     }
 
     /**
-     * Read attachment content from local storage.
+     * Open an InputStream to read attachment content from local storage.
+     * Caller is responsible for closing the stream.
      */
-    suspend fun readContent(hash: String): ByteArray? {
+    suspend fun openContentStream(hash: String): InputStream? {
         val localPath = getLocalPath(hash) ?: return null
-        return File(localPath).readBytes()
+        val file = File(localPath)
+        return if (file.exists()) file.inputStream() else null
     }
 
     /**

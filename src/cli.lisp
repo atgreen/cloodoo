@@ -1703,19 +1703,18 @@ URL format: http://HOST:PORT/pair/TOKEN"
                 ;; Open in editor
                 (let ((status (uiop:run-program (list editor (namestring temp-file))
                                                 :ignore-error-status t)))
-                  (cond
-                    ((zerop status)
-                     ;; Read back and save
-                     (let ((new-context (uiop:read-file-string temp-file)))
-                       (save-user-context new-context)
-                       (format t "~A User context saved~%"
-                               (tui:colored "✓" :fg tui:*fg-green*)))
-                     ;; Clean up temp file
-                     (when (probe-file temp-file)
-                       (delete-file temp-file))))
-                    (t
-                     (format t "~A Editor exited with error~%"
-                             (tui:colored "✗" :fg tui:*fg-red*))))))))
+                  (if (zerop status)
+                      (progn
+                        ;; Read back and save
+                        (let ((new-context (uiop:read-file-string temp-file)))
+                          (save-user-context new-context)
+                          (format t "~A User context saved~%"
+                                  (tui:colored "✓" :fg tui:*fg-green*)))
+                        ;; Clean up temp file
+                        (when (probe-file temp-file)
+                          (delete-file temp-file)))
+                      (format t "~A Editor exited with error~%"
+                              (tui:colored "✗" :fg tui:*fg-red*))))))))
 
 (defun make-context-set-command ()
   "Create the 'context set' subcommand."

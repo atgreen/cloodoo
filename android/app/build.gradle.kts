@@ -4,6 +4,8 @@ plugins {
     id("org.jetbrains.kotlin.plugin.serialization")
     id("com.google.devtools.ksp")
     id("com.google.protobuf")
+
+    id("io.sentry.android.gradle") version "6.0.0"
 }
 
 android {
@@ -41,9 +43,15 @@ android {
     }
     buildFeatures {
         compose = true
+        buildConfig = true
     }
     composeOptions {
         kotlinCompilerExtensionVersion = "1.5.14"
+    }
+
+    // Room schema export for database migrations
+    ksp {
+        arg("room.schemaLocation", "$projectDir/schemas")
     }
     packaging {
         resources {
@@ -166,4 +174,14 @@ dependencies {
     androidTestImplementation("androidx.compose.ui:ui-test-junit4")
     debugImplementation("androidx.compose.ui:ui-tooling")
     debugImplementation("androidx.compose.ui:ui-test-manifest")
+}
+
+
+sentry {
+    org.set("anthony-green")
+    projectName.set("cloodoo")
+
+    // this will upload your source code to Sentry to show it as part of the stack traces
+    // disable if you don't want to expose your sources
+    includeSourceContext.set(true)
 }

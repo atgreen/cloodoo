@@ -11,8 +11,11 @@ import com.cloodoo.app.data.local.CloodooDatabase
 import com.cloodoo.app.data.local.TodoEntity
 import com.cloodoo.app.data.security.CertificateManager
 import com.cloodoo.app.proto.CloodooSync.*
+import io.sentry.Sentry
+import io.sentry.SentryLevel
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
+import java.time.Instant
 
 /**
  * Manages bidirectional gRPC sync with the server.
@@ -88,6 +91,19 @@ class SyncManager(
                 _connectionState.value = ConnectionState.DISCONNECTED
             } catch (e: Exception) {
                 Log.e(TAG, "Sync connection error", e)
+
+                // Report to Sentry with context
+                Sentry.withScope { scope ->
+                    scope.setContexts("sync", mapOf(
+                        "autoReconnect" to autoReconnect,
+                        "reconnectDelay" to currentReconnectDelay,
+                        "lastServerTime" to (lastServerTime ?: "null"),
+                        "pendingChanges" to pendingChangesRemaining
+                    ))
+                    scope.level = if (autoReconnect) SentryLevel.WARNING else SentryLevel.ERROR
+                    Sentry.captureException(e)
+                }
+
                 if (autoReconnect) {
                     // Transient error - will reconnect, don't show error to user
                     _connectionState.value = ConnectionState.DISCONNECTED
@@ -251,6 +267,18 @@ class SyncManager(
                 // Check if server rejected the connection (e.g., clock skew)
                 if (ack.error.isNotEmpty()) {
                     Log.e(TAG, "Server rejected connection: ${ack.error}")
+
+                    // Report server rejection to Sentry
+                    Sentry.withScope { scope ->
+                        scope.setContexts("sync", mapOf(
+                            "serverError" to ack.error,
+                            "serverTime" to ack.serverTime,
+                            "deviceId" to deviceId
+                        ))
+                        scope.level = SentryLevel.ERROR
+                        Sentry.captureMessage("Server rejected sync connection: ${ack.error}")
+                    }
+
                     _connectionState.value = ConnectionState.ERROR
                     _syncEvents.emit(SyncEvent.Error(ack.error))
                     // Don't auto-reconnect for clock skew errors - user needs to fix their clock
@@ -322,9 +350,9 @@ class SyncManager(
     private suspend fun handleRemoteUpsert(todoData: TodoData, timestamp: String) {
         val entity = todoData.toEntity(timestamp)
 
-        // Check if we already have a more recent version
+        // Check if we already have a more recent version (compare as Instant to handle timezone offsets)
         val existing = todoDao.getCurrentById(entity.id)
-        if (existing != null && existing.validFrom >= entity.validFrom) {
+        if (existing != null && compareTimestamps(existing.validFrom, entity.validFrom) >= 0) {
             Log.d(TAG, "Skipping remote upsert - local version is newer")
             return
         }
@@ -357,7 +385,7 @@ class SyncManager(
         val appSettingsDao = database.appSettingsDao()
         val existing = appSettingsDao.getSetting(key)
 
-        if (existing == null || existing.updatedAt < updatedAt) {
+        if (existing == null || compareTimestamps(existing.updatedAt, updatedAt) < 0) {
             val entity = com.cloodoo.app.data.local.AppSettingsEntity(
                 key = key,
                 value = value,
@@ -367,6 +395,51 @@ class SyncManager(
             Log.d(TAG, "Updated setting: $key")
         } else {
             Log.d(TAG, "Ignoring older settings change for $key")
+        }
+    }
+
+    /**
+     * Compare two timestamp strings by converting to Instant.
+     * Handles both ISO 8601 format and legacy space-separated format.
+     * @return negative if ts1 < ts2, zero if equal, positive if ts1 > ts2
+     */
+    private fun compareTimestamps(ts1: String, ts2: String): Int {
+        val instant1 = parseTimestamp(ts1)
+        val instant2 = parseTimestamp(ts2)
+        return instant1.compareTo(instant2)
+    }
+
+    /**
+     * Parse a timestamp string to Instant, handling multiple formats.
+     * Supports: ISO 8601 (2026-01-26T14:07:39Z) and legacy (2026-01-26 14:07:39)
+     */
+    private fun parseTimestamp(timestamp: String): Instant {
+        return try {
+            // Try ISO 8601 format first
+            Instant.parse(timestamp)
+        } catch (e: Exception) {
+            // Fall back to legacy format: "YYYY-MM-DD HH:MM:SS" (assume UTC)
+            try {
+                val zonedDateTime = java.time.ZonedDateTime.parse(
+                    timestamp.replace(' ', 'T') + "Z",
+                    java.time.format.DateTimeFormatter.ISO_DATE_TIME
+                )
+                zonedDateTime.toInstant()
+            } catch (e2: Exception) {
+                Log.e(TAG, "Failed to parse timestamp: $timestamp", e2)
+
+                // Report unparseable timestamps to Sentry
+                Sentry.withScope { scope ->
+                    scope.setContexts("timestamp", mapOf(
+                        "value" to timestamp,
+                        "length" to timestamp.length
+                    ))
+                    scope.level = SentryLevel.ERROR
+                    Sentry.captureException(e2)
+                }
+
+                throw e2
+            }
         }
     }
 
