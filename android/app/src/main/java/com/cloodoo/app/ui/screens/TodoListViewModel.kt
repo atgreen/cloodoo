@@ -15,6 +15,7 @@ import androidx.lifecycle.viewModelScope
 import com.cloodoo.app.data.local.AppSettingsEntity
 import com.cloodoo.app.data.local.CloodooDatabase
 import com.cloodoo.app.data.local.TodoEntity
+import com.cloodoo.app.data.remote.AttachmentSyncManager
 import com.cloodoo.app.data.remote.ConnectionState
 import com.cloodoo.app.data.remote.SyncEvent
 import com.cloodoo.app.data.remote.SyncManager
@@ -442,10 +443,35 @@ class TodoListViewModel(
 
     /**
      * Get the local file path for an attachment by its hash.
-     * Returns null if the attachment is not cached locally.
+     * If the attachment is not cached locally, attempt to download it from the server.
+     * Returns null if the attachment cannot be found or downloaded.
      */
     suspend fun getAttachmentPath(hash: String): String? {
-        return attachmentRepository.getLocalPath(hash)
+        // Check if we already have it locally
+        val localPath = attachmentRepository.getLocalPath(hash)
+        if (localPath != null) {
+            return localPath
+        }
+
+        // Not found locally - try to download from server
+        Log.d("TodoListViewModel", "Attachment $hash not found locally, downloading from server...")
+        return try {
+            val attachmentSync = AttachmentSyncManager(attachmentRepository, certificateManager)
+            attachmentSync.connect()
+            val downloadedPath = attachmentSync.fetchAttachment(hash)
+            attachmentSync.disconnect()
+
+            if (downloadedPath != null) {
+                Log.d("TodoListViewModel", "Downloaded attachment $hash to $downloadedPath")
+                downloadedPath
+            } else {
+                Log.w("TodoListViewModel", "Failed to download attachment $hash from server")
+                null
+            }
+        } catch (e: Exception) {
+            Log.e("TodoListViewModel", "Error downloading attachment $hash", e)
+            null
+        }
     }
 
     class Factory(

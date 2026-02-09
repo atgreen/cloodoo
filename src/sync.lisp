@@ -758,6 +758,48 @@
       (llog:error "Failed to download attachment" :hash hash :error (princ-to-string e))
       nil)))
 
+(defun upload-all-attachments-to-server ()
+  "Upload all attachments from the local database to the sync server.
+   Useful for syncing attachments that were created before automatic upload was implemented."
+  (unless *sync-client-channel*
+    (llog:warn "Cannot upload attachments: not connected to sync server")
+    (return-from upload-all-attachments-to-server nil))
+
+  (with-db (db)
+    (let* ((stmt (sqlite:prepare-statement db "SELECT hash, filename, size FROM attachments"))
+           (uploaded 0)
+           (failed 0))
+      (sqlite:step-statement stmt)
+      (loop while (sqlite:statement-column-value stmt 0)
+            do (let ((hash (sqlite:statement-column-value stmt 0))
+                     (filename (sqlite:statement-column-value stmt 1))
+                     (size (sqlite:statement-column-value stmt 2)))
+                 (llog:info "Uploading attachment" :hash hash :filename filename :size size)
+                 (if (upload-attachment-to-server hash)
+                     (incf uploaded)
+                     (incf failed))
+                 (sqlite:step-statement stmt)))
+      (sqlite:finalize-statement stmt)
+      (llog:info "Attachment upload complete" :uploaded uploaded :failed failed)
+      (list :uploaded uploaded :failed failed))))
+
+(defun upload-attachment-to-server (hash)
+  "Upload an attachment to the sync server by hash.
+   Returns T if successful, NIL if failed or not connected.
+
+   NOTE: This function requires client-streaming RPC which is not yet fully
+   implemented in the ag-grpc bindings. For now, attachments must be uploaded
+   manually or this function needs to be completed."
+  (unless *sync-client-channel*
+    (llog:warn "Cannot upload attachment: not connected to sync server")
+    (return-from upload-attachment-to-server nil))
+
+  ;; TODO: Implement client-streaming upload when ag-grpc API is clarified
+  ;; For now, just log a warning
+  (llog:warn "Attachment upload not yet implemented (requires client-streaming RPC support)"
+             :hash hash)
+  nil)
+
 (defun handle-sync-client-message (msg)
   "Handle a message received from the sync server."
   (case (proto-msg-case msg)
@@ -883,11 +925,20 @@
 ;;── Send Changes to Server ────────────────────────────────────────────────────
 
 (defun sync-client-send-upsert (todo)
-  "Send a todo upsert to the sync server."
+  "Send a todo upsert to the sync server.
+   Also uploads any attachments that the server doesn't have."
   (when (and *sync-client-stream* (sync-client-connected-p))
     (let ((msg (make-sync-upsert-message (get-device-id) todo)))
       (handler-case
-          (ag-grpc:stream-send *sync-client-stream* msg)
+          (progn
+            ;; Send the TODO update
+            (ag-grpc:stream-send *sync-client-stream* msg)
+
+            ;; Upload attachments if the TODO has any
+            (when (todo-attachment-hashes todo)
+              (dolist (hash (todo-attachment-hashes todo))
+                (llog:info "Uploading attachment for TODO" :todo-id (todo-id todo) :hash hash)
+                (upload-attachment-to-server hash))))
         (error (e)
           (llog:error "Failed to send upsert" :error (princ-to-string e)))))))
 

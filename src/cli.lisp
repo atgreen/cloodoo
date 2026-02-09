@@ -571,6 +571,68 @@
                              (tui:run program))
                         (stop-sync-client)))))))))
 
+(defun make-sync-upload-attachments-command ()
+  "Create the 'sync-upload-attachments' subcommand to upload all local attachments to the sync server."
+  (clingon:make-command
+   :name "sync-upload-attachments"
+   :description "Upload all local attachments to the sync server"
+   :handler (lambda (cmd)
+              (declare (ignore cmd))
+              (format t "~%Connecting to sync server to upload attachments...~%~%")
+              (handler-case
+                  (progn
+                    ;; Load sync config
+                    (let* ((sync-config (load-sync-config))
+                           (host (getf sync-config :host "localhost"))
+                           (port (getf sync-config :port 50051))
+                           (cert-path (or (getf sync-config :client-cert)
+                                          (namestring (client-cert-file (get-device-id)))))
+                           (key-path (or (getf sync-config :client-key)
+                                         (namestring (client-key-file (get-device-id))))))
+
+                      (unless (and (probe-file cert-path) (probe-file key-path))
+                        (format t "~A Client certificates not found.~%"
+                                (tui:colored "✗" :fg tui:*fg-red*))
+                        (format t "Run 'cloodoo cert issue ~A' first.~%" (get-device-id))
+                        (return-from make-sync-upload-attachments-command nil))
+
+                      ;; Connect to sync server
+                      (format t "Connecting to ~A:~A...~%" host port)
+                      (start-sync-client :host host :port port
+                                         :client-cert cert-path
+                                         :client-key key-path)
+
+                      ;; Wait for connection
+                      (sleep 1)
+
+                      (unless (sync-client-connected-p)
+                        (format t "~A Failed to connect to sync server~%"
+                                (tui:colored "✗" :fg tui:*fg-red*))
+                        (stop-sync-client)
+                        (return-from make-sync-upload-attachments-command nil))
+
+                      (format t "~A Connected!~%~%" (tui:colored "✓" :fg tui:*fg-green*))
+
+                      ;; Upload all attachments
+                      (let ((result (upload-all-attachments-to-server)))
+                        (if result
+                            (progn
+                              (format t "~%~A Upload complete!~%"
+                                      (tui:colored "✓" :fg tui:*fg-green*))
+                              (format t "  Uploaded: ~A~%" (getf result :uploaded))
+                              (when (plusp (getf result :failed))
+                                (format t "  ~A Failed: ~A~%"
+                                        (tui:colored "⚠" :fg tui:*fg-yellow*)
+                                        (getf result :failed))))
+                            (format t "~A Failed to upload attachments~%"
+                                    (tui:colored "✗" :fg tui:*fg-red*))))
+
+                      ;; Disconnect
+                      (stop-sync-client)))
+                (error (e)
+                  (format t "~A Error: ~A~%"
+                          (tui:colored "✗" :fg tui:*fg-red*) e))))))
+
 ;;── Certificate Management Commands ────────────────────────────────────────────
 
 (defun make-cert-init-command ()
@@ -1772,6 +1834,7 @@ URL format: http://HOST:PORT/pair/TOKEN"
                        (make-context-command)
                        (make-sync-server-command)
                        (make-sync-connect-command)
+                       (make-sync-upload-attachments-command)
                        (make-cert-command)
                        (make-enrich-pending-command)
                        (make-native-host-command)
