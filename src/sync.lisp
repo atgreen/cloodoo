@@ -1075,6 +1075,8 @@
    Streams attachment content to client in chunks."
   (declare (ignore ctx))
   (let ((hash (proto-attachment-download-request-hash request)))
+    (llog:info "ATTACHMENT DOWNLOAD REQUEST" :hash hash)
+    (format t "~&[ATTACHMENT-DOWNLOAD] Request for hash: ~A~%" hash)
     (handler-case
         (multiple-value-bind (stored-hash content filename mime-type size created-at)
             (resolve-attachment nil hash)  ; passing nil, will use with-db internally
