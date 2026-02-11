@@ -17,7 +17,7 @@
                              :since since
                              :client-time client-time))
         (msg (make-instance 'proto-sync-message)))
-    (setf (proto-init msg) init)
+    (setf (proto-sync-message-init msg) init)
     (setf (msg-case msg) :init)
     msg))
 
@@ -28,7 +28,7 @@
                             :pending-changes pending-count
                             :error (or error "")))
         (msg (make-instance 'proto-sync-message)))
-    (setf (proto-ack msg) ack)
+    (setf (proto-sync-message-ack msg) ack)
     (setf (msg-case msg) :ack)
     msg))
 
@@ -67,9 +67,9 @@
                                 :device-id device-id
                                 :timestamp timestamp))
          (msg (make-instance 'proto-sync-message)))
-    (setf (proto-upsert change) todo-data)
+    (setf (proto-todo-change-upsert change) todo-data)
     (setf (change-case change) :upsert)
-    (setf (proto-change msg) change)
+    (setf (proto-sync-message-change msg) change)
     (setf (msg-case msg) :change)
     msg))
 
@@ -79,9 +79,9 @@
                                 :device-id device-id
                                 :timestamp (now-iso)))
          (msg (make-instance 'proto-sync-message)))
-    (setf (proto-delete-id change) todo-id)
+    (setf (proto-todo-change-delete-id change) todo-id)
     (setf (change-case change) :delete-id)
-    (setf (proto-change msg) change)
+    (setf (proto-sync-message-change msg) change)
     (setf (msg-case msg) :change)
     msg))
 
@@ -100,7 +100,7 @@
                                         :timestamp (now-iso)
                                         :settings settings-data-list))
          (msg (make-instance 'proto-sync-message)))
-    (setf (proto-settings-change msg) settings-change)
+    (setf (proto-sync-message-settings-change msg) settings-change)
     (setf (msg-case msg) :settings-change)
     msg))
 
@@ -114,29 +114,29 @@
 
 (defun proto-msg-ack (sync-message)
   "Extract the SyncAck from a SyncMessage."
-  (proto-ack sync-message))
+  (proto-sync-message-ack sync-message))
 
 (defun proto-msg-init (sync-message)
   "Extract the SyncInit from a SyncMessage."
-  (proto-init sync-message))
+  (proto-sync-message-init sync-message))
 
 (defun proto-msg-change (sync-message)
   "Extract the TodoChange from a SyncMessage."
-  (proto-change sync-message))
+  (proto-sync-message-change sync-message))
 
 ;;── SyncAck Accessors ──────────────────────────────────────────────────────────
 
 (defun proto-ack-server-time (sync-ack)
   "Get server-time from SyncAck."
-  (proto-server-time sync-ack))
+  (proto-sync-ack-server-time sync-ack))
 
 (defun proto-ack-pending-changes (sync-ack)
   "Get pending-changes from SyncAck."
-  (proto-pending-changes sync-ack))
+  (proto-sync-ack-pending-changes sync-ack))
 
 (defun proto-ack-error (sync-ack)
   "Get error from SyncAck."
-  (proto-error sync-ack))
+  (proto-sync-ack-error sync-ack))
 
 ;;── TodoChange Accessors ───────────────────────────────────────────────────────
 
@@ -146,51 +146,51 @@
 
 (defun proto-change-device-id (todo-change)
   "Get device-id from TodoChange."
-  (proto-device-id todo-change))
+  (proto-todo-change-device-id todo-change))
 
 (defun proto-change-timestamp (todo-change)
   "Get timestamp from TodoChange."
-  (proto-timestamp todo-change))
+  (proto-todo-change-timestamp todo-change))
 
 (defun proto-change-upsert (todo-change)
   "Get upsert (TodoData) from TodoChange."
-  (proto-upsert todo-change))
+  (proto-todo-change-upsert todo-change))
 
 (defun proto-change-delete-id (todo-change)
   "Get delete-id from TodoChange."
-  (proto-delete-id todo-change))
+  (proto-todo-change-delete-id todo-change))
 
 ;;── SyncInit Accessors ─────────────────────────────────────────────────────────
 
 (defun proto-init-device-id (sync-init)
   "Get device-id from SyncInit."
-  (proto-device-id sync-init))
+  (proto-sync-init-device-id sync-init))
 
 (defun proto-init-since (sync-init)
   "Get since from SyncInit."
-  (proto-since sync-init))
+  (proto-sync-init-since sync-init))
 
 (defun proto-init-client-time (sync-init)
   "Get client-time from SyncInit."
-  (proto-client-time sync-init))
+  (proto-sync-init-client-time sync-init))
 
 ;;── SettingsChange Accessors ──────────────────────────────────────────────────
 
 (defun proto-msg-settings-change (sync-message)
   "Extract the SettingsChange from a SyncMessage."
-  (proto-settings-change sync-message))
+  (proto-sync-message-settings-change sync-message))
 
 (defun proto-settings-change-device-id (settings-change)
   "Get device-id from SettingsChange."
-  (proto-device-id settings-change))
+  (proto-settings-change-device-id settings-change))
 
 (defun proto-settings-change-timestamp (settings-change)
   "Get timestamp from SettingsChange."
-  (proto-timestamp settings-change))
+  (proto-settings-change-timestamp settings-change))
 
 (defun proto-settings-change-settings (settings-change)
   "Get settings list from SettingsChange."
-  (proto-settings settings-change))
+  (proto-settings-change-settings settings-change))
 
 ;;── TodoData Conversion ────────────────────────────────────────────────────────
 

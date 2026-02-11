@@ -183,6 +183,7 @@ class AttachmentSyncManager(
      * Returns the local file path after caching.
      */
     suspend fun fetchAttachment(hash: String): String? = withContext(Dispatchers.IO) {
+        Log.d(TAG, "fetchAttachment start hash=$hash")
         // Check if already cached locally
         val localPath = attachmentRepository.getLocalPath(hash)
         if (localPath != null) {
@@ -216,20 +217,23 @@ class AttachmentSyncManager(
 
             var metadata: AttachmentMeta? = null
 
-            // Use PipedOutputStream/PipedInputStream for streaming from gRPC to repository
-            val pipedOutputStream = java.io.PipedOutputStream()
-            val pipedInputStream = java.io.PipedInputStream(pipedOutputStream)
+            // FIX: Use ByteArrayOutputStream to avoid pipe deadlock
+            // The previous implementation used PipedOutputStream/PipedInputStream,
+            // but the reader wasn't started until onCompleted(). With a 1KB default
+            // pipe buffer and 13KB+ chunks, write() would block in onNext(),
+            // preventing the gRPC callback thread from processing trailers.
+            // This caused the client to never receive onCompleted().
+            val byteArrayOutputStream = ByteArrayOutputStream()
 
             val request = AttachmentDownloadRequest.newBuilder()
                 .setHash(hash)
                 .build()
+            Log.d(TAG, "Sending DownloadAttachment request hash=$hash")
 
             currentStub.downloadAttachment(request, object : StreamObserver<AttachmentDownloadResponse> {
                 override fun onNext(response: AttachmentDownloadResponse) {
+                    Log.d(TAG, "DownloadAttachment onNext responseCase=${response.responseCase}")
                     if (response.error.isNotEmpty()) {
-                        try {
-                            pipedOutputStream.close()
-                        } catch (_: Exception) {}
                         continuation.resumeWithException(RuntimeException(response.error))
                         return
                     }
@@ -238,10 +242,12 @@ class AttachmentSyncManager(
                         when (response.responseCase) {
                             AttachmentDownloadResponse.ResponseCase.METADATA -> {
                                 metadata = response.metadata
-                                Log.d(TAG, "Received metadata for attachment $hash")
+                                Log.d(TAG, "Received metadata for attachment $hash size=${metadata?.size} mime=${metadata?.mimeType}")
                             }
                             AttachmentDownloadResponse.ResponseCase.CHUNK -> {
-                                pipedOutputStream.write(response.chunk.toByteArray())
+                                Log.d(TAG, "Writing chunk to buffer, size=${response.chunk.size()}")
+                                byteArrayOutputStream.write(response.chunk.toByteArray())
+                                Log.d(TAG, "Chunk written successfully")
                             }
                             else -> {}
                         }
@@ -252,44 +258,40 @@ class AttachmentSyncManager(
                 }
 
                 override fun onError(t: Throwable) {
-                    try {
-                        pipedOutputStream.close()
-                    } catch (_: Exception) {}
+                    Log.e(TAG, "DownloadAttachment onError", t)
                     continuation.resumeWithException(t)
                 }
 
                 override fun onCompleted() {
+                    Log.d(TAG, "DownloadAttachment onCompleted")
                     val meta = metadata
                     if (meta == null) {
-                        try {
-                            pipedOutputStream.close()
-                        } catch (_: Exception) {}
                         continuation.resumeWithException(RuntimeException("No metadata received"))
                         return
                     }
-
-                    // Close the output stream to signal EOF to the input stream
-                    try {
-                        pipedOutputStream.close()
-                    } catch (_: Exception) {}
 
                     // Note: We use runBlocking here because we're inside a callback
                     // This is acceptable since we're already on IO dispatcher
                     kotlinx.coroutines.runBlocking {
                         try {
-                            // Store locally (streams from pipedInputStream)
+                            // Store locally (convert ByteArrayOutputStream to InputStream)
+                            val contentBytes = byteArrayOutputStream.toByteArray()
+                            Log.d(TAG, "Downloaded ${contentBytes.size} bytes, storing to repository")
+                            val contentStream = java.io.ByteArrayInputStream(contentBytes)
+
                             attachmentRepository.storeFromServer(
                                 hash = meta.hash,
                                 filename = meta.filename,
                                 mimeType = meta.mimeType,
                                 size = meta.size,
-                                contentStream = pipedInputStream
+                                contentStream = contentStream
                             )
 
                             val localPath = attachmentRepository.getLocalPath(hash)
                             Log.d(TAG, "Downloaded and cached attachment $hash at $localPath")
                             continuation.resume(localPath)
                         } catch (e: Exception) {
+                            Log.e(TAG, "Error storing attachment", e)
                             continuation.resumeWithException(e)
                         }
                     }

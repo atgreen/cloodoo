@@ -366,11 +366,19 @@
   "Retrieve attachment metadata and content by hash.
    Returns (values hash content filename mime-type size created-at) or NIL."
   (when hash
-    (let ((row (sqlite:execute-one-row-m-v db
-                 "SELECT hash, content, filename, mime_type, size, created_at
-                  FROM attachments WHERE hash = ?" hash)))
-      (when row
-        (values-list row)))))
+    (let ((result (multiple-value-list
+                   (sqlite:execute-one-row-m-v db
+                     "SELECT hash, content, filename, mime_type, size, created_at
+                      FROM attachments WHERE hash = ?" hash))))
+      (cond
+        ((null result) nil)
+        ;; Some sqlite versions return a single LIST row.
+        ((and (= (length result) 1) (listp (first result)))
+         (destructuring-bind (stored-hash content filename mime-type size created-at)
+             (first result)
+           (values stored-hash content filename mime-type size created-at)))
+        ;; Otherwise, treat the multiple values as the row.
+        (t (values-list result))))))
 
 ;;── App Settings Storage ──────────────────────────────────────────────────────
 
@@ -917,4 +925,3 @@
         WHERE t.valid_from > ? AND t.valid_to IS NULL
         ORDER BY t.valid_from ASC" ts)))
         (mapcar #'row-to-sync-hash-table rows)))))
-
