@@ -1070,61 +1070,73 @@
         (make-instance 'proto-attachment-upload-response
                        :error (princ-to-string e))))))
 
-(defun handle-download-attachment (ctx request stream)
+(defun handle-download-attachment (request ctx stream)
   "Handler for AttachmentService.DownloadAttachment RPC.
    Streams attachment content to client in chunks."
   (declare (ignore ctx))
-  (let ((hash (proto-attachment-download-request-hash request)))
+  (format t "~&[ATTACHMENT-DOWNLOAD] Received request: ~A hash=~A~%"
+          (type-of request)
+          (when request (proto-attachment-download-request-hash request)))
+  (force-output)
+
+  (let ((hash (when request (proto-attachment-download-request-hash request))))
     (llog:info "ATTACHMENT DOWNLOAD REQUEST" :hash hash)
     (format t "~&[ATTACHMENT-DOWNLOAD] Request for hash: ~A~%" hash)
+    (force-output)
     (handler-case
-        (multiple-value-bind (stored-hash content filename mime-type size created-at)
-            (resolve-attachment nil hash)  ; passing nil, will use with-db internally
-          (declare (ignore created-at))
-
-          (unless stored-hash
-            ;; Attachment not found - resolve-attachment opens its own db connection
-            (with-db (db)
-              (let ((row (sqlite:execute-one-row-m-v db
-                          "SELECT hash, content, filename, mime_type, size, created_at
-                           FROM attachments WHERE hash = ?" hash)))
-                (when row
-                  (setf stored-hash (first row)
-                        content (second row)
-                        filename (third row)
-                        mime-type (fourth row)
-                        size (fifth row)))))
+        (with-db (db)
+          (multiple-value-bind (stored-hash content filename mime-type size created-at)
+              (resolve-attachment db hash)
+            (declare (ignore created-at))
 
             (unless stored-hash
               (llog:warn "Attachment not found" :hash hash)
+              (format t "~&[ATTACHMENT-DOWNLOAD] Attachment not found: ~A~%" hash)
+              (force-output)
               (let ((resp (make-instance 'proto-attachment-download-response
                                          :error "Attachment not found")))
                 (ag-grpc:stream-send stream resp))
-              (return-from handle-download-attachment)))
+              (return-from handle-download-attachment))
 
-          ;; Send metadata first
-          (let* ((meta (make-instance 'proto-attachment-meta
-                                      :hash stored-hash
-                                      :filename filename
-                                      :mime-type mime-type
-                                      :size size))
-                 (resp (make-instance 'proto-attachment-download-response
-                                      :metadata meta)))
-            (ag-grpc:stream-send stream resp))
+            ;; Send metadata first
+            (format t "~&[ATTACHMENT-DOWNLOAD] Sending metadata: size=~A~%" size)
+            (force-output)
+            (let* ((meta (make-instance 'proto-attachment-meta
+                                        :hash stored-hash
+                                        :filename filename
+                                        :mime-type mime-type
+                                        :size size))
+                   (resp (make-instance 'proto-attachment-download-response
+                                        :metadata meta)))
+              (setf (response-case resp) :metadata)
+              (ag-grpc:stream-send stream resp))
 
-          ;; Send content in chunks
-          (let ((content-vec (if (vectorp content)
-                                 content
-                                 (flexi-streams:string-to-octets content :external-format :utf-8))))
-            (loop with len = (length content-vec)
-                  for offset from 0 below len by *attachment-chunk-size*
-                  for end = (min (+ offset *attachment-chunk-size*) len)
-                  for chunk = (subseq content-vec offset end)
-                  do (let ((resp (make-instance 'proto-attachment-download-response
-                                                :chunk chunk)))
-                       (ag-grpc:stream-send stream resp))))
+            ;; Send content in chunks
+            (format t "~&[ATTACHMENT-DOWNLOAD] Sending content in chunks~%")
+            (force-output)
+            (let ((content-vec (if (vectorp content)
+                                   content
+                                   (flexi-streams:string-to-octets content :external-format :utf-8)))
+                  (chunk-count 0))
+              (loop with len = (length content-vec)
+                    for offset from 0 below len by *attachment-chunk-size*
+                    for end = (min (+ offset *attachment-chunk-size*) len)
+                    for chunk = (subseq content-vec offset end)
+                    do (progn
+                         (incf chunk-count)
+                         (format t "~&[ATTACHMENT-DOWNLOAD] Sending chunk ~A: offset=~A len=~A~%"
+                                 chunk-count offset (length chunk))
+                         (force-output)
+                         (let ((resp (make-instance 'proto-attachment-download-response
+                                                    :chunk chunk)))
+                           (setf (response-case resp) :chunk)
+                           (ag-grpc:stream-send stream resp))))
+              (format t "~&[ATTACHMENT-DOWNLOAD] Sent ~A chunks total~%" chunk-count)
+              (force-output))
 
-          (llog:info "Attachment sent" :hash hash :size size))
+            (llog:info "Attachment sent" :hash hash :size size)
+            (format t "~&[ATTACHMENT-DOWNLOAD] Download complete~%")
+            (force-output)))
 
       (error (e)
         (llog:error "Attachment download failed" :hash hash :error (princ-to-string e))
