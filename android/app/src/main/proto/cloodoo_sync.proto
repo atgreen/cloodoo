@@ -75,6 +75,13 @@ message SyncAck {
   string error = 3;           // Error message if connection rejected (e.g., clock skew)
 }
 
+// Request to reset sync state and force full resync across all devices
+message SyncReset {
+  string device_id = 1;       // Device requesting the reset
+  string timestamp = 2;       // When reset was requested (ISO 8601)
+  string reset_to = 3;        // Reset to this timestamp (ISO 8601), or empty for full reset
+}
+
 // Wrapper for stream messages (allows different message types)
 message SyncMessage {
   oneof msg {
@@ -82,6 +89,7 @@ message SyncMessage {
     SyncAck ack = 2;
     TodoChange change = 3;
     SettingsChange settings_change = 4;
+    SyncReset reset = 5;
   }
 }
 

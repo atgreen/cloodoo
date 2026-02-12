@@ -648,23 +648,66 @@
      :options (list since-opt)
      :handler (lambda (cmd)
                 (let ((since (clingon:getopt cmd :since)))
+                  (format t "~%Connecting to sync server to broadcast reset...~%~%")
                   (handler-case
                       (progn
-                        (if (string-equal since "full")
-                            (progn
-                              ;; Delete the last-sync file to force full resync
-                              (let ((file (last-sync-file)))
-                                (when (probe-file file)
-                                  (delete-file file))
-                                (format t "~%~A Last sync timestamp cleared~%"
-                                        (tui:colored "✓" :fg tui:*fg-green*))
-                                (format t "Next sync will perform a full multi-way resync.~%~%")))
-                            (progn
-                              ;; Set a specific timestamp
-                              (save-last-sync-timestamp since)
-                              (format t "~%~A Last sync timestamp set to: ~A~%"
-                                      (tui:colored "✓" :fg tui:*fg-green*) since)
-                              (format t "Next sync will sync changes since that timestamp.~%~%"))))
+                        ;; Load sync config
+                        (let* ((sync-config (load-sync-config))
+                               (host (getf sync-config :host "localhost"))
+                               (port (getf sync-config :port 50051))
+                               (cert-path (or (getf sync-config :client-cert)
+                                              (namestring (client-cert-file (get-device-id)))))
+                               (key-path (or (getf sync-config :client-key)
+                                             (namestring (client-key-file (get-device-id))))))
+
+                          (unless (and (probe-file cert-path) (probe-file key-path))
+                            (format t "~A Client certificates not found.~%"
+                                    (tui:colored "✗" :fg tui:*fg-red*))
+                            (format t "Run 'cloodoo cert issue ~A' first.~%" (get-device-id))
+                            (return-from make-sync-reset-command nil))
+
+                          ;; Connect to sync server
+                          (format t "Connecting to ~A:~A...~%" host port)
+                          (let* ((channel (ag-grpc:make-channel host port
+                                                                :tls t
+                                                                :tls-client-certificate cert-path
+                                                                :tls-client-key key-path))
+                                 (stub (make-todo-sync-stub channel))
+                                 (stream (todo-sync-sync-stream stub)))
+
+                            (unwind-protect
+                                 (progn
+                                   ;; Send init message
+                                   (let ((init-msg (make-sync-init-message (get-device-id) "" (now-iso))))
+                                     (ag-grpc:stream-send stream init-msg))
+
+                                   ;; Wait for ACK
+                                   (let ((ack-msg (ag-grpc:stream-read-message stream)))
+                                     (unless (and ack-msg (eql (proto-msg-case ack-msg) :ack))
+                                       (format t "~A Failed to get ACK from server~%"
+                                               (tui:colored "✗" :fg tui:*fg-red*))
+                                       (return-from make-sync-reset-command nil)))
+
+                                   (format t "~A Connected!~%~%" (tui:colored "✓" :fg tui:*fg-green*))
+
+                                   ;; Send reset message
+                                   (let ((reset-to (if (string-equal since "full") "" since))
+                                         (reset-msg (make-sync-reset-message (get-device-id) reset-to)))
+                                     (ag-grpc:stream-send stream reset-msg)
+                                     (if (string-equal since "full")
+                                         (format t "~A Full sync reset broadcasted to all devices!~%~%"
+                                                 (tui:colored "✓" :fg tui:*fg-green*))
+                                         (format t "~A Sync reset broadcasted (since: ~A)~%~%"
+                                                 (tui:colored "✓" :fg tui:*fg-green*) since))
+                                     (format t "All connected devices will resync on their next connection.~%~%"))
+
+                                   ;; Give the message time to be sent
+                                   (sleep 0.5))
+
+                              ;; Cleanup
+                              (ignore-errors
+                                (ag-grpc:stream-close-send stream)
+                                (ag-grpc:channel-close channel))))))
                     (error (e)
                       (format t "~A Error: ~A~%"
                               (tui:colored "✗" :fg tui:*fg-red*) e))))))))

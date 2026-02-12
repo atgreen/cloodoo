@@ -297,7 +297,20 @@
                                      VALUES (?, ?, ?)"
                                     key value updated-at))))))
                         ;; Broadcast to other clients (excluding sender)
-                        (broadcast-change msg origin-device-id))))))))) ; close loop, let (pending changes), block
+                        (broadcast-change msg origin-device-id)))
+
+                    (when (eql (proto-msg-case msg) :reset)
+                      (let* ((reset (proto-msg-reset msg))
+                             (origin-device-id (proto-reset-device-id reset))
+                             (reset-to (proto-reset-reset-to reset)))
+                        (llog:info "Sync reset requested" :device-id origin-device-id
+                                   :reset-to reset-to)
+                        (when *sync-debug*
+                          (format t "~&[SYNC-DEBUG] Received reset request from ~A (reset-to: ~A)~%"
+                                  origin-device-id reset-to))
+                        ;; Broadcast reset to all connected clients (including sender)
+                        ;; This tells all clients to clear their last-sync timestamps
+                        (broadcast-change msg nil))))))))) ; close loop, let (pending changes), block
 
       ;; Cleanup on exit
       (when *sync-debug*
@@ -912,6 +925,28 @@
                       VALUES (?, ?, ?)"
                      key value updated-at)))
                (llog:info "Applied settings update from server" :key key)))))))
+
+    (:reset
+     (let* ((reset (proto-msg-reset msg))
+            (origin-device-id (proto-reset-device-id reset))
+            (reset-to (proto-reset-reset-to reset)))
+       (llog:info "Received sync reset from server" :origin-device-id origin-device-id
+                  :reset-to reset-to)
+       ;; Clear or set last-sync timestamp as requested
+       (if (or (null reset-to) (zerop (length reset-to)))
+           (progn
+             ;; Full reset - delete last-sync file
+             (let ((file (last-sync-file)))
+               (when (probe-file file)
+                 (delete-file file))
+               (llog:info "Last sync timestamp cleared for full resync")))
+           (progn
+             ;; Partial reset - set to specific timestamp
+             (save-last-sync-timestamp reset-to)
+             (llog:info "Last sync timestamp reset" :to reset-to)))
+       ;; Trigger reconnect to perform the resync
+       (llog:info "Disconnecting to trigger resync...")
+       (setf *sync-client-running* nil)))
 
     (otherwise
      (llog:warn "Unknown message from server" :case (proto-msg-case msg)))))

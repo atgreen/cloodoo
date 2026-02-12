@@ -104,6 +104,18 @@
     (setf (slot-value msg 'msg-case) :settings-change)
     msg))
 
+(defun make-sync-reset-message (device-id &optional reset-to)
+  "Create a SyncMessage with SyncReset payload.
+   RESET-TO is an optional ISO 8601 timestamp; if nil, performs a full reset."
+  (let ((reset (make-instance 'proto-sync-reset
+                              :device-id device-id
+                              :timestamp (now-iso)
+                              :reset-to (or reset-to "")))
+        (msg (make-instance 'proto-sync-message)))
+    (setf (slot-value msg 'reset) reset)
+    (setf (slot-value msg 'msg-case) :reset)
+    msg))
+
 ;;── Message Type Detection ────────────────────────────────────────────────────
 
 (defun proto-msg-case (sync-message)
@@ -191,6 +203,24 @@
 (defun proto-settings-change-settings (settings-change)
   "Get settings list from SettingsChange."
   (slot-value settings-change 'settings))
+
+;;── SyncReset Accessors ────────────────────────────────────────────────────────
+
+(defun proto-msg-reset (sync-message)
+  "Extract the SyncReset from a SyncMessage."
+  (slot-value sync-message 'reset))
+
+(defun proto-reset-device-id (sync-reset)
+  "Get device-id from SyncReset."
+  (slot-value sync-reset 'device-id))
+
+(defun proto-reset-timestamp (sync-reset)
+  "Get timestamp from SyncReset."
+  (slot-value sync-reset 'timestamp))
+
+(defun proto-reset-reset-to (sync-reset)
+  "Get reset-to timestamp from SyncReset."
+  (slot-value sync-reset 'reset-to))
 
 ;;── TodoData Conversion ────────────────────────────────────────────────────────
 
