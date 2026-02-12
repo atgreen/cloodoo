@@ -647,7 +647,8 @@
      :description "Force a multi-way resync by resetting the last sync timestamp"
      :options (list since-opt)
      :handler (lambda (cmd)
-                (let ((since (clingon:getopt cmd :since)))
+                (block nil
+                  (let ((since (clingon:getopt cmd :since)))
                   (format t "~%Connecting to sync server to broadcast reset...~%~%")
                   (handler-case
                       (progn
@@ -664,7 +665,7 @@
                             (format t "~A Client certificates not found.~%"
                                     (tui:colored "✗" :fg tui:*fg-red*))
                             (format t "Run 'cloodoo cert issue ~A' first.~%" (get-device-id))
-                            (return-from make-sync-reset-command nil))
+                            (return))
 
                           ;; Connect to sync server
                           (format t "Connecting to ~A:~A...~%" host port)
@@ -686,7 +687,7 @@
                                      (unless (and ack-msg (eql (proto-msg-case ack-msg) :ack))
                                        (format t "~A Failed to get ACK from server~%"
                                                (tui:colored "✗" :fg tui:*fg-red*))
-                                       (return-from make-sync-reset-command nil)))
+                                       (return)))
 
                                    (format t "~A Connected!~%~%" (tui:colored "✓" :fg tui:*fg-green*))
 
@@ -710,7 +711,7 @@
                                 (ag-grpc:channel-close channel))))))
                     (error (e)
                       (format t "~A Error: ~A~%"
-                              (tui:colored "✗" :fg tui:*fg-red*) e))))))))
+                              (tui:colored "✗" :fg tui:*fg-red*) e)))))))))
 
 ;;── Certificate Management Commands ────────────────────────────────────────────
 
