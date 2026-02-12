@@ -125,6 +125,24 @@
   "Return the path to the user context file."
   (merge-pathnames "context.txt" (config-directory)))
 
+(defun sync-config-file ()
+  "Return the path to the sync-config.lisp file."
+  (merge-pathnames "sync-config.lisp" (config-directory)))
+
+(defun load-sync-config ()
+  "Load sync configuration from sync-config.lisp.
+   Returns a plist with :host, :port, :client-cert, :client-key.
+   If file doesn't exist, returns default localhost config."
+  (let ((config-path (sync-config-file)))
+    (if (probe-file config-path)
+        (handler-case
+            (with-open-file (in config-path)
+              (read in))
+          (error (e)
+            (warn "Failed to read sync config from ~A: ~A" config-path e)
+            '(:host "localhost" :port 50051)))
+        '(:host "localhost" :port 50051))))
+
 (defun ensure-data-directory ()
   "Ensure the data directory exists."
   (ensure-directories-exist (data-directory)))
