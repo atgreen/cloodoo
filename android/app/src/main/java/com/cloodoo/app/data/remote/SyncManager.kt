@@ -341,6 +341,32 @@ class SyncManager(
                 }
             }
 
+            SyncMessage.MsgCase.RESET -> {
+                val reset = message.reset
+                val originDeviceId = reset.deviceId
+                val resetTo = reset.resetTo
+
+                Log.i(TAG, "Received sync reset from device $originDeviceId (reset_to: $resetTo)")
+
+                // Clear or update last-sync timestamp
+                if (resetTo.isEmpty()) {
+                    // Full reset - clear timestamp
+                    lastServerTime = null
+                    Log.i(TAG, "Last sync timestamp cleared for full resync")
+                } else {
+                    // Partial reset - set to specific timestamp
+                    lastServerTime = resetTo
+                    Log.i(TAG, "Last sync timestamp reset to $resetTo")
+                }
+
+                // Notify ViewModel to clear its persisted sync time
+                _syncEvents.emit(SyncEvent.ResetRequested(resetTo.ifEmpty { null }))
+
+                // Disconnect to trigger reconnect with new sync timestamp
+                Log.i(TAG, "Disconnecting to trigger resync...")
+                grpcClient?.disconnect()
+            }
+
             else -> {
                 Log.w(TAG, "Unknown message type: ${message.msgCase}")
             }
@@ -520,6 +546,7 @@ sealed class SyncEvent {
     data class Received(val todoId: String, val type: SyncEventType) : SyncEvent()
     data class Sent(val todoId: String) : SyncEvent()
     data class Error(val message: String) : SyncEvent()
+    data class ResetRequested(val resetTo: String?) : SyncEvent()
 }
 
 enum class SyncEventType {

@@ -141,6 +141,20 @@ class TodoListViewModel(
                     is SyncEvent.Error -> {
                         _uiState.update { it.copy(syncError = event.message) }
                     }
+                    is SyncEvent.ResetRequested -> {
+                        Log.i(TAG, "Sync reset requested, clearing persisted sync time")
+                        // Clear or update persisted sync time
+                        _lastSyncTime.value = event.resetTo
+                        saveLastSyncTime(getApplication())
+                        _uiState.update {
+                            it.copy(
+                                lastSyncResult = if (event.resetTo == null)
+                                    "Full resync requested"
+                                else
+                                    "Partial resync from ${event.resetTo}"
+                            )
+                        }
+                    }
                 }
             }
         }
