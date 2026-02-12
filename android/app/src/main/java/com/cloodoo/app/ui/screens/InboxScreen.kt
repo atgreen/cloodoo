@@ -329,44 +329,24 @@ fun InboxScreen(
         )
     }
 
-    // Attachment photo viewer
+    // Attachment photo viewer with zoom/pan/share
     if (attachmentHashesToView.isNotEmpty()) {
         val currentHash = attachmentHashesToView.getOrNull(currentAttachmentIndex)
         val currentPath = currentHash?.let { attachmentPaths[it] }
 
-        Dialog(onDismissRequest = { attachmentHashesToView = emptyList() }) {
-            Surface(
-                modifier = Modifier.fillMaxSize(),
-                color = MaterialTheme.colorScheme.scrim.copy(alpha = 0.95f)
-            ) {
+        if (currentPath != null) {
+            FullscreenImageViewer(
+                imagePath = currentPath,
+                onDismiss = { attachmentHashesToView = emptyList() }
+            )
+        } else {
+            // Loading dialog while path is being fetched
+            Dialog(onDismissRequest = { attachmentHashesToView = emptyList() }) {
                 Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .clickable { attachmentHashesToView = emptyList() },
+                    modifier = Modifier.fillMaxSize(),
                     contentAlignment = Alignment.Center
                 ) {
-                    if (currentPath != null) {
-                        AsyncImage(
-                            model = Uri.fromFile(File(currentPath)),
-                            contentDescription = "Attachment",
-                            modifier = Modifier.fillMaxWidth(),
-                            contentScale = ContentScale.Fit
-                        )
-                    } else {
-                        CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
-                    }
-
-                    // Photo counter for multiple photos
-                    if (attachmentHashesToView.size > 1) {
-                        Text(
-                            text = "${currentAttachmentIndex + 1} / ${attachmentHashesToView.size}",
-                            style = MaterialTheme.typography.labelLarge,
-                            color = MaterialTheme.colorScheme.onPrimary,
-                            modifier = Modifier
-                                .align(Alignment.TopCenter)
-                                .padding(top = 48.dp)
-                        )
-                    }
+                    CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
                 }
             }
         }

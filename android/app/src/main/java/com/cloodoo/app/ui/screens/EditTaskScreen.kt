@@ -346,28 +346,12 @@ fun EditTaskScreen(
         }
     }
 
-    // Fullscreen image viewer
+    // Fullscreen image viewer with zoom/pan/share
     if (selectedImagePath != null) {
-        Dialog(onDismissRequest = { selectedImagePath = null }) {
-            Surface(
-                modifier = Modifier.fillMaxSize(),
-                color = MaterialTheme.colorScheme.scrim.copy(alpha = 0.9f)
-            ) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .clickable { selectedImagePath = null },
-                    contentAlignment = Alignment.Center
-                ) {
-                    AsyncImage(
-                        model = Uri.fromFile(File(selectedImagePath!!)),
-                        contentDescription = "Attachment fullscreen",
-                        modifier = Modifier.fillMaxWidth(),
-                        contentScale = ContentScale.Fit
-                    )
-                }
-            }
-        }
+        FullscreenImageViewer(
+            imagePath = selectedImagePath!!,
+            onDismiss = { selectedImagePath = null }
+        )
     }
 
     // Due date picker

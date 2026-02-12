@@ -9,23 +9,33 @@ package com.cloodoo.app.ui.screens
 import android.content.Intent
 import android.net.Uri
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.rememberTransformableState
+import androidx.compose.foundation.gestures.transformable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Clear
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
+import androidx.core.content.FileProvider
 import coil.compose.AsyncImage
 import com.cloodoo.app.data.local.TodoEntity
 import com.cloodoo.app.ui.components.ClickableTextWithLinks
@@ -379,28 +389,12 @@ fun TodoDetailSheet(
         }
     }
 
-    // Fullscreen image viewer
+    // Fullscreen image viewer with zoom/pan/share
     if (selectedImagePath != null) {
-        Dialog(onDismissRequest = { selectedImagePath = null }) {
-            Surface(
-                modifier = Modifier.fillMaxSize(),
-                color = MaterialTheme.colorScheme.scrim.copy(alpha = 0.95f)
-            ) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .clickable { selectedImagePath = null },
-                    contentAlignment = Alignment.Center
-                ) {
-                    AsyncImage(
-                        model = Uri.fromFile(File(selectedImagePath!!)),
-                        contentDescription = "Attachment fullscreen",
-                        modifier = Modifier.fillMaxWidth(),
-                        contentScale = ContentScale.Fit
-                    )
-                }
-            }
-        }
+        FullscreenImageViewer(
+            imagePath = selectedImagePath!!,
+            onDismiss = { selectedImagePath = null }
+        )
     }
 
     if (showDueDatePicker) {
@@ -446,6 +440,155 @@ fun TodoDetailSheet(
             }
         ) {
             DatePicker(state = datePickerState)
+        }
+    }
+}
+
+@Composable
+fun FullscreenImageViewer(
+    imagePath: String,
+    onDismiss: () -> Unit
+) {
+    val context = LocalContext.current
+
+    // Zoom/pan state - use mutableFloatStateOf for better performance
+    var scale by remember { mutableFloatStateOf(1f) }
+    var offsetX by remember { mutableFloatStateOf(0f) }
+    var offsetY by remember { mutableFloatStateOf(0f) }
+
+    val transformableState = rememberTransformableState { zoomChange, panChange, _ ->
+        val newScale = (scale * zoomChange).coerceIn(1f, 5f)
+
+        // Only allow panning when zoomed in
+        // Scale pan sensitivity by zoom level for more responsive movement
+        if (newScale > 1f) {
+            val panMultiplier = 1.5f // Increase pan sensitivity
+            offsetX += panChange.x * panMultiplier
+            offsetY += panChange.y * panMultiplier
+        } else {
+            offsetX = 0f
+            offsetY = 0f
+        }
+
+        scale = newScale
+    }
+
+    // Reset zoom on double tap
+    val doubleTapModifier = Modifier.pointerInput(Unit) {
+        detectTapGestures(
+            onDoubleTap = {
+                if (scale > 1f) {
+                    scale = 1f
+                    offsetX = 0f
+                    offsetY = 0f
+                } else {
+                    scale = 2.5f
+                }
+            }
+        )
+    }
+
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(
+            usePlatformDefaultWidth = false,
+            decorFitsSystemWindows = false
+        )
+    ) {
+        Surface(
+            modifier = Modifier.fillMaxSize(),
+            color = MaterialTheme.colorScheme.scrim
+        ) {
+            Box(modifier = Modifier.fillMaxSize()) {
+                // Image with zoom/pan
+                AsyncImage(
+                    model = Uri.fromFile(File(imagePath)),
+                    contentDescription = "Attachment fullscreen",
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .then(doubleTapModifier)
+                        .transformable(transformableState)
+                        .graphicsLayer {
+                            scaleX = scale
+                            scaleY = scale
+                            translationX = offsetX
+                            translationY = offsetY
+                        },
+                    contentScale = ContentScale.Fit
+                )
+
+                // Top bar with close and share buttons
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp)
+                        .align(Alignment.TopCenter),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    // Close button
+                    IconButton(
+                        onClick = onDismiss,
+                        colors = IconButtonDefaults.iconButtonColors(
+                            containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.7f)
+                        )
+                    ) {
+                        Icon(
+                            Icons.Default.Close,
+                            contentDescription = "Close",
+                            tint = MaterialTheme.colorScheme.onSurface
+                        )
+                    }
+
+                    // Share button
+                    IconButton(
+                        onClick = {
+                            val imageFile = File(imagePath)
+
+                            // Detect MIME type and create temp file with proper extension
+                            val options = android.graphics.BitmapFactory.Options()
+                            options.inJustDecodeBounds = true
+                            android.graphics.BitmapFactory.decodeFile(imagePath, options)
+                            val mimeType = options.outMimeType ?: "image/jpeg"
+                            val extension = when (mimeType) {
+                                "image/png" -> "png"
+                                "image/jpeg" -> "jpg"
+                                "image/gif" -> "gif"
+                                "image/webp" -> "webp"
+                                else -> "jpg"
+                            }
+
+                            // Copy to temp file with proper name
+                            val tempDir = File(context.cacheDir, "shared")
+                            tempDir.mkdirs()
+                            val tempFile = File(tempDir, "photo.$extension")
+                            imageFile.copyTo(tempFile, overwrite = true)
+
+                            val imageUri = FileProvider.getUriForFile(
+                                context,
+                                "${context.packageName}.fileprovider",
+                                tempFile
+                            )
+
+                            val shareIntent = Intent(Intent.ACTION_SEND).apply {
+                                type = mimeType
+                                putExtra(Intent.EXTRA_STREAM, imageUri)
+                                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                            }
+
+                            context.startActivity(Intent.createChooser(shareIntent, "Share photo"))
+                        },
+                        colors = IconButtonDefaults.iconButtonColors(
+                            containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.7f)
+                        )
+                    ) {
+                        Icon(
+                            Icons.Default.Share,
+                            contentDescription = "Share",
+                            tint = MaterialTheme.colorScheme.onSurface
+                        )
+                    }
+                }
+            }
         }
     }
 }
