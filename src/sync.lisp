@@ -732,7 +732,7 @@
                 (llog:warn "Attachment download error" :hash hash :error error-msg)
                 (return-from download-attachment-from-server nil)))
             ;; Collect metadata or chunk based on response-case
-            (case (response-case response)
+            (case (slot-value response 'response-case)
               (:metadata
                (setf metadata (proto-metadata response)))
               (:chunk
@@ -1108,7 +1108,7 @@
                                         :size size))
                    (resp (make-instance 'proto-attachment-download-response
                                         :metadata meta)))
-              (setf (response-case resp) :metadata)
+              (setf (slot-value resp 'response-case) :metadata)
               (ag-grpc:stream-send stream resp))
 
             ;; Send content in chunks
@@ -1129,7 +1129,7 @@
                          (force-output)
                          (let ((resp (make-instance 'proto-attachment-download-response
                                                     :chunk chunk)))
-                           (setf (response-case resp) :chunk)
+                           (setf (slot-value resp 'response-case) :chunk)
                            (ag-grpc:stream-send stream resp))))
               (format t "~&[ATTACHMENT-DOWNLOAD] Sent ~A chunks total~%" chunk-count)
               (force-output))

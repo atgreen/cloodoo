@@ -108,89 +108,89 @@
 
 (defun proto-msg-case (sync-message)
   "Return which variant is set in a SyncMessage (:init, :ack, :change, or :settings-change)."
-  (msg-case sync-message))
+  (slot-value sync-message 'msg-case))
 
 ;;── Message Field Accessors ───────────────────────────────────────────────────
 
 (defun proto-msg-ack (sync-message)
   "Extract the SyncAck from a SyncMessage."
-  (proto-sync-message-ack sync-message))
+  (slot-value sync-message 'ack))
 
 (defun proto-msg-init (sync-message)
   "Extract the SyncInit from a SyncMessage."
-  (proto-sync-message-init sync-message))
+  (slot-value sync-message 'init))
 
 (defun proto-msg-change (sync-message)
   "Extract the TodoChange from a SyncMessage."
-  (proto-sync-message-change sync-message))
+  (slot-value sync-message 'change))
 
 ;;── SyncAck Accessors ──────────────────────────────────────────────────────────
 
 (defun proto-ack-server-time (sync-ack)
   "Get server-time from SyncAck."
-  (proto-sync-ack-server-time sync-ack))
+  (slot-value sync-ack 'server-time))
 
 (defun proto-ack-pending-changes (sync-ack)
   "Get pending-changes from SyncAck."
-  (proto-sync-ack-pending-changes sync-ack))
+  (slot-value sync-ack 'pending-changes))
 
 (defun proto-ack-error (sync-ack)
   "Get error from SyncAck."
-  (proto-sync-ack-error sync-ack))
+  (slot-value sync-ack 'proto-error))
 
 ;;── TodoChange Accessors ───────────────────────────────────────────────────────
 
 (defun proto-change-case (todo-change)
   "Return which variant is set in a TodoChange (:upsert or :delete-id)."
-  (change-case todo-change))
+  (slot-value todo-change 'change-case))
 
 (defun proto-change-device-id (todo-change)
   "Get device-id from TodoChange."
-  (proto-todo-change-device-id todo-change))
+  (slot-value todo-change 'device-id))
 
 (defun proto-change-timestamp (todo-change)
   "Get timestamp from TodoChange."
-  (proto-todo-change-timestamp todo-change))
+  (slot-value todo-change 'timestamp))
 
 (defun proto-change-upsert (todo-change)
   "Get upsert (TodoData) from TodoChange."
-  (proto-todo-change-upsert todo-change))
+  (slot-value todo-change 'upsert))
 
 (defun proto-change-delete-id (todo-change)
   "Get delete-id from TodoChange."
-  (proto-todo-change-delete-id todo-change))
+  (slot-value todo-change 'delete-id))
 
 ;;── SyncInit Accessors ─────────────────────────────────────────────────────────
 
 (defun proto-init-device-id (sync-init)
   "Get device-id from SyncInit."
-  (proto-sync-init-device-id sync-init))
+  (slot-value sync-init 'device-id))
 
 (defun proto-init-since (sync-init)
   "Get since from SyncInit."
-  (proto-sync-init-since sync-init))
+  (slot-value sync-init 'since))
 
 (defun proto-init-client-time (sync-init)
   "Get client-time from SyncInit."
-  (proto-sync-init-client-time sync-init))
+  (slot-value sync-init 'client-time))
 
 ;;── SettingsChange Accessors ──────────────────────────────────────────────────
 
 (defun proto-msg-settings-change (sync-message)
   "Extract the SettingsChange from a SyncMessage."
-  (proto-sync-message-settings-change sync-message))
+  (slot-value sync-message 'settings-change))
 
 (defun proto-settings-change-device-id (settings-change)
   "Get device-id from SettingsChange."
-  (proto-settings-change-device-id settings-change))
+  (slot-value settings-change 'device-id))
 
 (defun proto-settings-change-timestamp (settings-change)
   "Get timestamp from SettingsChange."
-  (proto-settings-change-timestamp settings-change))
+  (slot-value settings-change 'timestamp))
 
 (defun proto-settings-change-settings (settings-change)
   "Get settings list from SettingsChange."
-  (proto-settings-change-settings settings-change))
+  (slot-value settings-change 'settings))
 
 ;;── TodoData Conversion ────────────────────────────────────────────────────────
 
