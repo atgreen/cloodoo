@@ -633,6 +633,42 @@
                   (format t "~A Error: ~A~%"
                           (tui:colored "✗" :fg tui:*fg-red*) e))))))
 
+(defun make-sync-reset-command ()
+  "Create the 'sync-reset' subcommand to force a multi-way resync."
+  (let ((since-opt (clingon:make-option
+                    :string
+                    :short-name #\s
+                    :long-name "since"
+                    :key :since
+                    :initial-value "full"
+                    :description "Reset to timestamp (ISO 8601) or 'full' for complete resync")))
+    (clingon:make-command
+     :name "sync-reset"
+     :description "Force a multi-way resync by resetting the last sync timestamp"
+     :options (list since-opt)
+     :handler (lambda (cmd)
+                (let ((since (clingon:getopt cmd :since)))
+                  (handler-case
+                      (progn
+                        (if (string-equal since "full")
+                            (progn
+                              ;; Delete the last-sync file to force full resync
+                              (let ((file (last-sync-file)))
+                                (when (probe-file file)
+                                  (delete-file file))
+                                (format t "~%~A Last sync timestamp cleared~%"
+                                        (tui:colored "✓" :fg tui:*fg-green*))
+                                (format t "Next sync will perform a full multi-way resync.~%~%")))
+                            (progn
+                              ;; Set a specific timestamp
+                              (save-last-sync-timestamp since)
+                              (format t "~%~A Last sync timestamp set to: ~A~%"
+                                      (tui:colored "✓" :fg tui:*fg-green*) since)
+                              (format t "Next sync will sync changes since that timestamp.~%~%"))))
+                    (error (e)
+                      (format t "~A Error: ~A~%"
+                              (tui:colored "✗" :fg tui:*fg-red*) e))))))))
+
 ;;── Certificate Management Commands ────────────────────────────────────────────
 
 (defun make-cert-init-command ()
@@ -1837,6 +1873,7 @@ URL format: http://HOST:PORT/pair/TOKEN"
                        (make-sync-server-command)
                        (make-sync-connect-command)
                        (make-sync-upload-attachments-command)
+                       (make-sync-reset-command)
                        (make-cert-command)
                        (make-enrich-pending-command)
                        (make-native-host-command)
