@@ -280,9 +280,9 @@
                                   origin-device-id (length settings-list)))
                         ;; Process each setting with last-write-wins conflict resolution
                         (dolist (setting-data settings-list)
-                          (let* ((key (proto-key setting-data))
-                                 (value (proto-value setting-data))
-                                 (updated-at (proto-updated-at setting-data)))
+                          (let* ((key (slot-value setting-data 'key))
+                                 (value (slot-value setting-data 'value))
+                                 (updated-at (slot-value setting-data 'updated-at)))
                             (multiple-value-bind (current-value current-timestamp)
                                 (db-load-setting-with-timestamp key)
                               ;; Only update if incoming timestamp is newer or setting doesn't exist
@@ -896,9 +896,9 @@
        (llog:info "Received settings change from server" :count (length settings-list))
        ;; Process each setting with last-write-wins conflict resolution
        (dolist (setting-data settings-list)
-         (let* ((key (proto-key setting-data))
-                (value (proto-value setting-data))
-                (updated-at (proto-updated-at setting-data)))
+         (let* ((key (slot-value setting-data 'key))
+                (value (slot-value setting-data 'value))
+                (updated-at (slot-value setting-data 'updated-at)))
            (multiple-value-bind (current-value current-timestamp)
                (db-load-setting-with-timestamp key)
              ;; Only update if incoming timestamp is newer or setting doesn't exist
