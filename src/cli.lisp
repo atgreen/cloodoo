@@ -1169,6 +1169,8 @@ URL format: http://HOST:PORT/pair/TOKEN"
                  (ag-grpc:stream-send stream
                    (make-sync-upsert-message (get-device-id) todo))
                  (native-host-log "Sync push: sent todo ~A" (todo-id todo))
+                 ;; Give server time to receive and process the message before closing
+                 (sleep 0.5)
                  t)
             ;; Cleanup
             (when stream

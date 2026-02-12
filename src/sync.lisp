@@ -829,28 +829,28 @@
 
                ;; Send local changes that occurred since last sync
                ;; This handles changes that failed to send due to connection errors
-               (when (plusp (length old-last-sync))
-                 (handler-case
-                     (let* ((effective-since (if (plusp (length old-last-sync))
-                                                 old-last-sync
-                                                 "1970-01-01T00:00:00Z"))
-                            (local-changes (db-load-current-rows-since effective-since))
-                            (local-count (length local-changes)))
-                       (when (plusp local-count)
-                         (llog:info "Resending local changes" :count local-count :since effective-since)
-                         (dolist (row local-changes)
-                           (let* ((todo (db-row-to-todo row))
-                                  (valid-from (gethash "valid_from" row))
-                                  (change-msg (make-sync-upsert-message-with-timestamp
-                                               (get-device-id) todo valid-from)))
-                             (handler-case
-                                 (ag-grpc:stream-send *sync-client-stream* change-msg)
-                               (error (e)
-                                 (llog:error "Failed to resend local change"
-                                            :id (todo-id todo)
-                                            :error (princ-to-string e))))))))
-                   (error (e)
-                     (llog:warn "Failed to load/send local changes" :error (princ-to-string e)))))
+               ;; Also handles full resync when old-last-sync is empty
+               (handler-case
+                   (let* ((effective-since (if (plusp (length old-last-sync))
+                                               old-last-sync
+                                               "1970-01-01T00:00:00Z"))
+                          (local-changes (db-load-current-rows-since effective-since))
+                          (local-count (length local-changes)))
+                     (when (plusp local-count)
+                       (llog:info "Sending local changes" :count local-count :since effective-since)
+                       (dolist (row local-changes)
+                         (let* ((todo (db-row-to-todo row))
+                                (valid-from (gethash "valid_from" row))
+                                (change-msg (make-sync-upsert-message-with-timestamp
+                                             (get-device-id) todo valid-from)))
+                           (handler-case
+                               (ag-grpc:stream-send *sync-client-stream* change-msg)
+                             (error (e)
+                               (llog:error "Failed to send local change"
+                                          :id (todo-id todo)
+                                          :error (princ-to-string e))))))))
+                 (error (e)
+                   (llog:warn "Failed to load/send local changes" :error (princ-to-string e))))
 
                ;; Send local settings to server on connect
                (let ((settings-hash (db-load-all-settings)))
