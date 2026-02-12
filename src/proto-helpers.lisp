@@ -17,8 +17,8 @@
                              :since since
                              :client-time client-time))
         (msg (make-instance 'proto-sync-message)))
-    (setf (proto-sync-message-init msg) init)
-    (setf (msg-case msg) :init)
+    (setf (slot-value msg 'init) init)
+    (setf (slot-value msg 'msg-case) :init)
     msg))
 
 (defun make-sync-ack-message (server-time pending-count &optional error)
@@ -28,8 +28,8 @@
                             :pending-changes pending-count
                             :error (or error "")))
         (msg (make-instance 'proto-sync-message)))
-    (setf (proto-sync-message-ack msg) ack)
-    (setf (msg-case msg) :ack)
+    (setf (slot-value msg 'ack) ack)
+    (setf (slot-value msg 'msg-case) :ack)
     msg))
 
 (defun make-sync-upsert-message (device-id todo)
@@ -67,10 +67,10 @@
                                 :device-id device-id
                                 :timestamp timestamp))
          (msg (make-instance 'proto-sync-message)))
-    (setf (proto-todo-change-upsert change) todo-data)
-    (setf (change-case change) :upsert)
-    (setf (proto-sync-message-change msg) change)
-    (setf (msg-case msg) :change)
+    (setf (slot-value change 'upsert) todo-data)
+    (setf (slot-value change 'change-case) :upsert)
+    (setf (slot-value msg 'change) change)
+    (setf (slot-value msg 'msg-case) :change)
     msg))
 
 (defun make-sync-delete-message (device-id todo-id)
@@ -79,10 +79,10 @@
                                 :device-id device-id
                                 :timestamp (now-iso)))
          (msg (make-instance 'proto-sync-message)))
-    (setf (proto-todo-change-delete-id change) todo-id)
-    (setf (change-case change) :delete-id)
-    (setf (proto-sync-message-change msg) change)
-    (setf (msg-case msg) :change)
+    (setf (slot-value change 'delete-id) todo-id)
+    (setf (slot-value change 'change-case) :delete-id)
+    (setf (slot-value msg 'change) change)
+    (setf (slot-value msg 'msg-case) :change)
     msg))
 
 (defun make-sync-settings-message (device-id settings-hash)
@@ -100,8 +100,8 @@
                                         :timestamp (now-iso)
                                         :settings settings-data-list))
          (msg (make-instance 'proto-sync-message)))
-    (setf (proto-sync-message-settings-change msg) settings-change)
-    (setf (msg-case msg) :settings-change)
+    (setf (slot-value msg 'settings-change) settings-change)
+    (setf (slot-value msg 'msg-case) :settings-change)
     msg))
 
 ;;── Message Type Detection ────────────────────────────────────────────────────

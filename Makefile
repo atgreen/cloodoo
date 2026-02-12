@@ -11,7 +11,7 @@ ag-protoc: ocicl/ag-gRPC-*/ag-proto-cli/*.lisp ocicl/ag-gRPC-*/ag-proto/*.lisp
 		--eval "(require 'asdf)" \
 		--eval "(asdf:load-system :ag-proto-cli)" \
 		--eval "(asdf:make :ag-proto-cli)" \
-		--quit 2>&1 | grep -E "(Writing|saving)" || true
+		--quit 2>&1 
 	@mv ocicl/ag-gRPC-*/ag-proto-cli/ag-protoc .
 
 # Generate Lisp code from Protocol Buffer definition
