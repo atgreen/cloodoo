@@ -581,25 +581,28 @@
               (format t "~%Connecting to sync server to upload attachments...~%~%")
               (handler-case
                   (progn
-                    ;; Load sync config
-                    (let* ((sync-config (load-sync-config))
-                           (host (getf sync-config :host "localhost"))
-                           (port (getf sync-config :port 50051))
-                           (cert-path (or (getf sync-config :client-cert)
-                                          (namestring (client-cert-file (get-device-id)))))
-                           (key-path (or (getf sync-config :client-key)
-                                         (namestring (client-key-file (get-device-id))))))
-
-                      (unless (and (probe-file cert-path) (probe-file key-path))
-                        (format t "~A Client certificates not found.~%"
+                    ;; Find paired sync config
+                    (multiple-value-bind (host port server-id)
+                        (find-paired-sync-config)
+                      (unless server-id
+                        (format t "~A No paired sync server found.~%"
                                 (tui:colored "✗" :fg tui:*fg-red*))
-                        (format t "Run 'cloodoo cert issue ~A' first.~%" (get-device-id))
+                        (format t "Pair with a server first using QR code pairing.~%")
                         (return-from make-sync-upload-attachments-command nil))
+
+                      (let ((cert-path (namestring (paired-client-cert-file server-id)))
+                            (key-path (namestring (paired-client-key-file server-id))))
+
+                        (unless (and (probe-file cert-path) (probe-file key-path))
+                          (format t "~A Client certificates not found.~%"
+                                  (tui:colored "✗" :fg tui:*fg-red*))
+                          (format t "Certificates missing for paired server ~A~%" server-id)
+                          (return-from make-sync-upload-attachments-command nil))
 
                       ;; Connect to sync server
                       (format t "Connecting to ~A:~A...~%" host port)
-                      (start-sync-client :host host :port port
-                                         :client-cert cert-path
+                      (start-sync-client host port
+                                         :client-certificate cert-path
                                          :client-key key-path)
 
                       ;; Wait for connection
@@ -627,8 +630,8 @@
                             (format t "~A Failed to upload attachments~%"
                                     (tui:colored "✗" :fg tui:*fg-red*))))
 
-                      ;; Disconnect
-                      (stop-sync-client)))
+                        ;; Disconnect
+                        (stop-sync-client))))
                 (error (e)
                   (format t "~A Error: ~A~%"
                           (tui:colored "✗" :fg tui:*fg-red*) e))))))
@@ -652,20 +655,23 @@
                   (format t "~%Connecting to sync server to broadcast reset...~%~%")
                   (handler-case
                       (progn
-                        ;; Load sync config
-                        (let* ((sync-config (load-sync-config))
-                               (host (getf sync-config :host "localhost"))
-                               (port (getf sync-config :port 50051))
-                               (cert-path (or (getf sync-config :client-cert)
-                                              (namestring (client-cert-file (get-device-id)))))
-                               (key-path (or (getf sync-config :client-key)
-                                             (namestring (client-key-file (get-device-id))))))
-
-                          (unless (and (probe-file cert-path) (probe-file key-path))
-                            (format t "~A Client certificates not found.~%"
+                        ;; Find paired sync config
+                        (multiple-value-bind (host port server-id)
+                            (find-paired-sync-config)
+                          (unless server-id
+                            (format t "~A No paired sync server found.~%"
                                     (tui:colored "✗" :fg tui:*fg-red*))
-                            (format t "Run 'cloodoo cert issue ~A' first.~%" (get-device-id))
+                            (format t "Pair with a server first using QR code pairing.~%")
                             (return))
+
+                          (let ((cert-path (namestring (paired-client-cert-file server-id)))
+                                (key-path (namestring (paired-client-key-file server-id))))
+
+                            (unless (and (probe-file cert-path) (probe-file key-path))
+                              (format t "~A Client certificates not found.~%"
+                                      (tui:colored "✗" :fg tui:*fg-red*))
+                              (format t "Certificates missing for paired server ~A~%" server-id)
+                              (return))
 
                           ;; Connect to sync server
                           (format t "Connecting to ~A:~A...~%" host port)
@@ -692,8 +698,8 @@
                                    (format t "~A Connected!~%~%" (tui:colored "✓" :fg tui:*fg-green*))
 
                                    ;; Send reset message
-                                   (let ((reset-to (if (string-equal since "full") "" since))
-                                         (reset-msg (make-sync-reset-message (get-device-id) reset-to)))
+                                   (let* ((reset-to (if (string-equal since "full") "" since))
+                                          (reset-msg (make-sync-reset-message (get-device-id) reset-to)))
                                      (ag-grpc:stream-send stream reset-msg)
                                      (if (string-equal since "full")
                                          (format t "~A Full sync reset broadcasted to all devices!~%~%"
@@ -708,7 +714,7 @@
                               ;; Cleanup
                               (ignore-errors
                                 (ag-grpc:stream-close-send stream)
-                                (ag-grpc:channel-close channel))))))
+                                (ag-grpc:channel-close channel)))))))
                     (error (e)
                       (format t "~A Error: ~A~%"
                               (tui:colored "✗" :fg tui:*fg-red*) e)))))))))

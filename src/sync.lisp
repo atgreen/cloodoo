@@ -798,20 +798,76 @@
 
 (defun upload-attachment-to-server (hash)
   "Upload an attachment to the sync server by hash.
-   Returns T if successful, NIL if failed or not connected.
-
-   NOTE: This function requires client-streaming RPC which is not yet fully
-   implemented in the ag-grpc bindings. For now, attachments must be uploaded
-   manually or this function needs to be completed."
+   Returns T if successful, NIL if failed or not connected."
   (unless *sync-client-channel*
     (llog:warn "Cannot upload attachment: not connected to sync server")
     (return-from upload-attachment-to-server nil))
 
-  ;; TODO: Implement client-streaming upload when ag-grpc API is clarified
-  ;; For now, just log a warning
-  (llog:warn "Attachment upload not yet implemented (requires client-streaming RPC support)"
-             :hash hash)
-  nil)
+  (handler-case
+      (with-db (db)
+        ;; Load attachment from local database
+        (let ((row (sqlite:execute-single db
+                     "SELECT content, filename, mime_type, size FROM attachments WHERE hash = ?"
+                     hash)))
+          (unless row
+            (llog:warn "Attachment not found in local database" :hash hash)
+            (return-from upload-attachment-to-server nil))
+
+          (let* ((content (first row))
+                 (filename (second row))
+                 (mime-type (third row))
+                 (size (fourth row))
+                 ;; Create metadata message
+                 (metadata (make-instance 'proto-attachment-meta
+                                          :hash hash
+                                          :filename filename
+                                          :mime-type mime-type
+                                          :size size))
+                 ;; Create client-streaming call
+                 (stream (ag-grpc:call-client-streaming
+                          *sync-client-channel*
+                          "/cloodoo.AttachmentService/UploadAttachment"
+                          :response-type 'proto-attachment-upload-response)))
+
+            (llog:info "Starting attachment upload" :hash hash :size size)
+
+            ;; Send metadata as first message
+            (let ((meta-msg (make-instance 'proto-attachment-upload-request)))
+              (setf (slot-value meta-msg 'metadata) metadata)
+              (setf (slot-value meta-msg 'request-case) :metadata)
+              (ag-grpc:stream-send stream meta-msg))
+
+            ;; Send content in chunks (16KB each)
+            (let ((chunk-size 16384)
+                  (offset 0)
+                  (total-size (length content)))
+              (loop while (< offset total-size)
+                    do (let* ((remaining (- total-size offset))
+                              (current-chunk-size (min chunk-size remaining))
+                              (chunk (subseq content offset (+ offset current-chunk-size)))
+                              (chunk-msg (make-instance 'proto-attachment-upload-request)))
+                         (setf (slot-value chunk-msg 'chunk) chunk)
+                         (setf (slot-value chunk-msg 'request-case) :chunk)
+                         (ag-grpc:stream-send stream chunk-msg)
+                         (incf offset current-chunk-size))))
+
+            ;; Close send and receive response
+            (let ((response (ag-grpc:stream-close-and-recv stream)))
+              (unless response
+                (llog:error "No response from server for attachment upload" :hash hash)
+                (return-from upload-attachment-to-server nil))
+
+              ;; Check for error in response
+              (let ((error-msg (slot-value response 'error)))
+                (when (and error-msg (plusp (length error-msg)))
+                  (llog:error "Attachment upload failed" :hash hash :error error-msg)
+                  (return-from upload-attachment-to-server nil)))
+
+              (llog:info "Attachment uploaded successfully" :hash hash)
+              t))))
+    (error (e)
+      (llog:error "Failed to upload attachment" :hash hash :error (princ-to-string e))
+      nil)))
 
 (defun handle-sync-client-message (msg)
   "Handle a message received from the sync server."
