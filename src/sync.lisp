@@ -1171,10 +1171,10 @@
   (declare (ignore ctx))
   (format t "~&[ATTACHMENT-DOWNLOAD] Received request: ~A hash=~A~%"
           (type-of request)
-          (when request (proto-attachment-download-request-hash request)))
+          (when request (slot-value request 'hash)))
   (force-output)
 
-  (let ((hash (when request (proto-attachment-download-request-hash request))))
+  (let ((hash (when request (slot-value request 'hash))))
     (llog:info "ATTACHMENT DOWNLOAD REQUEST" :hash hash)
     (format t "~&[ATTACHMENT-DOWNLOAD] Request for hash: ~A~%" hash)
     (force-output)
