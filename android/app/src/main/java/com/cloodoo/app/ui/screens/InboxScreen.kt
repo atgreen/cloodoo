@@ -333,12 +333,27 @@ fun InboxScreen(
     if (attachmentHashesToView.isNotEmpty()) {
         val currentHash = attachmentHashesToView.getOrNull(currentAttachmentIndex)
         val currentPath = currentHash?.let { attachmentPaths[it] }
+        val resolved = currentHash != null && currentHash in attachmentPaths
 
         if (currentPath != null) {
             FullscreenImageViewer(
                 imagePath = currentPath,
                 onDismiss = { attachmentHashesToView = emptyList() }
             )
+        } else if (resolved) {
+            // Download failed — show error and allow dismiss
+            Dialog(onDismissRequest = { attachmentHashesToView = emptyList() }) {
+                Box(
+                    modifier = Modifier.fillMaxSize(),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = "Attachment unavailable",
+                        color = MaterialTheme.colorScheme.onSurface,
+                        style = MaterialTheme.typography.bodyLarge
+                    )
+                }
+            }
         } else {
             // Loading dialog while path is being fetched
             Dialog(onDismissRequest = { attachmentHashesToView = emptyList() }) {

@@ -21,6 +21,7 @@ import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Share
+import androidx.compose.material.icons.outlined.BrokenImage
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -351,6 +352,7 @@ fun TodoDetailSheet(
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     attachmentHashes.forEach { hash ->
+                        val resolved = hash in attachmentPaths
                         val path = attachmentPaths[hash]
                         Box(
                             modifier = Modifier
@@ -369,7 +371,23 @@ fun TodoDetailSheet(
                                     modifier = Modifier.fillMaxSize(),
                                     contentScale = ContentScale.Crop
                                 )
+                            } else if (resolved) {
+                                // Download failed — show broken image icon
+                                Surface(
+                                    modifier = Modifier.fillMaxSize(),
+                                    color = MaterialTheme.colorScheme.surfaceVariant
+                                ) {
+                                    Box(contentAlignment = Alignment.Center) {
+                                        Icon(
+                                            imageVector = Icons.Outlined.BrokenImage,
+                                            contentDescription = "Attachment unavailable",
+                                            modifier = Modifier.size(24.dp),
+                                            tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                }
                             } else {
+                                // Still loading
                                 Surface(
                                     modifier = Modifier.fillMaxSize(),
                                     color = MaterialTheme.colorScheme.surfaceVariant

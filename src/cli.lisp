@@ -178,7 +178,16 @@
                         (when due-date
                           (format t "  Due: ~A~%"
                                  (lt:format-timestring nil due-date
-                                                      :format '(:long-weekday ", " :long-month " " :day ", " :year)))))
+                                                      :format '(:long-weekday ", " :long-month " " :day ", " :year))))
+                        ;; Auto-sync TODO + attachments to server if paired
+                        (handler-case
+                            (when (cli-sync-todo todo)
+                              (format t "  ~A Synced to server~%"
+                                      (tui:colored "✓" :fg tui:*fg-green*)))
+                          (error (e)
+                            (declare (ignore e))
+                            (format t "  ~A Could not sync to server~%"
+                                    (tui:colored "⚠" :fg tui:*fg-yellow*)))))
                       (format t "Error: Please provide a title for the TODO~%")))))))
 
 (defun make-list-command ()

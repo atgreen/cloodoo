@@ -638,6 +638,11 @@
               ;; Reset backoff on successful connection
               (setf backoff-delay 1)
 
+              ;; Mark connection as having a reader thread so flow control
+              ;; uses CV-wait instead of inline reads (prevents read contention)
+              (setf (ag-http2:connection-reader-thread-active-p
+                     (ag-grpc:channel-connection *sync-client-channel*)) t)
+
               ;; Receive loop — blocks until stream ends or error
               (loop while *sync-client-running*
                     do (let ((msg (ag-grpc:stream-read-message *sync-client-stream*)))
@@ -775,103 +780,140 @@
       (llog:error "Failed to download attachment" :hash hash :error (princ-to-string e))
       nil)))
 
+(defun make-upload-channel ()
+  "Create a dedicated gRPC channel for attachment uploads.
+   Uses the same TLS credentials as the sync client but establishes a separate
+   HTTP/2 connection, avoiding reader-thread conflicts with the bidi sync stream."
+  (if (and *sync-connector-cert* *sync-connector-key*)
+      (ag-grpc:make-channel *sync-connector-host* *sync-connector-port*
+                            :tls t
+                            :tls-client-certificate (namestring *sync-connector-cert*)
+                            :tls-client-key (namestring *sync-connector-key*)
+                            :timeout 60)
+      (ag-grpc:make-channel *sync-connector-host* *sync-connector-port*
+                            :tls nil
+                            :timeout 60)))
+
 (defun upload-all-attachments-to-server ()
   "Upload all attachments from the local database to the sync server.
-   Useful for syncing attachments that were created before automatic upload was implemented."
+   Useful for syncing attachments that were created before automatic upload was implemented.
+   Creates a dedicated gRPC channel for uploads to avoid conflicts with the sync stream."
   (unless *sync-client-channel*
     (llog:warn "Cannot upload attachments: not connected to sync server")
     (return-from upload-all-attachments-to-server nil))
 
-  (with-db (db)
-    (let* ((stmt (sqlite:prepare-statement db "SELECT hash, filename, size FROM attachments"))
-           (uploaded 0)
-           (failed 0))
-      (sqlite:step-statement stmt)
-      (loop while (sqlite:statement-column-value stmt 0)
-            do (let ((hash (sqlite:statement-column-value stmt 0))
-                     (filename (sqlite:statement-column-value stmt 1))
-                     (size (sqlite:statement-column-value stmt 2)))
-                 (llog:info "Uploading attachment" :hash hash :filename filename :size size)
-                 (if (upload-attachment-to-server hash)
-                     (incf uploaded)
-                     (incf failed))
-                 (sqlite:step-statement stmt)))
-      (sqlite:finalize-statement stmt)
-      (llog:info "Attachment upload complete" :uploaded uploaded :failed failed)
-      (list :uploaded uploaded :failed failed))))
+  (let ((upload-channel (make-upload-channel)))
+    (unwind-protect
+         (with-db (db)
+           (let* ((stmt (sqlite:prepare-statement db "SELECT hash, filename, size FROM attachments"))
+                  (uploaded 0)
+                  (failed 0))
+             (sqlite:step-statement stmt)
+             (loop while (sqlite:statement-column-value stmt 0)
+                   do (let ((hash (sqlite:statement-column-value stmt 0))
+                            (filename (sqlite:statement-column-value stmt 1))
+                            (size (sqlite:statement-column-value stmt 2)))
+                        (llog:info "Uploading attachment" :hash hash :filename filename :size size)
+                        (if (upload-attachment-to-server hash db upload-channel)
+                            (incf uploaded)
+                            (incf failed))
+                        (sqlite:step-statement stmt)))
+             (sqlite:finalize-statement stmt)
+             (llog:info "Attachment upload complete" :uploaded uploaded :failed failed)
+             (list :uploaded uploaded :failed failed)))
+      (handler-case (ag-grpc:channel-close upload-channel)
+        (error () nil)))))
 
-(defun upload-attachment-to-server (hash)
+(defun upload-attachment-to-server (hash &optional existing-db upload-channel)
   "Upload an attachment to the sync server by hash.
+   EXISTING-DB, if provided, is used instead of opening a new db connection.
+   UPLOAD-CHANNEL, if provided, is used instead of creating a new dedicated channel.
    Returns T if successful, NIL if failed or not connected."
-  (unless *sync-client-channel*
+  (unless (or *sync-client-channel* *sync-connector-host*)
     (llog:warn "Cannot upload attachment: not connected to sync server")
     (return-from upload-attachment-to-server nil))
 
-  (handler-case
-      (with-db (db)
-        ;; Load attachment from local database
-        (let ((row (sqlite:execute-single db
-                     "SELECT content, filename, mime_type, size FROM attachments WHERE hash = ?"
-                     hash)))
-          (unless row
-            (llog:warn "Attachment not found in local database" :hash hash)
-            (return-from upload-attachment-to-server nil))
+  (let ((channel (or upload-channel (make-upload-channel)))
+        (own-channel-p (null upload-channel)))
+    (unwind-protect
+         (handler-case
+             (flet ((do-upload (db)
+                      ;; Load attachment from local database
+                      (multiple-value-bind (stored-hash content filename mime-type size created-at)
+                          (resolve-attachment db hash)
+                        (declare (ignore created-at))
+                        (unless stored-hash
+                          (llog:warn "Attachment not found in local database" :hash hash)
+                          (return-from upload-attachment-to-server nil))
 
-          (let* ((content (first row))
-                 (filename (second row))
-                 (mime-type (third row))
-                 (size (fourth row))
-                 ;; Create metadata message
-                 (metadata (make-instance 'proto-attachment-meta
-                                          :hash hash
-                                          :filename filename
-                                          :mime-type mime-type
-                                          :size size))
-                 ;; Create client-streaming call
-                 (stream (ag-grpc:call-client-streaming
-                          *sync-client-channel*
-                          "/cloodoo.AttachmentService/UploadAttachment"
-                          :response-type 'proto-attachment-upload-response)))
+                        (let* ((metadata (make-instance 'proto-attachment-meta
+                                                        :hash hash
+                                                        :filename filename
+                                                        :mime-type mime-type
+                                                        :size size))
+                               ;; Scale timeout by size: 60s base + 30s per MB
+                               (upload-timeout (+ 60 (* 30 (ceiling size (* 1024 1024)))))
+                               (stream (ag-grpc:call-client-streaming
+                                        channel
+                                        "/cloodoo.AttachmentService/UploadAttachment"
+                                        :response-type 'proto-attachment-upload-response
+                                        :timeout upload-timeout)))
 
-            (llog:info "Starting attachment upload" :hash hash :size size)
+                          ;; Verify content hash matches before sending
+                          (let ((verify-hash (ironclad:byte-array-to-hex-string
+                                             (ironclad:digest-sequence :sha256 content))))
+                            (llog:info "Starting attachment upload"
+                                       :hash hash :size size
+                                       :content-type (type-of content)
+                                       :content-length (length content)
+                                       :verify-hash verify-hash
+                                       :hash-match (string-equal hash verify-hash)))
 
-            ;; Send metadata as first message
-            (let ((meta-msg (make-instance 'proto-attachment-upload-request)))
-              (setf (slot-value meta-msg 'metadata) metadata)
-              (setf (slot-value meta-msg 'request-case) :metadata)
-              (ag-grpc:stream-send stream meta-msg))
+                          ;; Send metadata as first message
+                          (let ((meta-msg (make-instance 'proto-attachment-upload-request)))
+                            (setf (slot-value meta-msg 'metadata) metadata)
+                            (setf (slot-value meta-msg 'request-case) :metadata)
+                            (ag-grpc:stream-send stream meta-msg))
 
-            ;; Send content in chunks (16KB each)
-            (let ((chunk-size 16384)
-                  (offset 0)
-                  (total-size (length content)))
-              (loop while (< offset total-size)
-                    do (let* ((remaining (- total-size offset))
-                              (current-chunk-size (min chunk-size remaining))
-                              (chunk (subseq content offset (+ offset current-chunk-size)))
-                              (chunk-msg (make-instance 'proto-attachment-upload-request)))
-                         (setf (slot-value chunk-msg 'chunk) chunk)
-                         (setf (slot-value chunk-msg 'request-case) :chunk)
-                         (ag-grpc:stream-send stream chunk-msg)
-                         (incf offset current-chunk-size))))
+                          ;; Send content in chunks (16KB each)
+                          (let ((chunk-size 16384)
+                                (offset 0)
+                                (total-size (length content)))
+                            (loop while (< offset total-size)
+                                  do (let* ((remaining (- total-size offset))
+                                            (current-chunk-size (min chunk-size remaining))
+                                            (chunk (subseq content offset (+ offset current-chunk-size)))
+                                            (chunk-msg (make-instance 'proto-attachment-upload-request)))
+                                       (setf (slot-value chunk-msg 'chunk) chunk)
+                                       (setf (slot-value chunk-msg 'request-case) :chunk)
+                                       (ag-grpc:stream-send stream chunk-msg)
+                                       (incf offset current-chunk-size))))
 
-            ;; Close send and receive response
-            (let ((response (ag-grpc:stream-close-and-recv stream)))
-              (unless response
-                (llog:error "No response from server for attachment upload" :hash hash)
-                (return-from upload-attachment-to-server nil))
+                          ;; Close send and receive response
+                          (let ((response (ag-grpc:stream-close-and-recv stream)))
+                            (unless response
+                              (llog:error "No response from server for attachment upload" :hash hash)
+                              (return-from upload-attachment-to-server nil))
 
-              ;; Check for error in response
-              (let ((error-msg (slot-value response 'error)))
-                (when (and error-msg (plusp (length error-msg)))
-                  (llog:error "Attachment upload failed" :hash hash :error error-msg)
-                  (return-from upload-attachment-to-server nil)))
+                            ;; Check for error in response
+                            (let ((error-msg (proto-attachment-upload-response-error response)))
+                              (when (and error-msg (plusp (length error-msg)))
+                                (llog:error "Attachment upload failed" :hash hash :error error-msg)
+                                (return-from upload-attachment-to-server nil)))
 
-              (llog:info "Attachment uploaded successfully" :hash hash)
-              t))))
-    (error (e)
-      (llog:error "Failed to upload attachment" :hash hash :error (princ-to-string e))
-      nil)))
+                            (llog:info "Attachment uploaded successfully" :hash hash)
+                            t)))))
+               (if existing-db
+                   (do-upload existing-db)
+                   (with-db (db)
+                     (do-upload db))))
+           (error (e)
+             (llog:error "Failed to upload attachment" :hash hash :error (princ-to-string e))
+             nil))
+      ;; Cleanup: close own channel even on non-local exit (return-from)
+      (when own-channel-p
+        (handler-case (ag-grpc:channel-close channel)
+          (error () nil))))))
 
 (defun handle-sync-client-message (msg)
   "Handle a message received from the sync server."
@@ -1080,6 +1122,84 @@
   ;; Send to server (if we're connected as client)
   (sync-client-send-settings key value))
 
+;;── One-Shot Sync (for CLI commands) ──────────────────────────────────────────
+
+(defun cli-sync-todo (todo)
+  "Sync a single TODO to the server from a CLI context (no running sync client).
+   Opens a temporary bidi-stream, sends init + upsert, then closes.
+   Also uploads any attachments. Returns T on success, NIL on failure."
+  (handler-case
+      (multiple-value-bind (host port server-id)
+          (find-paired-sync-config)
+        (unless server-id (return-from cli-sync-todo nil))
+        (let ((cert (namestring (paired-client-cert-file server-id)))
+              (key (namestring (paired-client-key-file server-id))))
+          (unless (and (probe-file cert) (probe-file key))
+            (return-from cli-sync-todo nil))
+          ;; Set connector vars for make-upload-channel
+          (setf *sync-connector-host* host
+                *sync-connector-port* port
+                *sync-connector-cert* cert
+                *sync-connector-key* key)
+          (let* ((channel (ag-grpc:make-channel host port
+                                                :tls t
+                                                :tls-client-certificate cert
+                                                :tls-client-key key
+                                                :timeout 10))
+                 (stub (make-todo-sync-stub channel))
+                 (stream (todo-sync-sync-stream stub)))
+            (unwind-protect
+                 (progn
+                   ;; Send init
+                   (let ((init-msg (make-sync-init-message (get-device-id)
+                                                           (load-last-sync-timestamp)
+                                                           (now-iso))))
+                     (ag-grpc:stream-send stream init-msg))
+                   ;; Read ACK
+                   (let* ((ack-msg (ag-grpc:stream-read-message stream))
+                          (pending (when (and ack-msg (eql (proto-msg-case ack-msg) :ack))
+                                    (let* ((ack (proto-msg-ack ack-msg))
+                                           (server-time (proto-sync-ack-server-time ack)))
+                                      ;; Save server time for future syncs
+                                      (when (plusp (length server-time))
+                                        (save-last-sync-timestamp server-time))
+                                      (proto-sync-ack-pending-changes ack)))))
+                     (unless pending
+                       (return-from cli-sync-todo nil))
+                     ;; Drain exactly pending-count messages from server
+                     (dotimes (_ pending)
+                       (let ((msg (ag-grpc:stream-read-message stream)))
+                         (when msg
+                           ;; Apply server changes to local DB silently
+                           (let ((*suppress-change-notifications* t))
+                             (case (proto-msg-case msg)
+                               (:change
+                                (let* ((change (proto-msg-change msg))
+                                       (change-case (proto-todo-change-change-case change)))
+                                  (case change-case
+                                    (:upsert
+                                     (let ((todo-data (proto-todo-change-upsert change)))
+                                       (db-save-todo (proto-todo-to-todo todo-data))))
+                                    (:delete-id
+                                     (db-delete-todo (proto-todo-change-delete-id change))))))
+                               (t nil)))))))
+                   ;; Send the TODO upsert
+                   (let ((upsert-msg (make-sync-upsert-message (get-device-id) todo)))
+                     (ag-grpc:stream-send stream upsert-msg))
+                   ;; Upload attachments
+                   (when (todo-attachment-hashes todo)
+                     (dolist (hash (todo-attachment-hashes todo))
+                       (upload-attachment-to-server hash)))
+                   ;; Brief pause for server to process
+                   (sleep 0.2)
+                   t)
+              (ignore-errors
+                (ag-grpc:stream-close-send stream)
+                (ag-grpc:channel-close channel))))))
+    (error (e)
+      (llog:error "CLI sync failed" :error (princ-to-string e))
+      nil)))
+
 ;;══════════════════════════════════════════════════════════════════════════════
 ;;  ATTACHMENT SERVICE - Upload/download attachments via gRPC
 ;;══════════════════════════════════════════════════════════════════════════════
@@ -1105,7 +1225,7 @@ Keep small to avoid exhausting HTTP/2 flow control window.")
                 (return-from upload-handler resp)))
 
             ;; Check if it's metadata
-            (unless (eql (proto-attachment-upload-request-case first-msg) :metadata)
+            (unless (eql (request-case first-msg) :metadata)
               (let ((resp (make-instance 'proto-attachment-upload-response
                                          :error "First message must be metadata")))
                 (return-from upload-handler resp)))
@@ -1125,17 +1245,28 @@ Keep small to avoid exhausting HTTP/2 flow control window.")
                 ;; End of stream
                 (return))
 
-              (when (eql (proto-attachment-upload-request-case msg) :chunk)
+              (when (eql (request-case msg) :chunk)
                 (let ((chunk (proto-attachment-upload-request-chunk msg)))
                   (loop for byte across chunk
                         do (vector-push-extend byte content-buffer))
                   (incf total-size (length chunk))))))
 
+          ;; Coerce adjustable content-buffer to simple array for ironclad
+          (let ((simple-content (make-array (length content-buffer)
+                                           :element-type '(unsigned-byte 8))))
+            (replace simple-content content-buffer)
+
           ;; Verify hash
           (let* ((received-hash (proto-attachment-meta-hash metadata))
                  (computed-hash (ironclad:byte-array-to-hex-string
-                                 (ironclad:digest-sequence :sha256 content-buffer))))
+                                 (ironclad:digest-sequence :sha256 simple-content))))
+            (format t "~&[UPLOAD-DEBUG] total-size=~A buffer-len=~A expected=~A computed=~A~%"
+                    total-size (length content-buffer) received-hash computed-hash)
+            (force-output)
             (unless (string-equal received-hash computed-hash)
+              (format t "~&[UPLOAD-DEBUG] HASH MISMATCH! First 16 bytes: ~A~%"
+                      (subseq content-buffer 0 (min 16 (length content-buffer))))
+              (force-output)
               (llog:warn "Attachment hash mismatch"
                          :expected received-hash
                          :computed computed-hash)
@@ -1149,7 +1280,7 @@ Keep small to avoid exhausting HTTP/2 flow control window.")
                 "INSERT OR IGNORE INTO attachments (hash, content, filename, mime_type, size, created_at)
                  VALUES (?, ?, ?, ?, ?, ?)"
                 received-hash
-                content-buffer
+                simple-content
                 (proto-attachment-meta-filename metadata)
                 (proto-attachment-meta-mime-type metadata)
                 (proto-attachment-meta-size metadata)
@@ -1159,7 +1290,7 @@ Keep small to avoid exhausting HTTP/2 flow control window.")
 
             ;; Return success response
             (make-instance 'proto-attachment-upload-response
-                           :hash received-hash)))
+                           :hash received-hash))))
 
       (error (e)
         (llog:error "Attachment upload failed" :error (princ-to-string e))
