@@ -96,9 +96,9 @@
                (return-from sync-handler))
 
              (let* ((sync-init (proto-msg-init init-msg))
-                    (device-id (proto-init-device-id sync-init))
-                    (since (proto-init-since sync-init))
-                    (client-time-str (proto-init-client-time sync-init)))
+                    (device-id (proto-sync-init-device-id sync-init))
+                    (since (proto-sync-init-since sync-init))
+                    (client-time-str (proto-sync-init-client-time sync-init)))
                (setf client-device-id device-id)
                (when *sync-debug*
                  (format t "~&[SYNC-DEBUG] Init: device-id=~A since=~A client-time=~A~%"
@@ -204,12 +204,12 @@
 
                      (when (eql (proto-msg-case msg) :change)
                        (let ((change (proto-msg-change msg)))
-                         (case (proto-change-case change)
+                         (case (change-case change)
                            (:upsert
                             ;; Client is sending an upsert
-                            (let* ((proto-data (proto-change-upsert change))
-                                   (origin-device-id (proto-change-device-id change))
-                                   (change-timestamp (proto-change-timestamp change))
+                            (let* ((proto-data (proto-todo-change-upsert change))
+                                   (origin-device-id (proto-todo-change-device-id change))
+                                   (change-timestamp (proto-todo-change-timestamp change))
                                    (todo (proto-to-todo proto-data))
                                    (enriched nil))
                               ;; Set device-id from the change envelope (not from local server)
@@ -269,7 +269,7 @@
                                   (broadcast-change msg device-id))))
                            (:delete-id
                             ;; Client is requesting a delete
-                            (let ((todo-id (proto-change-delete-id change)))
+                            (let ((todo-id (proto-todo-change-delete-id change)))
                               ;; Delete locally
                               (db-delete-todo todo-id)
                               ;; Broadcast to other clients
@@ -305,8 +305,8 @@
 
                     (when (eql (proto-msg-case msg) :reset)
                       (let* ((reset (proto-msg-reset msg))
-                             (origin-device-id (proto-reset-device-id reset))
-                             (reset-to (proto-reset-reset-to reset)))
+                             (origin-device-id (proto-sync-reset-device-id reset))
+                             (reset-to (proto-sync-reset-reset-to reset)))
                         (llog:info "Sync reset requested" :device-id origin-device-id
                                    :reset-to reset-to)
                         (when *sync-debug*
@@ -878,9 +878,9 @@
   (case (proto-msg-case msg)
     (:ack
      (let* ((ack (proto-msg-ack msg))
-            (server-time (proto-ack-server-time ack))
-            (pending (proto-ack-pending-changes ack))
-            (error-msg (proto-ack-error ack)))
+            (server-time (proto-sync-ack-server-time ack))
+            (pending (proto-sync-ack-pending-changes ack))
+            (error-msg (proto-sync-ack-error ack)))
        (cond ((and error-msg (plusp (length error-msg)))
               (llog:error "Server rejected connection" :error error-msg)
               (update-sync-status :error error-msg)
@@ -932,9 +932,9 @@
 
     (:change
      (let ((change (proto-msg-change msg)))
-       (case (proto-change-case change)
+       (case (change-case change)
          (:upsert
-          (let* ((proto-data (proto-change-upsert change))
+          (let* ((proto-data (proto-todo-change-upsert change))
                  (todo (proto-to-todo proto-data)))
             (llog:info "Received upsert from server" :id (todo-id todo))
             ;; Server always clears enriching-p after processing, so no need to check
@@ -955,7 +955,7 @@
             (when (zerop *sync-pending-count*)
               (notify-tui-reload))))
          (:delete-id
-          (let ((todo-id (proto-change-delete-id change)))
+          (let ((todo-id (proto-todo-change-delete-id change)))
             (llog:info "Received delete from server" :id todo-id)
             ;; Suppress notifications
             (let ((*suppress-change-notifications* t))
@@ -988,8 +988,8 @@
 
     (:reset
      (let* ((reset (proto-msg-reset msg))
-            (origin-device-id (proto-reset-device-id reset))
-            (reset-to (proto-reset-reset-to reset)))
+            (origin-device-id (proto-sync-reset-device-id reset))
+            (reset-to (proto-sync-reset-reset-to reset)))
        (llog:info "Received sync reset from server" :origin-device-id origin-device-id
                   :reset-to reset-to)
        ;; Clear or set last-sync timestamp as requested
@@ -1084,8 +1084,9 @@
 ;;  ATTACHMENT SERVICE - Upload/download attachments via gRPC
 ;;══════════════════════════════════════════════════════════════════════════════
 
-(defvar *attachment-chunk-size* 65536
-  "Size of chunks for streaming attachment transfers (64KB).")
+(defvar *attachment-chunk-size* 8192
+  "Size of chunks for streaming attachment transfers (8KB).
+Keep small to avoid exhausting HTTP/2 flow control window.")
 
 (defun handle-upload-attachment (ctx stream)
   "Handler for AttachmentService.UploadAttachment RPC.
@@ -1168,13 +1169,12 @@
 (defun handle-download-attachment (request ctx stream)
   "Handler for AttachmentService.DownloadAttachment RPC.
    Streams attachment content to client in chunks."
-  (declare (ignore ctx))
-  (format t "~&[ATTACHMENT-DOWNLOAD] Received request: ~A hash=~A~%"
-          (type-of request)
-          (when request (slot-value request 'hash)))
-  (force-output)
+  (declare (ignore request ctx))
 
-  (let ((hash (when request (slot-value request 'hash))))
+  ;; For server-streaming, ag-grpc passes nil as request parameter
+  ;; We need to read the request from the stream
+  (let* ((req-msg (ag-grpc:stream-recv stream))
+         (hash (when req-msg (slot-value req-msg 'hash))))
     (llog:info "ATTACHMENT DOWNLOAD REQUEST" :hash hash)
     (format t "~&[ATTACHMENT-DOWNLOAD] Request for hash: ~A~%" hash)
     (force-output)
