@@ -55,6 +55,9 @@
    Snapshots the client list under lock, then sends outside the lock
    to avoid holding the lock during network I/O.
    Failed sends result in the client being removed from the list."
+  (unless change-msg
+    (llog:error "broadcast-change called with NIL message")
+    (return-from broadcast-change))
   (let ((clients-snapshot
           (bt:with-lock-held (*clients-lock*)
             (copy-list *connected-clients*))))
@@ -261,7 +264,8 @@
                               (if enriched
                                   (let ((enriched-msg (make-sync-upsert-message-with-timestamp
                                                        origin-device-id todo change-timestamp)))
-                                    (broadcast-change enriched-msg nil))  ;; nil = send to everyone
+                                    (when enriched-msg  ;; Guard against NIL
+                                      (broadcast-change enriched-msg nil)))  ;; nil = send to everyone
                                   (broadcast-change msg device-id))))
                            (:delete-id
                             ;; Client is requesting a delete
