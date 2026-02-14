@@ -793,6 +793,12 @@
                    :key :port
                    :initial-value 9876
                    :description "HTTP server port for pairing URL"))
+        (host-opt (clingon:make-option
+                   :string
+                   :short-name #\H
+                   :long-name "host"
+                   :key :host
+                   :description "Hostname or IP for pairing URL (overrides auto-detection)"))
         (no-server-opt (clingon:make-option
                         :flag
                         :long-name "no-server"
@@ -802,11 +808,12 @@
      :name "issue"
      :description "Issue a client certificate for a device"
      :usage "DEVICE_NAME"
-     :options (list days-opt port-opt no-server-opt)
+     :options (list days-opt port-opt host-opt no-server-opt)
      :handler (lambda (cmd)
                 (let ((args (clingon:command-arguments cmd))
                       (days (clingon:getopt cmd :days))
                       (port (clingon:getopt cmd :port))
+                      (host (clingon:getopt cmd :host))
                       (no-server (clingon:getopt cmd :no-server)))
                   (if args
                       (let ((device-name (first args)))
@@ -823,9 +830,11 @@
                                 (let* ((request (create-pairing-request device-name))
                                        (token (pairing-request-token request))
                                        (passphrase (pairing-request-passphrase request))
-                                       (ips (detect-local-ips))
+                                       (ips (unless host (detect-local-ips)))
                                        (primary-ip
                                          (cond
+                                           ;; --host flag provided
+                                           (host host)
                                            ;; No IPs found
                                            ((null ips) "localhost")
                                            ;; Only one IP - use it
@@ -1058,11 +1067,16 @@ URL format: http://HOST:PORT/pair/TOKEN"
                     (error "Failed to download certificate (HTTP ~A). Token may have expired."
                            pem-status))
 
-                  (let* ((pem-data (jzon:parse pem-body))
+                  ;; Response is encrypted — decrypt with the passphrase
+                  (let* ((encrypted-data (jzon:parse pem-body))
+                         (pem-data (jzon:parse
+                                    (decrypt-with-passphrase encrypted-data passphrase)))
                          (cert-pem (gethash "cert" pem-data))
                          (key-pem (gethash "key" pem-data))
+                         (ca-pem (gethash "ca_cert" pem-data))
                          (cert-path (paired-client-cert-file server-device-id))
-                         (key-path (paired-client-key-file server-device-id)))
+                         (key-path (paired-client-key-file server-device-id))
+                         (ca-path (paired-ca-cert-file server-device-id)))
 
                     ;; Save cert
                     (ensure-directories-exist cert-path)
@@ -1076,6 +1090,12 @@ URL format: http://HOST:PORT/pair/TOKEN"
                       (write-string key-pem stream))
                     (uiop:run-program (list "chmod" "600" (namestring key-path))
                                       :ignore-error-status t)
+
+                    ;; Save CA cert for mTLS verification
+                    (when ca-pem
+                      (with-open-file (stream ca-path :direction :output
+                                                      :if-exists :supersede)
+                        (write-string ca-pem stream)))
 
                     ;; Save sync config for auto-connect
                     (let ((sync-config-path (paired-sync-config-file server-device-id)))
@@ -1093,6 +1113,8 @@ URL format: http://HOST:PORT/pair/TOKEN"
                     (format t "~%Certificate stored in:~%")
                     (format t "  ~A~%" (namestring cert-path))
                     (format t "  ~A~%" (namestring key-path))
+                    (when ca-pem
+                      (format t "  ~A~%" (namestring ca-path)))
                     (format t "~%Cloodoo will auto-connect to this server on next launch.~%~%")))))))))))
 
 (defun make-cert-command ()
@@ -2198,6 +2220,12 @@ URL format: http://HOST:PORT/pair/TOKEN"
                    :key :port
                    :initial-value 9876
                    :description "HTTP server port for pairing URL"))
+        (host-opt (clingon:make-option
+                   :string
+                   :short-name #\H
+                   :long-name "host"
+                   :key :host
+                   :description "Hostname or IP for pairing URL (overrides auto-detection)"))
         (no-server-opt (clingon:make-option
                         :flag
                         :long-name "no-server"
@@ -2207,11 +2235,12 @@ URL format: http://HOST:PORT/pair/TOKEN"
      :name "create"
      :description "Create a new user (issues a client certificate with CN = username)"
      :usage "USERNAME"
-     :options (list days-opt port-opt no-server-opt)
+     :options (list days-opt port-opt host-opt no-server-opt)
      :handler (lambda (cmd)
                 (let ((args (clingon:command-arguments cmd))
                       (days (clingon:getopt cmd :days))
                       (port (clingon:getopt cmd :port))
+                      (host (clingon:getopt cmd :host))
                       (no-server (clingon:getopt cmd :no-server)))
                   (if args
                       (let ((username (first args)))
@@ -2241,9 +2270,10 @@ URL format: http://HOST:PORT/pair/TOKEN"
                                                     (create-pairing-request username)))
                                        (token (pairing-request-token request))
                                        (passphrase (pairing-request-passphrase request))
-                                       (ips (detect-local-ips))
+                                       (ips (unless host (detect-local-ips)))
                                        (primary-ip
                                          (cond
+                                           (host host)
                                            ((null ips) "localhost")
                                            ((null (rest ips)) (first ips))
                                            (t (format t "~%Available network addresses:~%")
@@ -2283,10 +2313,14 @@ URL format: http://HOST:PORT/pair/TOKEN"
                                       (loop
                                         (sleep 2)
                                         (cleanup-expired-pairings)
-                                        (unless (get-pairing-request token)
-                                          (format t "~%~A User '~A' has paired a device.~%"
-                                                  (tui:colored "✓" :fg tui:*fg-green*) username)
-                                          (return)))
+                                        (let ((req (get-pairing-request token)))
+                                          (when (or (null req)
+                                                    (pairing-request-completed req))
+                                            (format t "~%~A User '~A' has paired a device.~%"
+                                                    (tui:colored "✓" :fg tui:*fg-green*) username)
+                                            ;; Give the POST handler time to finish sending the response
+                                            (sleep 3)
+                                            (return))))
                                     (#+sbcl sb-sys:interactive-interrupt
                                      #+ccl ccl:interrupt-signal-condition
                                      #-(or sbcl ccl) error ()
@@ -2294,8 +2328,8 @@ URL format: http://HOST:PORT/pair/TOKEN"
                                   (stop-server)))
                           (error (e)
                             (format t "~A Error: ~A~%"
-                                    (tui:colored "✗" :fg tui:*fg-red*) e))))
-                      (format t "Usage: cloodoo user create USERNAME~%"))))))))
+                                    (tui:colored "✗" :fg tui:*fg-red*) e)))))
+                      (format t "Usage: cloodoo user create USERNAME~%")))))))
 
 (defun make-user-list-command ()
   "Create the 'user list' subcommand."
