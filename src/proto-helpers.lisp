@@ -10,12 +10,14 @@
 
 ;;── Message Constructors ──────────────────────────────────────────────────────
 
-(defun make-sync-init-message (device-id since client-time)
-  "Create a SyncMessage with SyncInit payload."
+(defun make-sync-init-message (device-id since client-time &key capabilities)
+  "Create a SyncMessage with SyncInit payload.
+   CAPABILITIES is an optional list of capability strings (e.g., '(\"lists\"))."
   (let ((init (make-instance 'proto-sync-init
                              :device-id device-id
                              :since since
-                             :client-time client-time))
+                             :client-time client-time
+                             :capabilities (or capabilities '("lists"))))
         (msg (make-instance 'proto-sync-message)))
     (setf (slot-value msg 'init) init)
     (setf (slot-value msg 'msg-case) :init)
@@ -53,7 +55,7 @@
                                    :scheduled-date (timestamp-to-string (todo-scheduled-date todo))
                                    :due-date (timestamp-to-string (todo-due-date todo))
                                    :tags (or (todo-tags todo) '())
-                                   :estimated-minutes (or (todo-estimated-minutes todo) 0)
+                                   :estimated-minutes 0
                                    :url (or (todo-url todo) "")
                                    :created-at (timestamp-to-string (todo-created-at todo))
                                    :completed-at (timestamp-to-string (todo-completed-at todo))
@@ -174,8 +176,6 @@
                  :scheduled-date (parse-timestamp (slot-value proto-data 'scheduled-date))
                  :due-date (parse-timestamp (slot-value proto-data 'due-date))
                  :tags (slot-value proto-data 'tags)
-                 :estimated-minutes (let ((em (slot-value proto-data 'estimated-minutes)))
-                                      (when (> em 0) em))
                  :location-info (let ((loc (slot-value proto-data 'location-info)))
                                   (when loc
                                     (list :name (slot-value loc 'name)
@@ -194,3 +194,108 @@
                  :created-at (lt:parse-timestring (slot-value proto-data 'created-at))
                  :completed-at (parse-timestamp (slot-value proto-data 'completed-at))
                  :enriching-p (slot-value proto-data 'enriching-p)))
+
+;;── ListDefinitionData Conversion ────────────────────────────────────────────
+
+(defun proto-to-list-definition (proto-data)
+  "Convert a PROTO-LIST-DEFINITION-DATA to a list-definition instance."
+  (make-instance 'list-definition
+                 :id (slot-value proto-data 'id)
+                 :name (slot-value proto-data 'name)
+                 :description (let ((d (slot-value proto-data 'description)))
+                                (when (and d (> (length d) 0)) d))
+                 :sections (slot-value proto-data 'sections)
+                 :created-at (lt:parse-timestring (slot-value proto-data 'created-at))))
+
+(defun list-definition-to-proto (list-def)
+  "Convert a list-definition to a PROTO-LIST-DEFINITION-DATA."
+  (make-instance 'proto-list-definition-data
+                 :id (list-def-id list-def)
+                 :name (list-def-name list-def)
+                 :description (or (list-def-description list-def) "")
+                 :sections (or (list-def-sections list-def) '())
+                 :created-at (timestamp-to-string (list-def-created-at list-def))))
+
+;;── ListItemData Conversion ──────────────────────────────────────────────────
+
+(defun proto-to-list-item (proto-data)
+  "Convert a PROTO-LIST-ITEM-DATA to a list-item instance."
+  (make-instance 'list-item
+                 :id (slot-value proto-data 'id)
+                 :list-id (slot-value proto-data 'list-id)
+                 :title (slot-value proto-data 'title)
+                 :section (let ((s (slot-value proto-data 'section)))
+                            (when (and s (> (length s) 0)) s))
+                 :checked (slot-value proto-data 'checked)
+                 :notes (let ((n (slot-value proto-data 'notes)))
+                          (when (and n (> (length n) 0)) n))
+                 :created-at (lt:parse-timestring (slot-value proto-data 'created-at))))
+
+(defun list-item-to-proto (item)
+  "Convert a list-item to a PROTO-LIST-ITEM-DATA."
+  (make-instance 'proto-list-item-data
+                 :id (list-item-id item)
+                 :list-id (list-item-list-id item)
+                 :title (list-item-title item)
+                 :section (or (list-item-section item) "")
+                 :checked (list-item-checked item)
+                 :notes (or (list-item-notes item) "")
+                 :created-at (timestamp-to-string (list-item-created-at item))))
+
+;;── ListChange Message Constructors ──────────────────────────────────────────
+
+(defun make-sync-list-upsert-message (device-id list-def)
+  "Create a SyncMessage with ListChange(upsert_list) payload."
+  (let* ((proto-data (list-definition-to-proto list-def))
+         (change (make-instance 'proto-list-change
+                                :device-id device-id
+                                :timestamp (now-iso)))
+         (msg (make-instance 'proto-sync-message)))
+    (setf (slot-value change 'upsert-list) proto-data)
+    (setf (slot-value change 'change-case) :upsert-list)
+    (setf (slot-value msg 'list-change) change)
+    (setf (slot-value msg 'msg-case) :list-change)
+    msg))
+
+(defun make-sync-list-delete-message (device-id list-def-id)
+  "Create a SyncMessage with ListChange(delete_list_id) payload."
+  (let* ((change (make-instance 'proto-list-change
+                                :device-id device-id
+                                :timestamp (now-iso)))
+         (msg (make-instance 'proto-sync-message)))
+    (setf (slot-value change 'delete-list-id) list-def-id)
+    (setf (slot-value change 'change-case) :delete-list-id)
+    (setf (slot-value msg 'list-change) change)
+    (setf (slot-value msg 'msg-case) :list-change)
+    msg))
+
+(defun make-sync-list-item-upsert-message (device-id item)
+  "Create a SyncMessage with ListChange(upsert_item) payload."
+  (let* ((proto-data (list-item-to-proto item))
+         (change (make-instance 'proto-list-change
+                                :device-id device-id
+                                :timestamp (now-iso)))
+         (msg (make-instance 'proto-sync-message)))
+    (setf (slot-value change 'upsert-item) proto-data)
+    (setf (slot-value change 'change-case) :upsert-item)
+    (setf (slot-value msg 'list-change) change)
+    (setf (slot-value msg 'msg-case) :list-change)
+    msg))
+
+(defun make-sync-list-item-delete-message (device-id item-id)
+  "Create a SyncMessage with ListChange(delete_item_id) payload."
+  (let* ((change (make-instance 'proto-list-change
+                                :device-id device-id
+                                :timestamp (now-iso)))
+         (msg (make-instance 'proto-sync-message)))
+    (setf (slot-value change 'delete-item-id) item-id)
+    (setf (slot-value change 'change-case) :delete-item-id)
+    (setf (slot-value msg 'list-change) change)
+    (setf (slot-value msg 'msg-case) :list-change)
+    msg))
+
+;;── ListChange Field Accessors ───────────────────────────────────────────────
+
+(defun proto-msg-list-change (sync-message)
+  "Extract the ListChange from a SyncMessage."
+  (slot-value sync-message 'list-change))

@@ -66,6 +66,7 @@ message SyncInit {
   string device_id = 1;
   string since = 2;       // Get changes since this timestamp (ISO 8601)
   string client_time = 3; // Client's current time (ISO 8601) for clock skew check
+  repeated string capabilities = 4;  // Client capabilities (e.g., "lists")
 }
 
 // Server acknowledgment with current time
@@ -82,6 +83,39 @@ message SyncReset {
   string reset_to = 3;        // Reset to this timestamp (ISO 8601), or empty for full reset
 }
 
+// List definition data for sync
+message ListDefinitionData {
+  string id = 1;
+  string name = 2;
+  string description = 3;
+  repeated string sections = 4;
+  string created_at = 5;
+}
+
+// List item data for sync
+message ListItemData {
+  string id = 1;
+  string list_id = 2;
+  string title = 3;
+  string section = 4;
+  bool checked = 5;
+  string notes = 6;
+  string created_at = 7;
+}
+
+// A list change event sent in either direction
+message ListChange {
+  string device_id = 1;
+  string timestamp = 2;
+
+  oneof change {
+    ListDefinitionData upsert_list = 3;
+    string delete_list_id = 4;
+    ListItemData upsert_item = 5;
+    string delete_item_id = 6;
+  }
+}
+
 // Wrapper for stream messages (allows different message types)
 message SyncMessage {
   oneof msg {
@@ -90,6 +124,7 @@ message SyncMessage {
     TodoChange change = 3;
     SettingsChange settings_change = 4;
     SyncReset reset = 5;
+    ListChange list_change = 6;
   }
 }
 

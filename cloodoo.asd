@@ -40,6 +40,7 @@
                              (:file "proto-helpers")
                              (:file "storage")
                              (:file "db")
+                             (:file "lists")
                              (:file "certs")
                              (:file "enrich")
                              (:file "export")

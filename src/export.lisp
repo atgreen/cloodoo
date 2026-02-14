@@ -292,6 +292,52 @@
           ;; Keep text file if PDF conversion failed
           nil)))))
 
+;;── List Export ───────────────────────────────────────────────────────────────
+
+(defun export-list (list-def items &key (stream t))
+  "Export a list as formatted shareable text grouped by sections.
+   LIST-DEF is a list-definition, ITEMS is a list of list-item objects."
+  (let* ((now (lt:now))
+         (date-str (lt:format-timestring nil now
+                                         :format '(:day " " :short-month " " :year)))
+         (sections (list-def-sections list-def))
+         (section-items (make-hash-table :test #'equal))
+         (no-section-items nil))
+    ;; Group items by section
+    (dolist (item items)
+      (let ((section (list-item-section item)))
+        (if (and section (> (length section) 0))
+            (push item (gethash section section-items nil))
+            (push item no-section-items))))
+    ;; Header
+    (format stream "~A (~A)~%" (list-def-name list-def) date-str)
+    ;; Print items grouped by section (in defined section order)
+    (dolist (section sections)
+      (let ((sec-items (nreverse (gethash section section-items nil))))
+        (when sec-items
+          (format stream "~%~A~%" (string-upcase section))
+          (dolist (item sec-items)
+            (format stream "  [~A] ~A~%"
+                    (if (list-item-checked item) "x" " ")
+                    (list-item-title item))))))
+    ;; Print items from sections not in the defined sections list
+    (maphash (lambda (section sec-items)
+               (unless (member section sections :test #'string-equal)
+                 (let ((rev-items (nreverse sec-items)))
+                   (format stream "~%~A~%" (string-upcase section))
+                   (dolist (item rev-items)
+                     (format stream "  [~A] ~A~%"
+                             (if (list-item-checked item) "x" " ")
+                             (list-item-title item))))))
+             section-items)
+    ;; Print items without a section under "Other"
+    (when no-section-items
+      (format stream "~%OTHER~%")
+      (dolist (item (nreverse no-section-items))
+        (format stream "  [~A] ~A~%"
+                (if (list-item-checked item) "x" " ")
+                (list-item-title item))))))
+
 ;;── Priority Helper ───────────────────────────────────────────────────────────
 
 (defun priority-order (priority)

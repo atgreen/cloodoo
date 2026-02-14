@@ -11,6 +11,7 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
+import androidx.compose.material.icons.outlined.Checklist
 import androidx.compose.material.icons.outlined.DoneAll
 import androidx.compose.material.icons.outlined.Inbox
 import androidx.compose.material.icons.outlined.Settings
@@ -90,9 +91,9 @@ fun CloodooApp(openQuickAdd: Boolean = false) {
         val currentRoute = navBackStackEntry?.destination?.route
 
         val showBottomBar = currentRoute in listOf(
-            Screen.Inbox.route, Screen.Completed.route, Screen.Settings.route
+            Screen.Inbox.route, Screen.Completed.route, Screen.Lists.route, Screen.Settings.route
         )
-        val showFab = currentRoute in listOf(Screen.Inbox.route, Screen.Completed.route)
+        val showFab = currentRoute in listOf(Screen.Inbox.route, Screen.Completed.route, Screen.Lists.route)
 
         LaunchedEffect(uiState.lastSyncResult, uiState.syncError) {
             uiState.lastSyncResult?.let {
@@ -183,6 +184,18 @@ fun CloodooApp(openQuickAdd: Boolean = false) {
                                 label = { Text("Completed") }
                             )
                             NavigationBarItem(
+                                selected = currentRoute == Screen.Lists.route,
+                                onClick = {
+                                    navController.navigate(Screen.Lists.route) {
+                                        popUpTo(Screen.Inbox.route) { saveState = true }
+                                        launchSingleTop = true
+                                        restoreState = true
+                                    }
+                                },
+                                icon = { Icon(Icons.Outlined.Checklist, contentDescription = "Lists") },
+                                label = { Text("Lists") }
+                            )
+                            NavigationBarItem(
                                 selected = currentRoute == Screen.Settings.route,
                                 onClick = {
                                     navController.navigate(Screen.Settings.route) {
@@ -250,6 +263,34 @@ fun CloodooApp(openQuickAdd: Boolean = false) {
                             onNavigateBack = { navController.popBackStack() }
                         )
                     }
+                    composable(Screen.Lists.route) {
+                        ListsScreen(viewModel = viewModel, navController = navController)
+                    }
+                    composable(Screen.ListDetail.route) { backStackEntry ->
+                        val listId = backStackEntry.arguments?.getString("listId") ?: return@composable
+                        ListDetailScreen(
+                            listId = listId,
+                            viewModel = viewModel,
+                            onNavigateBack = { navController.popBackStack() },
+                            onEditList = { id ->
+                                navController.navigate(Screen.EditList.createRoute(id))
+                            }
+                        )
+                    }
+                    composable(Screen.CreateList.route) {
+                        CreateListScreen(
+                            viewModel = viewModel,
+                            onNavigateBack = { navController.popBackStack() }
+                        )
+                    }
+                    composable(Screen.EditList.route) { backStackEntry ->
+                        val listId = backStackEntry.arguments?.getString("listId") ?: return@composable
+                        CreateListScreen(
+                            viewModel = viewModel,
+                            onNavigateBack = { navController.popBackStack() },
+                            existingListId = listId
+                        )
+                    }
                 }
             }
 
@@ -257,7 +298,8 @@ fun CloodooApp(openQuickAdd: Boolean = false) {
             if (showFab) {
                 SpeedDialFab(
                     onTypeClick = { navController.navigate(Screen.AddTask.route) },
-                    onQuickAddClick = { navController.navigate(Screen.QuickAdd.route) }
+                    onQuickAddClick = { navController.navigate(Screen.QuickAdd.route) },
+                    onNewListClick = { navController.navigate(Screen.CreateList.route) }
                 )
             }
 

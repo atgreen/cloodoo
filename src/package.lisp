@@ -43,6 +43,26 @@
    #:ensure-config-directory
    #:ensure-cache-directory
 
+   ;; Lists
+   #:list-definition
+   #:list-def-id
+   #:list-def-name
+   #:list-def-description
+   #:list-def-sections
+   #:list-def-created-at
+   #:list-def-device-id
+   #:make-list-definition
+   #:list-item
+   #:list-item-id
+   #:list-item-list-id
+   #:list-item-title
+   #:list-item-section
+   #:list-item-checked
+   #:list-item-notes
+   #:list-item-created-at
+   #:list-item-device-id
+   #:make-list-item
+
    ;; Application
    #:+version+
    #:start-tui

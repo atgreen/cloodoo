@@ -18,4 +18,12 @@ sealed class Screen(val route: String) {
     object VoiceAdd : Screen("voice_add")
     object OcrCapture : Screen("ocr_capture")
     object QuickAdd : Screen("quick_add")
+    object Lists : Screen("lists")
+    object ListDetail : Screen("list_detail/{listId}") {
+        fun createRoute(listId: String) = "list_detail/$listId"
+    }
+    object CreateList : Screen("create_list")
+    object EditList : Screen("edit_list/{listId}") {
+        fun createRoute(listId: String) = "edit_list/$listId"
+    }
 }

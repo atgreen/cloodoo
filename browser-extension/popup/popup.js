@@ -7,7 +7,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   const titleInput = document.getElementById('title');
   const descriptionInput = document.getElementById('description');
   const prioritySelect = document.getElementById('priority');
-  const dueDateInput = document.getElementById('due-date');
+  const scheduleDateInput = document.getElementById('schedule-date');
   const tagsInput = document.getElementById('tags');
   const submitBtn = document.getElementById('submit-btn');
   const statusEl = document.getElementById('status');
@@ -19,9 +19,9 @@ document.addEventListener('DOMContentLoaded', async () => {
   const pendingCountEl = document.getElementById('pending-count');
   const syncBtn = document.getElementById('sync-btn');
 
-  // Set due date to today by default
+  // Set schedule date to today by default
   const today = new Date().toISOString().split('T')[0];
-  dueDateInput.value = today;
+  scheduleDateInput.value = today;
 
   let serverOnline = false;
   let availableTags = [];  // Tags for autocomplete
@@ -339,8 +339,8 @@ document.addEventListener('DOMContentLoaded', async () => {
       tags: tags.length > 0 ? tags : null
     };
 
-    // Add due date if set - use current time with local timezone offset
-    if (dueDateInput.value) {
+    // Add scheduled date if set - use current time with local timezone offset
+    if (scheduleDateInput.value) {
       const now = new Date();
       const hours = String(now.getHours()).padStart(2, '0');
       const minutes = String(now.getMinutes()).padStart(2, '0');
@@ -349,7 +349,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       const offsetSign = offset >= 0 ? '+' : '-';
       const offsetHours = String(Math.floor(Math.abs(offset) / 60)).padStart(2, '0');
       const offsetMins = String(Math.abs(offset) % 60).padStart(2, '0');
-      todo.due_date = `${dueDateInput.value}T${hours}:${minutes}:${seconds}${offsetSign}${offsetHours}:${offsetMins}`;
+      todo.scheduled_date = `${scheduleDateInput.value}T${hours}:${minutes}:${seconds}${offsetSign}${offsetHours}:${offsetMins}`;
     }
 
     // Add page URL if available

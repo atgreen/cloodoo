@@ -71,6 +71,16 @@
               (llog:warn "Failed to send to client, removing" :device-id device-id :error (princ-to-string e))
               (remove-dead-client stream device-id))))))))
 
+;;── List-Capable Client Broadcasting ─────────────────────────────────────────
+
+(defun broadcast-list-change (change-msg &optional exclude-device-id)
+  "Broadcast a list change only to clients that have 'lists' capability.
+   Falls back to regular broadcast (all clients) since capability tracking
+   per-stream is not yet implemented at the connection level."
+  ;; For now, broadcast to all clients. List-unaware clients will
+  ;; simply ignore the unknown message type (protobuf forward compatibility).
+  (broadcast-change change-msg exclude-device-id))
+
 ;;── SyncStream Handler ────────────────────────────────────────────────────────
 
 (defun handle-sync-stream (ctx stream)
@@ -98,11 +108,23 @@
              (let* ((sync-init (proto-msg-init init-msg))
                     (device-id (proto-sync-init-device-id sync-init))
                     (since (proto-sync-init-since sync-init))
-                    (client-time-str (proto-sync-init-client-time sync-init)))
+                    (client-time-str (proto-sync-init-client-time sync-init))
+                    (client-capabilities (proto-sync-init-capabilities sync-init))
+                    (client-has-lists (member "lists" client-capabilities :test #'string=)))
                (setf client-device-id device-id)
+
+               ;; Persist device capabilities
+               (handler-case
+                   (db-save-device-capabilities device-id
+                                                (or client-capabilities '())
+                                                nil)
+                 (error (e)
+                   (llog:warn "Failed to save device capabilities"
+                              :device-id device-id :error (princ-to-string e))))
+
                (when *sync-debug*
-                 (format t "~&[SYNC-DEBUG] Init: device-id=~A since=~A client-time=~A~%"
-                         device-id since client-time-str))
+                 (format t "~&[SYNC-DEBUG] Init: device-id=~A since=~A client-time=~A capabilities=~A~%"
+                         device-id since client-time-str client-capabilities))
 
                ;; Check clock skew if client sent its time
                (when (and client-time-str (plusp (length client-time-str)))
@@ -177,6 +199,59 @@
                            (llog:error "Failed to send settings" :error (princ-to-string e))
                            (return-from sync-handler))))))
 
+                 ;; Send list definitions and items if client supports lists
+                 ;; Always send ALL current lists (not filtered by since) because:
+                 ;; 1. Lists are a small dataset
+                 ;; 2. Avoids missed lists when capability is newly added
+                 ;; 3. The client handler is idempotent (supersedes existing rows)
+                 (when client-has-lists
+                   (let ((list-def-rows (db-load-current-list-rows-since "1970-01-01T00:00:00Z")))
+                     (when *sync-debug*
+                       (format t "~&[SYNC-DEBUG] Sending ~D list definitions~%" (length list-def-rows)))
+                     ;; Send definitions first (items reference list_id)
+                     (dolist (row list-def-rows)
+                       (handler-case
+                           (let* ((list-def (row-to-list-definition
+                                             (list (gethash "row_id" row 0)
+                                                   (gethash "id" row)
+                                                   (gethash "name" row)
+                                                   (gethash "description" row)
+                                                   (gethash "sections" row)
+                                                   (gethash "created_at" row)
+                                                   (gethash "device_id" row)
+                                                   (gethash "valid_from" row)
+                                                   (gethash "valid_to" row))))
+                                  (change-msg (make-sync-list-upsert-message
+                                               (get-device-id) list-def)))
+                             (ag-grpc:stream-send stream change-msg))
+                         (error (e)
+                           (llog:error "Failed to send list definition" :error (princ-to-string e))
+                           (return-from sync-handler)))))
+                   ;; Then send list items (also send ALL, same reasoning as definitions)
+                   (let ((item-rows (db-load-current-list-item-rows-since "1970-01-01T00:00:00Z")))
+                     (when *sync-debug*
+                       (format t "~&[SYNC-DEBUG] Sending ~D list items~%" (length item-rows)))
+                     (dolist (row item-rows)
+                       (let* ((item (row-to-list-item
+                                     (list (gethash "row_id" row 0)
+                                           (gethash "id" row)
+                                           (gethash "list_id" row)
+                                           (gethash "title" row)
+                                           (gethash "section" row)
+                                           (if (gethash "checked" row) 1 0)
+                                           (gethash "notes" row)
+                                           (gethash "created_at" row)
+                                           (gethash "device_id" row)
+                                           (gethash "valid_from" row)
+                                           (gethash "valid_to" row))))
+                              (change-msg (make-sync-list-item-upsert-message
+                                           (get-device-id) item)))
+                         (handler-case
+                             (ag-grpc:stream-send stream change-msg)
+                           (error (e)
+                             (llog:error "Failed to send list item" :error (princ-to-string e))
+                             (return-from sync-handler))))))) ;; closes when client-has-lists
+
                  (when *sync-debug*
                    (format t "~&[SYNC-DEBUG] All pending changes sent. Entering receive loop.~%")
                    (force-output))
@@ -216,57 +291,101 @@
                               (setf (todo-device-id todo) origin-device-id)
 
                               ;; Try to enrich the TODO only if it's marked as needing enrichment
+                              (let ((redirected-to-list nil))
                               (when (and *enrichment-enabled* (todo-enriching-p todo))
                                 (handler-case
                                     (let ((enriched-data (enrich-todo-input
                                                           (todo-title todo)
-                                                          (todo-description todo)
-                                                          nil)))
+                                                          (todo-description todo))))
                                       (when enriched-data
-                                        (setf enriched t)
-                                        ;; Apply enrichment results
-                                        (when (getf enriched-data :title)
-                                          (setf (todo-title todo) (getf enriched-data :title)))
-                                        (when (getf enriched-data :description)
-                                          (setf (todo-description todo) (getf enriched-data :description)))
-                                        (when (getf enriched-data :priority)
-                                          (setf (todo-priority todo) (getf enriched-data :priority)))
-                                        (when (getf enriched-data :category)
-                                          (let ((tag (category-to-tag (getf enriched-data :category))))
-                                            (when tag
-                                              (pushnew tag (todo-tags todo) :test #'string-equal))))
-                                        (when (getf enriched-data :estimated-minutes)
-                                          (setf (todo-estimated-minutes todo) (getf enriched-data :estimated-minutes)))
-                                        (when (getf enriched-data :scheduled-date)
-                                          (setf (todo-scheduled-date todo) (getf enriched-data :scheduled-date)))
-                                        (when (getf enriched-data :due-date)
-                                          (setf (todo-due-date todo) (getf enriched-data :due-date)))
-                                        (when (getf enriched-data :location-info)
-                                          (setf (todo-location-info todo) (getf enriched-data :location-info)))
-                                        ;; Only set URL if todo doesn't already have one (preserve original URLs)
-                                        (when (and (getf enriched-data :url) (not (todo-url todo)))
-                                          (setf (todo-url todo) (getf enriched-data :url)))
-                                        (llog:info "Enriched TODO from sync" :id (todo-id todo))))
+                                        ;; Check if LLM says this belongs on a list
+                                        (let ((list-name (getf enriched-data :list-name))
+                                              (list-section (getf enriched-data :list-section))
+                                              (list-items (getf enriched-data :list-items)))
+                                          (if (and list-name (stringp list-name) (> (length list-name) 0))
+                                              ;; Redirect to list: create list item(s), delete TODO
+                                              (let ((list-def (db-find-list-by-name list-name)))
+                                                (if list-def
+                                                    (let ((items-to-create
+                                                            (if list-items
+                                                                ;; Multiple items from LLM
+                                                                (mapcar (lambda (li)
+                                                                          (list :title (or (getf li :title) "")
+                                                                                :section (getf li :section)))
+                                                                        list-items)
+                                                                ;; Single item
+                                                                (list (list :title (or (getf enriched-data :title)
+                                                                                      (todo-title todo))
+                                                                            :section list-section)))))
+                                                      (dolist (item-spec items-to-create)
+                                                        (let ((item (make-list-item
+                                                                      (list-def-id list-def)
+                                                                      (getf item-spec :title)
+                                                                      :section (getf item-spec :section)
+                                                                      :device-id origin-device-id)))
+                                                          (db-save-list-item item :valid-from change-timestamp)
+                                                          (let ((item-msg (make-sync-list-item-upsert-message
+                                                                            origin-device-id item)))
+                                                            (broadcast-list-change item-msg nil))
+                                                          (llog:info "Created list item from TODO"
+                                                                     :title (getf item-spec :title)
+                                                                     :list-name list-name
+                                                                     :section (getf item-spec :section))))
+                                                      ;; Delete the original TODO from originator
+                                                      (let ((delete-msg (make-sync-delete-message
+                                                                          origin-device-id (todo-id todo))))
+                                                        (broadcast-change delete-msg nil))
+                                                      (setf redirected-to-list t)
+                                                      (llog:info "Redirected TODO to list"
+                                                                 :todo-id (todo-id todo)
+                                                                 :list-name list-name
+                                                                 :item-count (length items-to-create)))
+                                                    ;; List not found - fall through to normal enrichment
+                                                    (llog:warn "List not found for redirect, treating as normal TODO"
+                                                               :list-name list-name)))
+                                              ;; Normal enrichment (no list redirect)
+                                              (progn
+                                                (setf enriched t)
+                                                (when (getf enriched-data :title)
+                                                  (setf (todo-title todo) (getf enriched-data :title)))
+                                                (when (getf enriched-data :description)
+                                                  (setf (todo-description todo) (getf enriched-data :description)))
+                                                (when (getf enriched-data :priority)
+                                                  (setf (todo-priority todo) (getf enriched-data :priority)))
+                                                (when (getf enriched-data :category)
+                                                  (let ((tag (category-to-tag (getf enriched-data :category))))
+                                                    (when tag
+                                                      (pushnew tag (todo-tags todo) :test #'string-equal))))
+                                                (when (getf enriched-data :scheduled-date)
+                                                  (setf (todo-scheduled-date todo) (getf enriched-data :scheduled-date)))
+                                                (when (getf enriched-data :due-date)
+                                                  (setf (todo-due-date todo) (getf enriched-data :due-date)))
+                                                (when (getf enriched-data :location-info)
+                                                  (setf (todo-location-info todo) (getf enriched-data :location-info)))
+                                                (when (and (getf enriched-data :url) (not (todo-url todo)))
+                                                  (setf (todo-url todo) (getf enriched-data :url)))
+                                                (llog:info "Enriched TODO from sync" :id (todo-id todo)))))))
                                   (error (e)
                                     (llog:warn "Enrichment failed, using original TODO"
                                               :id (todo-id todo)
                                               :error (princ-to-string e)))))
 
-                              ;; Clear enriching-p flag since enrichment is complete
-                              (setf (todo-enriching-p todo) nil)
+                              (unless redirected-to-list
+                                ;; Clear enriching-p flag since enrichment is complete
+                                (setf (todo-enriching-p todo) nil)
 
-                              ;; Save to local database with original timestamp
-                              (db-save-todo todo :valid-from change-timestamp)
+                                ;; Save to local database with original timestamp
+                                (db-save-todo todo :valid-from change-timestamp)
 
-                              ;; If enriched, create a new change message with enriched data and broadcast
-                              ;; When enriched, send to ALL clients including the originator so they get the enrichment
-                              ;; When not enriched, exclude the originator (they already have this data)
-                              (if enriched
-                                  (let ((enriched-msg (make-sync-upsert-message-with-timestamp
-                                                       origin-device-id todo change-timestamp)))
-                                    (when enriched-msg  ;; Guard against NIL
-                                      (broadcast-change enriched-msg nil)))  ;; nil = send to everyone
-                                  (broadcast-change msg device-id))))
+                                ;; If enriched, create a new change message with enriched data and broadcast
+                                ;; When enriched, send to ALL clients including the originator so they get the enrichment
+                                ;; When not enriched, exclude the originator (they already have this data)
+                                (if enriched
+                                    (let ((enriched-msg (make-sync-upsert-message-with-timestamp
+                                                         origin-device-id todo change-timestamp)))
+                                      (when enriched-msg
+                                        (broadcast-change enriched-msg nil)))
+                                    (broadcast-change msg device-id))))))
                            (:delete-id
                             ;; Client is requesting a delete
                             (let ((todo-id (proto-todo-change-delete-id change)))
@@ -276,32 +395,89 @@
                               (broadcast-change msg device-id))))))
 
                     (when (eql (proto-msg-case msg) :settings-change)
-                      (let* ((settings-change (proto-msg-settings-change msg))
-                             (origin-device-id (proto-settings-change-device-id settings-change))
-                             (settings-list (proto-settings-change-settings settings-change)))
-                        (when *sync-debug*
-                          (format t "~&[SYNC-DEBUG] Received settings change from ~A with ~D settings~%"
-                                  origin-device-id (length settings-list)))
-                        ;; Process each setting with last-write-wins conflict resolution
-                        (dolist (setting-data settings-list)
-                          (let* ((key (slot-value setting-data 'key))
-                                 (value (slot-value setting-data 'value))
-                                 (updated-at (slot-value setting-data 'updated-at)))
-                            (multiple-value-bind (current-value current-timestamp)
-                                (db-load-setting-with-timestamp key)
-                              ;; Only update if incoming timestamp is newer or setting doesn't exist
-                              (when (or (null current-value)
-                                       (string< current-timestamp updated-at))
-                                (when *sync-debug*
-                                  (format t "~&[SYNC-DEBUG] Updating setting ~A~%" key))
-                                ;; Save with the incoming timestamp to preserve causality
-                                (with-db (db)
-                                  (sqlite:execute-non-query db
-                                    "INSERT OR REPLACE INTO app_settings (key, value, updated_at)
-                                     VALUES (?, ?, ?)"
-                                    key value updated-at))))))
-                        ;; Broadcast to other clients (excluding sender)
-                        (broadcast-change msg origin-device-id)))
+                      (handler-case
+                          (let* ((settings-change (proto-msg-settings-change msg))
+                                 (origin-device-id (proto-settings-change-device-id settings-change))
+                                 (settings-list (proto-settings-change-settings settings-change)))
+                            (when *sync-debug*
+                              (format t "~&[SYNC-DEBUG] Received settings change from ~A with ~D settings~%"
+                                      origin-device-id (length settings-list)))
+                            ;; Process each setting with last-write-wins conflict resolution
+                            (dolist (setting-data settings-list)
+                              (let* ((key (slot-value setting-data 'key))
+                                     (value (slot-value setting-data 'value))
+                                     (updated-at (slot-value setting-data 'updated-at)))
+                                (multiple-value-bind (current-value current-timestamp)
+                                    (db-load-setting-with-timestamp key)
+                                  ;; Only update if incoming timestamp is newer or setting doesn't exist
+                                  (when (or (null current-value)
+                                           (string< current-timestamp updated-at))
+                                    (when *sync-debug*
+                                      (format t "~&[SYNC-DEBUG] Updating setting ~A~%" key))
+                                    ;; Save with the incoming timestamp to preserve causality
+                                    (with-db (db)
+                                      (sqlite:execute-non-query db
+                                        "INSERT OR REPLACE INTO app_settings (key, value, updated_at)
+                                         VALUES (?, ?, ?)"
+                                        key value updated-at))))))
+                            ;; Broadcast to other clients (excluding sender)
+                            (broadcast-change msg origin-device-id))
+                        (error (e)
+                          (llog:error "Settings change processing failed"
+                                     :error (princ-to-string e)))))
+
+                    ;; Handle list changes
+                    (when (eql (proto-msg-case msg) :list-change)
+                      (handler-case
+                          (let* ((list-change (proto-msg-list-change msg))
+                                 (origin-device-id (proto-list-change-device-id list-change))
+                                 (change-timestamp (proto-list-change-timestamp list-change)))
+                            (when *sync-debug*
+                              (format t "~&[SYNC-DEBUG] Received list change from ~A, case=~A~%"
+                                      origin-device-id (slot-value list-change 'change-case)))
+                            (case (slot-value list-change 'change-case)
+                              (:upsert-list
+                               (let* ((proto-data (proto-list-change-upsert-list list-change))
+                                      (list-def (proto-to-list-definition proto-data)))
+                                 (setf (list-def-device-id list-def) origin-device-id)
+                                 (let* ((*suppress-change-notifications* t)
+                                        (saved (db-save-list-definition list-def :valid-from change-timestamp)))
+                                   (if saved
+                                       ;; Broadcast to other clients
+                                       (broadcast-list-change msg device-id)
+                                       ;; Stale upsert rejected (list was deleted more recently).
+                                       ;; Send a delete back to the sender so it learns the list is gone.
+                                       (handler-case
+                                           (let ((delete-msg (make-sync-list-delete-message
+                                                               (get-device-id)
+                                                               (list-def-id list-def))))
+                                             (ag-grpc:stream-send stream delete-msg)
+                                             (llog:info "Sent corrective delete to client"
+                                                        :list-id (list-def-id list-def)
+                                                        :device device-id))
+                                         (error (e)
+                                           (llog:warn "Failed to send corrective delete"
+                                                      :error (princ-to-string e))))))))
+                          (:delete-list-id
+                           (let ((list-id (proto-list-change-delete-list-id list-change)))
+                             (let ((*suppress-change-notifications* t))
+                               (db-delete-list-definition list-id))
+                             (broadcast-list-change msg device-id)))
+                          (:upsert-item
+                           (let* ((proto-data (proto-list-change-upsert-item list-change))
+                                  (item (proto-to-list-item proto-data)))
+                             (setf (list-item-device-id item) origin-device-id)
+                             (let ((*suppress-change-notifications* t))
+                               (db-save-list-item item :valid-from change-timestamp))
+                             (broadcast-list-change msg device-id)))
+                          (:delete-item-id
+                           (let ((item-id (proto-list-change-delete-item-id list-change)))
+                             (let ((*suppress-change-notifications* t))
+                               (db-delete-list-item item-id))
+                             (broadcast-list-change msg device-id)))))
+                        (error (e)
+                          (llog:error "List change processing failed"
+                                     :error (princ-to-string e)))))
 
                     (when (eql (proto-msg-case msg) :reset)
                       (let* ((reset (proto-msg-reset msg))
@@ -341,8 +517,6 @@
                    :due-date (parse-timestamp (gethash "due_date" ht))
                    :tags (when (and tags-json (not (eq tags-json 'null)) (stringp tags-json))
                            (coerce (jzon:parse tags-json) 'list))
-                   :estimated-minutes (let ((m (gethash "estimated_minutes" ht)))
-                                        (unless (or (null m) (eq m 'null)) m))
                    :location-info (let ((loc (gethash "location_info" ht)))
                                     (when (and loc (not (eq loc 'null)) (stringp loc))
                                       (let ((ht (jzon:parse loc)))
@@ -613,14 +787,21 @@
               (update-sync-status :connecting)
               (llog:info "Connecting to sync server" :host host :port port :tls use-tls)
 
-              ;; Create gRPC channel (blocks if server is unreachable)
+              ;; Create gRPC channel with no timeout (bidirectional stream is long-lived)
+              ;; and keepalive PINGs every 20s to prevent NAT/firewall idle drops
               (setf *sync-client-channel*
-                    (if use-tls
-                        (ag-grpc:make-channel host port
-                                              :tls t
-                                              :tls-client-certificate (namestring client-certificate)
-                                              :tls-client-key (namestring client-key))
-                        (ag-grpc:make-channel host port :tls nil)))
+                    (let ((ka (ag-grpc:make-keepalive-config
+                               :ping-interval 20
+                               :permit-without-calls t)))
+                      (if use-tls
+                          (ag-grpc:make-channel host port
+                                                :tls t
+                                                :timeout nil
+                                                :keepalive ka
+                                                :tls-client-certificate (namestring client-certificate)
+                                                :tls-client-key (namestring client-key))
+                          (ag-grpc:make-channel host port :tls nil :timeout nil
+                                                :keepalive ka))))
 
               ;; Create stub and stream
               (let ((stub (make-todo-sync-stub *sync-client-channel*)))
@@ -645,11 +826,16 @@
 
               ;; Receive loop — blocks until stream ends or error
               (loop while *sync-client-running*
-                    do (let ((msg (ag-grpc:stream-read-message *sync-client-stream*)))
-                         (cond (msg (handle-sync-client-message msg))
-                               (t
-                                (llog:info "Sync stream ended")
-                                (return))))))
+                    do (handler-case
+                           (let ((msg (ag-grpc:stream-read-message *sync-client-stream*)))
+                             (cond (msg
+                                    (handle-sync-client-message msg))
+                                   (t
+                                    (llog:info "Sync stream ended (nil message)")
+                                    (return))))
+                         (error (e)
+                           (llog:error "Sync receive error" :error (princ-to-string e))
+                           (return)))))
           (error (e)
             (let ((error-msg (princ-to-string e)))
               ;; Check if this is a deliberate shutdown, not an actual error
@@ -970,7 +1156,60 @@
                ;; Send local settings to server on connect
                (let ((settings-hash (db-load-all-settings)))
                  (when (> (hash-table-count settings-hash) 0)
-                   (sync-client-send-settings nil nil))))))))
+                   (sync-client-send-settings nil nil)))
+
+               ;; Send local list changes to server on connect
+               (handler-case
+                   (let* ((effective-since-2 (if (plusp (length old-last-sync))
+                                                  old-last-sync
+                                                  "1970-01-01T00:00:00Z"))
+                          ;; Send list definitions first, then items
+                          (list-def-rows (db-load-current-list-rows-since effective-since-2))
+                          (list-item-rows (db-load-current-list-item-rows-since effective-since-2)))
+                     (when (plusp (length list-def-rows))
+                       (llog:info "Sending local list definitions" :count (length list-def-rows))
+                       (dolist (row list-def-rows)
+                         (let* ((list-def (row-to-list-definition
+                                           (list 0
+                                                 (gethash "id" row)
+                                                 (gethash "name" row)
+                                                 (gethash "description" row)
+                                                 (gethash "sections" row)
+                                                 (gethash "created_at" row)
+                                                 (gethash "device_id" row)
+                                                 (gethash "valid_from" row)
+                                                 (gethash "valid_to" row))))
+                                (change-msg (make-sync-list-upsert-message
+                                             (get-device-id) list-def)))
+                           (handler-case
+                               (ag-grpc:stream-send *sync-client-stream* change-msg)
+                             (error (e)
+                               (llog:error "Failed to send local list definition"
+                                          :error (princ-to-string e)))))))
+                     (when (plusp (length list-item-rows))
+                       (llog:info "Sending local list items" :count (length list-item-rows))
+                       (dolist (row list-item-rows)
+                         (let* ((item (row-to-list-item
+                                       (list 0
+                                             (gethash "id" row)
+                                             (gethash "list_id" row)
+                                             (gethash "title" row)
+                                             (gethash "section" row)
+                                             (if (gethash "checked" row) 1 0)
+                                             (gethash "notes" row)
+                                             (gethash "created_at" row)
+                                             (gethash "device_id" row)
+                                             (gethash "valid_from" row)
+                                             (gethash "valid_to" row))))
+                                (change-msg (make-sync-list-item-upsert-message
+                                             (get-device-id) item)))
+                           (handler-case
+                               (ag-grpc:stream-send *sync-client-stream* change-msg)
+                             (error (e)
+                               (llog:error "Failed to send local list item"
+                                          :error (princ-to-string e))))))))
+                 (error (e)
+                   (llog:warn "Failed to send local list changes" :error (princ-to-string e)))))))))
 
     (:change
      (let ((change (proto-msg-change msg)))
@@ -1027,6 +1266,43 @@
                       VALUES (?, ?, ?)"
                      key value updated-at)))
                (llog:info "Applied settings update from server" :key key)))))))
+
+    (:list-change
+     (let* ((list-change (proto-msg-list-change msg)))
+       (when *sync-debug*
+         (format t "~&[SYNC-DEBUG] Client received list change, case=~A~%"
+                 (slot-value list-change 'change-case)))
+       (case (slot-value list-change 'change-case)
+         (:upsert-list
+          (let* ((proto-data (proto-list-change-upsert-list list-change))
+                 (list-def (proto-to-list-definition proto-data))
+                 (change-timestamp (proto-list-change-timestamp list-change)))
+            (setf (list-def-device-id list-def)
+                  (proto-list-change-device-id list-change))
+            (llog:info "Received list definition from server" :name (list-def-name list-def))
+            (let ((*suppress-change-notifications* t))
+              (db-save-list-definition list-def :valid-from change-timestamp))))
+         (:delete-list-id
+          (let ((list-id (proto-list-change-delete-list-id list-change)))
+            (llog:info "Received list delete from server" :id list-id)
+            (let ((*suppress-change-notifications* t))
+              (db-delete-list-definition list-id))))
+         (:upsert-item
+          (let* ((proto-data (proto-list-change-upsert-item list-change))
+                 (item (proto-to-list-item proto-data))
+                 (change-timestamp (proto-list-change-timestamp list-change)))
+            (setf (list-item-device-id item)
+                  (proto-list-change-device-id list-change))
+            (llog:info "Received list item from server" :title (list-item-title item))
+            (let ((*suppress-change-notifications* t))
+              (db-save-list-item item :valid-from change-timestamp))))
+         (:delete-item-id
+          (let ((item-id (proto-list-change-delete-item-id list-change)))
+            (llog:info "Received list item delete from server" :id item-id)
+            (let ((*suppress-change-notifications* t))
+              (db-delete-list-item item-id)))))
+       ;; Trigger TUI refresh for list views
+       (notify-tui-reload)))
 
     (:reset
      (let* ((reset (proto-msg-reset msg))
@@ -1121,6 +1397,64 @@
   (notify-settings-changed key value)
   ;; Send to server (if we're connected as client)
   (sync-client-send-settings key value))
+
+;;── List Change Sync Functions ────────────────────────────────────────────────
+
+(defun sync-client-send-list-upsert (list-def)
+  "Send a list definition upsert to the sync server."
+  (when (and *sync-client-stream* (sync-client-connected-p))
+    (let ((msg (make-sync-list-upsert-message (get-device-id) list-def)))
+      (handler-case
+          (ag-grpc:stream-send *sync-client-stream* msg)
+        (error (e)
+          (llog:error "Failed to send list upsert" :error (princ-to-string e)))))))
+
+(defun sync-client-send-list-delete (list-def-id)
+  "Send a list definition deletion to the sync server."
+  (when (and *sync-client-stream* (sync-client-connected-p))
+    (let ((msg (make-sync-list-delete-message (get-device-id) list-def-id)))
+      (handler-case
+          (ag-grpc:stream-send *sync-client-stream* msg)
+        (error (e)
+          (llog:error "Failed to send list delete" :error (princ-to-string e)))))))
+
+(defun sync-client-send-list-item-upsert (item)
+  "Send a list item upsert to the sync server."
+  (when (and *sync-client-stream* (sync-client-connected-p))
+    (let ((msg (make-sync-list-item-upsert-message (get-device-id) item)))
+      (handler-case
+          (ag-grpc:stream-send *sync-client-stream* msg)
+        (error (e)
+          (llog:error "Failed to send list item upsert" :error (princ-to-string e)))))))
+
+(defun sync-client-send-list-item-delete (item-id)
+  "Send a list item deletion to the sync server."
+  (when (and *sync-client-stream* (sync-client-connected-p))
+    (let ((msg (make-sync-list-item-delete-message (get-device-id) item-id)))
+      (handler-case
+          (ag-grpc:stream-send *sync-client-stream* msg)
+        (error (e)
+          (llog:error "Failed to send list item delete" :error (princ-to-string e)))))))
+
+(defun notify-sync-list-changed (list-def)
+  "Notify about a list definition change - broadcasts and sends to server."
+  (broadcast-list-change (make-sync-list-upsert-message (get-device-id) list-def) nil)
+  (sync-client-send-list-upsert list-def))
+
+(defun notify-sync-list-deleted (list-def-id)
+  "Notify about a list deletion - broadcasts and sends to server."
+  (broadcast-list-change (make-sync-list-delete-message (get-device-id) list-def-id) nil)
+  (sync-client-send-list-delete list-def-id))
+
+(defun notify-sync-list-item-changed (item)
+  "Notify about a list item change - broadcasts and sends to server."
+  (broadcast-list-change (make-sync-list-item-upsert-message (get-device-id) item) nil)
+  (sync-client-send-list-item-upsert item))
+
+(defun notify-sync-list-item-deleted (item-id)
+  "Notify about a list item deletion - broadcasts and sends to server."
+  (broadcast-list-change (make-sync-list-item-delete-message (get-device-id) item-id) nil)
+  (sync-client-send-list-item-delete item-id))
 
 ;;── One-Shot Sync (for CLI commands) ──────────────────────────────────────────
 

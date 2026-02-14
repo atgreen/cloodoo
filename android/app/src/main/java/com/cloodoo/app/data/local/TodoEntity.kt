@@ -33,7 +33,6 @@ data class TodoEntity(
     val scheduledDate: String? = null,
     val dueDate: String? = null,
     val tags: String? = null,  // JSON array stored as string
-    val estimatedMinutes: Int? = null,
     val locationInfo: String? = null,  // JSON object stored as string
     val url: String? = null,
     val parentId: String? = null,

@@ -68,12 +68,6 @@
     :accessor todo-tags
     :type list
     :documentation "List of tag strings.")
-   (estimated-minutes
-    :initarg :estimated-minutes
-    :initform nil
-    :accessor todo-estimated-minutes
-    :type (or null integer)
-    :documentation "Estimated time to complete in minutes.")
    (location-info
     :initarg :location-info
     :initform nil
@@ -159,7 +153,7 @@
        (nreverse result)))
     (t nil)))
 
-(defun make-todo (title &key description priority scheduled-date due-date tags estimated-minutes location-info url device-id repeat-interval repeat-unit)
+(defun make-todo (title &key description priority scheduled-date due-date tags location-info url device-id repeat-interval repeat-unit)
   "Create a new TODO item with the given properties."
   (make-instance 'todo
                  :id (generate-id)
@@ -169,7 +163,6 @@
                  :scheduled-date scheduled-date
                  :due-date due-date
                  :tags tags
-                 :estimated-minutes estimated-minutes
                  :location-info location-info
                  :url url
                  :device-id device-id

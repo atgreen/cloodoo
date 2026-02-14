@@ -12,8 +12,8 @@ import androidx.room.Room
 import androidx.room.RoomDatabase
 
 @Database(
-    entities = [TodoEntity::class, PendingSyncEntity::class, AppSettingsEntity::class, AttachmentEntity::class],
-    version = 6,
+    entities = [TodoEntity::class, PendingSyncEntity::class, AppSettingsEntity::class, AttachmentEntity::class, ListDefinitionEntity::class, ListItemEntity::class],
+    version = 8,
     exportSchema = false
 )
 abstract class CloodooDatabase : RoomDatabase() {
@@ -21,6 +21,7 @@ abstract class CloodooDatabase : RoomDatabase() {
     abstract fun pendingSyncDao(): PendingSyncDao
     abstract fun appSettingsDao(): AppSettingsDao
     abstract fun attachmentDao(): AttachmentDao
+    abstract fun listDao(): ListDao
 
     companion object {
         @Volatile

@@ -238,7 +238,8 @@ export default class CloodooExtension extends Extension {
             cloodooPath, 'add',
             title,
             '--attachment', screenshotPath,
-            '--priority', priority
+            '--priority', priority,
+            '--schedule', 'today'
         ];
 
         // Add tags

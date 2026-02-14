@@ -135,6 +135,12 @@
                    :long-name "note"
                    :key :note
                    :description "Optional description/notes"))
+        (schedule-opt (clingon:make-option
+                       :string
+                       :short-name #\s
+                       :long-name "schedule"
+                       :key :schedule
+                       :description "Scheduled date (YYYY-MM-DD, 'today', 'tomorrow', or day name)"))
         (attachment-opt (clingon:make-option
                          :filepath
                          :short-name #\a
@@ -145,20 +151,23 @@
      :name "add"
      :description "Add a new TODO"
      :usage "TITLE"
-     :options (list priority-opt due-opt tags-opt desc-opt attachment-opt)
+     :options (list priority-opt due-opt schedule-opt tags-opt desc-opt attachment-opt)
      :handler (lambda (cmd)
                 (let ((args (clingon:command-arguments cmd))
                       (priority (clingon:getopt cmd :priority))
                       (due (clingon:getopt cmd :due))
+                      (schedule (clingon:getopt cmd :schedule))
                       (tags (clingon:getopt cmd :tags))
                       (note (clingon:getopt cmd :note))
                       (attachment-path (clingon:getopt cmd :attachment)))
                   (if args
                       (let* ((title (format nil "~{~A~^ ~}" args))
                              (due-date (when due (parse-due-date due)))
+                             (scheduled-date (when schedule (parse-due-date schedule)))
                              (todo (make-todo title
                                              :priority (intern (string-upcase priority) :keyword)
                                              :due-date due-date
+                                             :scheduled-date scheduled-date
                                              :description note
                                              :tags (parse-tags tags))))
                         ;; Handle attachment if provided
@@ -175,6 +184,10 @@
                               (format t "  Attachment: ~A~%" (file-namestring attachment-path))
                               (format t "  ~A Attachment file not found: ~A~%"
                                      (tui:colored "⚠" :fg tui:*fg-yellow*) attachment-path)))
+                        (when scheduled-date
+                          (format t "  Scheduled: ~A~%"
+                                 (lt:format-timestring nil scheduled-date
+                                                      :format '(:long-weekday ", " :long-month " " :day ", " :year))))
                         (when due-date
                           (format t "  Due: ~A~%"
                                  (lt:format-timestring nil due-date
@@ -454,7 +467,7 @@
                               (sql-escape-string scheduled-date)
                               (sql-escape-string due-date)
                               (sql-escape-string tags)
-                              (if (or (null estimated-minutes) (eql estimated-minutes :null)) "NULL" estimated-minutes)
+                              "NULL"  ; estimated_minutes removed
                               (sql-escape-string location-info)
                               (sql-escape-string url)
                               "NULL"  ; parent-id no longer used
@@ -1122,8 +1135,7 @@ URL format: http://HOST:PORT/pair/TOKEN"
                     (dolist (todo (nreverse local-enrichment-needed))
                       (handler-case
                           (let ((enriched (enrich-todo-input (todo-title todo)
-                                                              (todo-description todo)
-                                                              nil)))
+                                                              (todo-description todo))))
                             (when enriched
                               (when (getf enriched :title)
                                 (setf (todo-title todo) (getf enriched :title)))
@@ -1135,8 +1147,6 @@ URL format: http://HOST:PORT/pair/TOKEN"
                                 (let ((tag (category-to-tag (getf enriched :category))))
                                   (when tag
                                     (setf (todo-tags todo) (list tag)))))
-                              (when (getf enriched :estimated-minutes)
-                                (setf (todo-estimated-minutes todo) (getf enriched :estimated-minutes)))
                               (when (getf enriched :scheduled-date)
                                 (setf (todo-scheduled-date todo) (getf enriched :scheduled-date)))
                               (when (getf enriched :due-date)
@@ -1289,10 +1299,10 @@ URL format: http://HOST:PORT/pair/TOKEN"
                         (unless (or (null d) (eq d 'null)) d)))
          (priority-str (or (gethash "priority" todo-data) "medium"))
          (priority (intern (string-upcase priority-str) :keyword))
-         (due-date-str (gethash "due_date" todo-data))
-         (due-date (when (and due-date-str (not (eq due-date-str 'null)) (stringp due-date-str))
-                     (handler-case (lt:parse-timestring due-date-str)
-                       (error () nil))))
+         (scheduled-date-str (gethash "scheduled_date" todo-data))
+         (scheduled-date (when (and scheduled-date-str (not (eq scheduled-date-str 'null)) (stringp scheduled-date-str))
+                           (handler-case (lt:parse-timestring scheduled-date-str)
+                             (error () nil))))
          (tags-raw (gethash "tags" todo-data))
          (tags (when (and tags-raw (not (eq tags-raw 'null)))
                  (parse-tags (if (stringp tags-raw)
@@ -1312,7 +1322,7 @@ URL format: http://HOST:PORT/pair/TOKEN"
         (let ((todo (make-todo title
                                :description description
                                :priority priority
-                               :due-date due-date
+                               :scheduled-date scheduled-date
                                :tags tags
                                :url url)))
           ;; Use client-provided ID for idempotency instead of the generated one
@@ -1908,6 +1918,268 @@ URL format: http://HOST:PORT/pair/TOKEN"
                        (make-context-edit-command)
                        (make-context-set-command))))
 
+;;── Lists Commands ────────────────────────────────────────────────────────────
+
+(defun make-lists-show-command ()
+  "Create the 'lists show' subcommand."
+  (clingon:make-command
+   :name "show"
+   :description "Show items on a list, grouped by section"
+   :usage "NAME"
+   :handler (lambda (cmd)
+              (let ((args (clingon:command-arguments cmd)))
+                (if args
+                    (let* ((name (format nil "~{~A~^ ~}" args))
+                           (list-def (db-find-list-by-name name)))
+                      (if list-def
+                          (let ((items (db-load-list-items (list-def-id list-def))))
+                            (export-list list-def items))
+                          (format t "~A List not found: ~A~%"
+                                  (tui:colored "✗" :fg tui:*fg-red*) name)))
+                    (format t "Error: Please provide a list name~%"))))))
+
+(defun make-lists-add-command ()
+  "Create the 'lists add' subcommand."
+  (let ((section-opt (clingon:make-option
+                      :string
+                      :short-name #\s
+                      :long-name "section"
+                      :key :section
+                      :description "Section within the list"))
+        (notes-opt (clingon:make-option
+                    :string
+                    :short-name #\n
+                    :long-name "notes"
+                    :key :notes
+                    :description "Optional notes for the item")))
+    (clingon:make-command
+     :name "add"
+     :description "Add an item to a list"
+     :usage "LIST-NAME ITEM-TITLE"
+     :options (list section-opt notes-opt)
+     :handler (lambda (cmd)
+                (let ((args (clingon:command-arguments cmd))
+                      (section (clingon:getopt cmd :section))
+                      (notes (clingon:getopt cmd :notes)))
+                  (if (>= (length args) 2)
+                      (let* ((list-name (first args))
+                             (item-title (format nil "~{~A~^ ~}" (rest args)))
+                             (list-def (db-find-list-by-name list-name)))
+                        (if list-def
+                            (let ((item (make-list-item (list-def-id list-def) item-title
+                                                        :section section
+                                                        :notes notes)))
+                              (db-save-list-item item)
+                              (format t "~A Added to ~A: ~A~%"
+                                      (tui:colored "✓" :fg tui:*fg-green*)
+                                      (list-def-name list-def) item-title))
+                            (format t "~A List not found: ~A~%"
+                                    (tui:colored "✗" :fg tui:*fg-red*) list-name)))
+                      (format t "Error: Usage: cloodoo lists add LIST-NAME ITEM-TITLE~%")))))))
+
+(defun make-lists-check-command ()
+  "Create the 'lists check' subcommand."
+  (clingon:make-command
+   :name "check"
+   :description "Check off an item on a list"
+   :usage "LIST-NAME ITEM-TITLE"
+   :handler (lambda (cmd)
+              (let ((args (clingon:command-arguments cmd)))
+                (if (>= (length args) 2)
+                    (let* ((list-name (first args))
+                           (item-title (format nil "~{~A~^ ~}" (rest args)))
+                           (list-def (db-find-list-by-name list-name)))
+                      (if list-def
+                          (let ((item (db-find-list-item-by-title (list-def-id list-def) item-title)))
+                            (if item
+                                (progn
+                                  (db-check-list-item (list-item-id item)
+                                                      (not (list-item-checked item)))
+                                  (format t "~A ~A: ~A~%"
+                                          (tui:colored "✓" :fg tui:*fg-green*)
+                                          (if (list-item-checked item) "Unchecked" "Checked")
+                                          item-title))
+                                (format t "~A Item not found: ~A~%"
+                                        (tui:colored "✗" :fg tui:*fg-red*) item-title)))
+                          (format t "~A List not found: ~A~%"
+                                  (tui:colored "✗" :fg tui:*fg-red*) list-name)))
+                    (format t "Error: Usage: cloodoo lists check LIST-NAME ITEM-TITLE~%"))))))
+
+(defun make-lists-create-command ()
+  "Create the 'lists create' subcommand."
+  (let ((desc-opt (clingon:make-option
+                   :string
+                   :short-name #\d
+                   :long-name "description"
+                   :key :description
+                   :description "List description (LLM hint for auto-detection)"))
+        (sections-opt (clingon:make-option
+                       :string
+                       :short-name #\s
+                       :long-name "sections"
+                       :key :sections
+                       :description "Comma-separated section names")))
+    (clingon:make-command
+     :name "create"
+     :description "Create a new list"
+     :usage "NAME"
+     :options (list desc-opt sections-opt)
+     :handler (lambda (cmd)
+                (let ((args (clingon:command-arguments cmd))
+                      (description (clingon:getopt cmd :description))
+                      (sections-str (clingon:getopt cmd :sections)))
+                  (if args
+                      (let* ((name (format nil "~{~A~^ ~}" args))
+                             (existing (db-find-list-by-name name)))
+                        (if existing
+                            (format t "~A List already exists: ~A~%"
+                                    (tui:colored "✗" :fg tui:*fg-red*) name)
+                            (let* ((sections (when sections-str
+                                              (mapcar (lambda (s) (str:trim s))
+                                                      (str:split #\, sections-str))))
+                                   (list-def (make-list-definition name
+                                                                   :description description
+                                                                   :sections sections)))
+                              (db-save-list-definition list-def)
+                              (format t "~A Created list: ~A~%"
+                                      (tui:colored "✓" :fg tui:*fg-green*) name)
+                              (when sections
+                                (format t "  Sections: ~{~A~^, ~}~%" sections)))))
+                      (format t "Error: Please provide a list name~%")))))))
+
+(defun make-lists-edit-command ()
+  "Create the 'lists edit' subcommand."
+  (let ((desc-opt (clingon:make-option
+                   :string
+                   :short-name #\d
+                   :long-name "description"
+                   :key :description
+                   :description "New description"))
+        (sections-opt (clingon:make-option
+                       :string
+                       :short-name #\s
+                       :long-name "sections"
+                       :key :sections
+                       :description "New comma-separated section names")))
+    (clingon:make-command
+     :name "edit"
+     :description "Edit a list's description or sections"
+     :usage "NAME"
+     :options (list desc-opt sections-opt)
+     :handler (lambda (cmd)
+                (let ((args (clingon:command-arguments cmd))
+                      (new-desc (clingon:getopt cmd :description))
+                      (sections-str (clingon:getopt cmd :sections)))
+                  (if args
+                      (let* ((name (format nil "~{~A~^ ~}" args))
+                             (list-def (db-find-list-by-name name)))
+                        (if list-def
+                            (let ((updated (make-instance 'list-definition
+                                                          :id (list-def-id list-def)
+                                                          :name (list-def-name list-def)
+                                                          :description (or new-desc
+                                                                           (list-def-description list-def))
+                                                          :sections (if sections-str
+                                                                        (mapcar (lambda (s) (str:trim s))
+                                                                                (str:split #\, sections-str))
+                                                                        (list-def-sections list-def))
+                                                          :created-at (list-def-created-at list-def))))
+                              (db-save-list-definition updated)
+                              (format t "~A Updated list: ~A~%"
+                                      (tui:colored "✓" :fg tui:*fg-green*) name))
+                            (format t "~A List not found: ~A~%"
+                                    (tui:colored "✗" :fg tui:*fg-red*) name)))
+                      (format t "Error: Please provide a list name~%")))))))
+
+(defun make-lists-delete-command ()
+  "Create the 'lists delete' subcommand."
+  (clingon:make-command
+   :name "delete"
+   :description "Delete a list and all its items"
+   :usage "NAME"
+   :handler (lambda (cmd)
+              (let ((args (clingon:command-arguments cmd)))
+                (if args
+                    (let* ((name (format nil "~{~A~^ ~}" args))
+                           (list-def (db-find-list-by-name name)))
+                      (if list-def
+                          (progn
+                            (db-delete-list-definition (list-def-id list-def))
+                            (format t "~A Deleted list: ~A~%"
+                                    (tui:colored "✓" :fg tui:*fg-green*) name))
+                          (format t "~A List not found: ~A~%"
+                                  (tui:colored "✗" :fg tui:*fg-red*) name)))
+                    (format t "Error: Please provide a list name~%"))))))
+
+(defun make-lists-move-to-todo-command ()
+  "Create the 'lists move-to-todo' subcommand."
+  (clingon:make-command
+   :name "move-to-todo"
+   :description "Move a list item back to the todo inbox"
+   :usage "LIST-NAME ITEM-TITLE"
+   :handler (lambda (cmd)
+              (let ((args (clingon:command-arguments cmd)))
+                (if (>= (length args) 2)
+                    (let* ((list-name (first args))
+                           (item-title (format nil "~{~A~^ ~}" (rest args)))
+                           (list-def (db-find-list-by-name list-name)))
+                      (if list-def
+                          (let ((item (db-find-list-item-by-title (list-def-id list-def) item-title)))
+                            (if item
+                                (let ((todo (make-todo (list-item-title item)
+                                                       :description (list-item-notes item))))
+                                  (save-todo todo)
+                                  (db-delete-list-item (list-item-id item))
+                                  (format t "~A Moved to todo inbox: ~A~%"
+                                          (tui:colored "✓" :fg tui:*fg-green*)
+                                          (list-item-title item)))
+                                (format t "~A Item not found: ~A~%"
+                                        (tui:colored "✗" :fg tui:*fg-red*) item-title)))
+                          (format t "~A List not found: ~A~%"
+                                  (tui:colored "✗" :fg tui:*fg-red*) list-name)))
+                    (format t "Error: Usage: cloodoo lists move-to-todo LIST-NAME ITEM-TITLE~%"))))))
+
+(defun make-lists-command ()
+  "Create the 'lists' command group."
+  (clingon:make-command
+   :name "lists"
+   :description "Manage user-defined lists (grocery, movies, etc.)"
+   :usage "[command]"
+   :handler (lambda (cmd)
+              (declare (ignore cmd))
+              ;; Default: show all lists
+              (let ((lists (db-load-list-definitions)))
+                (if lists
+                    (progn
+                      (format t "~%")
+                      (dolist (list-def lists)
+                        (let ((items (db-load-list-items (list-def-id list-def)))
+                              (unchecked 0)
+                              (checked 0))
+                          (dolist (item items)
+                            (if (list-item-checked item)
+                                (incf checked)
+                                (incf unchecked)))
+                          (format t "  ~A"
+                                  (tui:colored (list-def-name list-def) :fg tui:*fg-cyan*))
+                          (format t " (~D item~:P" (length items))
+                          (when (> checked 0)
+                            (format t ", ~D checked" checked))
+                          (format t ")~%")
+                          (when (list-def-description list-def)
+                            (format t "    ~A~%"
+                                    (tui:colored (list-def-description list-def)
+                                                 :fg tui:*fg-bright-black*)))))
+                      (format t "~%"))
+                    (format t "~%No lists defined. Create one with: cloodoo lists create NAME~%~%"))))
+   :sub-commands (list (make-lists-show-command)
+                       (make-lists-add-command)
+                       (make-lists-check-command)
+                       (make-lists-create-command)
+                       (make-lists-edit-command)
+                       (make-lists-delete-command)
+                       (make-lists-move-to-todo-command))))
+
 (defun make-app ()
   "Create and return the command-line application."
   (clingon:make-command
@@ -1929,6 +2201,7 @@ URL format: http://HOST:PORT/pair/TOKEN"
                        (make-dump-command)
                        (make-compact-command)
                        (make-context-command)
+                       (make-lists-command)
                        (make-sync-server-command)
                        (make-sync-connect-command)
                        (make-sync-upload-attachments-command)

@@ -111,6 +111,7 @@ class GrpcSyncClient(
                     .setDeviceId(deviceId)
                     .setSince(since ?: "")
                     .setClientTime(clientTime)
+                    .addAllCapabilities(listOf("lists"))
                     .build()
             )
             .build()
@@ -164,6 +165,78 @@ class GrpcSyncClient(
             .build()
 
         sendChange(change)
+    }
+
+    /**
+     * Send a list change to the server.
+     */
+    fun sendListChange(change: ListChange) {
+        val message = SyncMessage.newBuilder()
+            .setListChange(change)
+            .build()
+
+        requestObserver?.onNext(message)
+        Log.d(TAG, "Sent list change: ${change.changeCase}")
+    }
+
+    /**
+     * Send a list definition upsert to the server.
+     */
+    fun sendListDefinitionUpsert(deviceId: String, data: ListDefinitionData) {
+        val change = ListChange.newBuilder()
+            .setDeviceId(deviceId)
+            .setTimestamp(java.time.ZonedDateTime.now().format(
+                java.time.format.DateTimeFormatter.ISO_OFFSET_DATE_TIME
+            ))
+            .setUpsertList(data)
+            .build()
+
+        sendListChange(change)
+    }
+
+    /**
+     * Send a list definition delete to the server.
+     */
+    fun sendListDefinitionDelete(deviceId: String, listId: String) {
+        val change = ListChange.newBuilder()
+            .setDeviceId(deviceId)
+            .setTimestamp(java.time.ZonedDateTime.now().format(
+                java.time.format.DateTimeFormatter.ISO_OFFSET_DATE_TIME
+            ))
+            .setDeleteListId(listId)
+            .build()
+
+        sendListChange(change)
+    }
+
+    /**
+     * Send a list item upsert to the server.
+     */
+    fun sendListItemUpsert(deviceId: String, data: ListItemData) {
+        val change = ListChange.newBuilder()
+            .setDeviceId(deviceId)
+            .setTimestamp(java.time.ZonedDateTime.now().format(
+                java.time.format.DateTimeFormatter.ISO_OFFSET_DATE_TIME
+            ))
+            .setUpsertItem(data)
+            .build()
+
+        sendListChange(change)
+    }
+
+    /**
+     * Send a list item delete to the server.
+     */
+    fun sendListItemDelete(deviceId: String, itemId: String) {
+        val change = ListChange.newBuilder()
+            .setDeviceId(deviceId)
+            .setTimestamp(java.time.ZonedDateTime.now().format(
+                java.time.format.DateTimeFormatter.ISO_OFFSET_DATE_TIME
+            ))
+            .setDeleteItemId(itemId)
+            .build()
+
+        sendListChange(change)
     }
 
     /**
@@ -281,7 +354,6 @@ fun TodoData.toMap(): Map<String, Any?> = mapOf(
     "scheduled_date" to scheduledDate.ifEmpty { null },
     "due_date" to dueDate.ifEmpty { null },
     "tags" to tagsList.joinToString(",").ifEmpty { null },
-    "estimated_minutes" to if (estimatedMinutes > 0) estimatedMinutes else null,
     "url" to url.ifEmpty { null },
     "created_at" to createdAt,
     "completed_at" to completedAt.ifEmpty { null },

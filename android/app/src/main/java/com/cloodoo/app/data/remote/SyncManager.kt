@@ -8,6 +8,8 @@ package com.cloodoo.app.data.remote
 
 import android.util.Log
 import com.cloodoo.app.data.local.CloodooDatabase
+import com.cloodoo.app.data.local.ListDefinitionEntity
+import com.cloodoo.app.data.local.ListItemEntity
 import com.cloodoo.app.data.local.TodoEntity
 import com.cloodoo.app.data.security.CertificateManager
 import com.cloodoo.app.proto.CloodooSync.*
@@ -34,6 +36,7 @@ class SyncManager(
     }
 
     private val todoDao = database.todoDao()
+    private val listDao = database.listDao()
     private val pendingSyncDao = database.pendingSyncDao()
     private var grpcClient: GrpcSyncClient? = null
     private var syncJob: Job? = null
@@ -341,6 +344,42 @@ class SyncManager(
                 }
             }
 
+            SyncMessage.MsgCase.LIST_CHANGE -> {
+                val change = message.listChange
+                Log.d(TAG, "Received list change from ${change.deviceId}: ${change.changeCase}")
+
+                when (change.changeCase) {
+                    ListChange.ChangeCase.UPSERT_LIST -> {
+                        handleRemoteListUpsert(change.upsertList, change.timestamp)
+                    }
+                    ListChange.ChangeCase.DELETE_LIST_ID -> {
+                        handleRemoteListDelete(change.deleteListId, change.timestamp)
+                    }
+                    ListChange.ChangeCase.UPSERT_ITEM -> {
+                        handleRemoteListItemUpsert(change.upsertItem, change.timestamp)
+                    }
+                    ListChange.ChangeCase.DELETE_ITEM_ID -> {
+                        handleRemoteListItemDelete(change.deleteItemId, change.timestamp)
+                    }
+                    else -> {
+                        Log.w(TAG, "Unknown list change type: ${change.changeCase}")
+                    }
+                }
+
+                // Track receipt of pending changes from initial batch
+                if (pendingChangesRemaining > 0) {
+                    pendingChangesRemaining--
+                    if (pendingChangesRemaining == 0) {
+                        val serverTime = pendingAckServerTime ?: ""
+                        lastServerTime = serverTime
+                        pendingAckServerTime = null
+                        Log.d(TAG, "All pending changes received, advancing lastServerTime to $lastServerTime")
+                        _syncEvents.emit(SyncEvent.InitialSyncComplete(serverTime, pendingChangesTotal))
+                        pendingChangesTotal = 0
+                    }
+                }
+            }
+
             SyncMessage.MsgCase.RESET -> {
                 val reset = message.reset
                 val originDeviceId = reset.deviceId
@@ -469,6 +508,179 @@ class SyncManager(
         }
     }
 
+    // ── List sync: send methods ──
+
+    suspend fun sendListDefinitionUpsert(entity: ListDefinitionEntity) {
+        val client = grpcClient
+        if (client == null || _connectionState.value != ConnectionState.CONNECTED) {
+            Log.d(TAG, "Not connected, skipping list definition upsert for ${entity.id}")
+            return
+        }
+        client.sendListDefinitionUpsert(deviceId, entity.toProto())
+    }
+
+    suspend fun sendListDefinitionDelete(listId: String) {
+        val client = grpcClient
+        if (client == null || _connectionState.value != ConnectionState.CONNECTED) {
+            Log.d(TAG, "Not connected, skipping list definition delete for $listId")
+            return
+        }
+        client.sendListDefinitionDelete(deviceId, listId)
+    }
+
+    suspend fun sendListItemUpsert(entity: ListItemEntity) {
+        val client = grpcClient
+        if (client == null || _connectionState.value != ConnectionState.CONNECTED) {
+            Log.d(TAG, "Not connected, skipping list item upsert for ${entity.id}")
+            return
+        }
+        client.sendListItemUpsert(deviceId, entity.toProto())
+    }
+
+    suspend fun sendListItemDelete(itemId: String) {
+        val client = grpcClient
+        if (client == null || _connectionState.value != ConnectionState.CONNECTED) {
+            Log.d(TAG, "Not connected, skipping list item delete for $itemId")
+            return
+        }
+        client.sendListItemDelete(deviceId, itemId)
+    }
+
+    // ── List sync: remote handlers ──
+
+    private suspend fun handleRemoteListUpsert(data: ListDefinitionData, timestamp: String) {
+        val entity = data.toEntity(timestamp)
+
+        val existing = listDao.getCurrentListDefinitionById(entity.id)
+        if (existing != null && compareTimestamps(existing.validFrom, entity.validFrom) >= 0) {
+            Log.d(TAG, "Skipping remote list upsert - local version is newer")
+            return
+        }
+
+        if (existing != null) {
+            listDao.markDefinitionSuperseded(entity.id, entity.validFrom)
+        }
+        listDao.insertDefinition(entity)
+
+        // Migrate items from any duplicate lists with the same name but different id
+        val duplicates = listDao.findDuplicateDefinitions(entity.name.lowercase(), entity.id)
+        for (dup in duplicates) {
+            val orphanedItems = listDao.getCurrentItemsForList(dup.id)
+            if (orphanedItems.isNotEmpty()) {
+                Log.d(TAG, "Migrating ${orphanedItems.size} items from old list ${dup.id} to ${entity.id}")
+                for (item in orphanedItems) {
+                    // Supersede old item and create new one under the new list id
+                    listDao.markItemSuperseded(item.id, entity.validFrom)
+                    listDao.insertItem(item.copy(rowId = 0, listId = entity.id, validFrom = entity.validFrom, validTo = null))
+                }
+            }
+            // Now supersede the old definition
+            listDao.markDefinitionSuperseded(dup.id, entity.validFrom)
+        }
+
+        Log.d(TAG, "Applied remote list upsert for ${entity.id}")
+    }
+
+    private suspend fun handleRemoteListDelete(listId: String, timestamp: String) {
+        val existing = listDao.getCurrentListDefinitionById(listId)
+        if (existing != null) {
+            listDao.markDefinitionSuperseded(listId, timestamp)
+            listDao.markAllItemsSupersededForList(listId, timestamp)
+            Log.d(TAG, "Applied remote list delete for $listId")
+        }
+    }
+
+    private suspend fun handleRemoteListItemUpsert(data: ListItemData, timestamp: String) {
+        val entity = data.toEntity(timestamp)
+
+        val existing = listDao.getCurrentListItemById(entity.id)
+        if (existing != null && compareTimestamps(existing.validFrom, entity.validFrom) >= 0) {
+            Log.d(TAG, "Skipping remote list item upsert - local version is newer")
+            return
+        }
+
+        if (existing != null) {
+            listDao.markItemSuperseded(entity.id, entity.validFrom)
+        }
+        listDao.insertItem(entity)
+        Log.d(TAG, "Applied remote list item upsert for ${entity.id}")
+    }
+
+    private suspend fun handleRemoteListItemDelete(itemId: String, timestamp: String) {
+        val existing = listDao.getCurrentListItemById(itemId)
+        if (existing != null) {
+            listDao.markItemSuperseded(itemId, timestamp)
+            Log.d(TAG, "Applied remote list item delete for $itemId")
+        }
+    }
+
+    // ── List proto conversions ──
+
+    private fun ListDefinitionEntity.toProto(): ListDefinitionData {
+        val sectionsList = sections?.let { json ->
+            try {
+                org.json.JSONArray(json).let { arr ->
+                    (0 until arr.length()).map { arr.getString(it) }
+                }
+            } catch (e: Exception) {
+                emptyList()
+            }
+        } ?: emptyList()
+
+        return ListDefinitionData.newBuilder()
+            .setId(id)
+            .setName(name)
+            .setDescription(description ?: "")
+            .addAllSections(sectionsList)
+            .setCreatedAt(createdAt)
+            .build()
+    }
+
+    private fun ListDefinitionData.toEntity(validFrom: String): ListDefinitionEntity {
+        val sectionsJson = if (sectionsList.isNotEmpty()) {
+            org.json.JSONArray(sectionsList).toString()
+        } else null
+
+        return ListDefinitionEntity(
+            id = id,
+            name = name,
+            nameNormalized = name.lowercase(),
+            description = description.ifEmpty { null },
+            sections = sectionsJson,
+            createdAt = createdAt,
+            validFrom = validFrom,
+            validTo = null,
+            deviceId = deviceId
+        )
+    }
+
+    private fun ListItemEntity.toProto(): ListItemData {
+        return ListItemData.newBuilder()
+            .setId(id)
+            .setListId(listId)
+            .setTitle(title)
+            .setSection(section ?: "")
+            .setChecked(checked)
+            .setNotes(notes ?: "")
+            .setCreatedAt(createdAt)
+            .build()
+    }
+
+    private fun ListItemData.toEntity(validFrom: String): ListItemEntity {
+        return ListItemEntity(
+            id = id,
+            listId = listId,
+            title = title,
+            section = section.ifEmpty { null },
+            checked = checked,
+            notes = notes.ifEmpty { null },
+            createdAt = createdAt,
+            validFrom = validFrom,
+            validTo = null,
+            deviceId = deviceId
+        )
+    }
+
     private fun TodoEntity.toProto(): TodoData {
         // Parse attachment hashes from JSON array string
         val attachmentHashesList = attachmentHashes?.let { json ->
@@ -490,7 +702,7 @@ class SyncManager(
             .setScheduledDate(scheduledDate ?: "")
             .setDueDate(dueDate ?: "")
             .addAllTags(tags?.split(",")?.filter { it.isNotBlank() } ?: emptyList())
-            .setEstimatedMinutes(estimatedMinutes ?: 0)
+            .setEstimatedMinutes(0)
             .setUrl(url ?: "")
             .setCreatedAt(createdAt)
             .setCompletedAt(completedAt ?: "")
@@ -517,7 +729,6 @@ class SyncManager(
             scheduledDate = scheduledDate.ifEmpty { null },
             dueDate = dueDate.ifEmpty { null },
             tags = tagsList.joinToString(",").ifEmpty { null },
-            estimatedMinutes = if (estimatedMinutes > 0) estimatedMinutes else null,
             url = url.ifEmpty { null },
             parentId = parentId.ifEmpty { null },
             repeatInterval = if (repeatInterval > 0) repeatInterval else null,

@@ -143,7 +143,6 @@
         scheduled_date TEXT,
         due_date TEXT,
         tags TEXT,
-        estimated_minutes INTEGER,
         location_info TEXT,
         url TEXT,
         parent_id TEXT,
@@ -252,7 +251,69 @@
          key TEXT PRIMARY KEY,
          value TEXT,
          updated_at TEXT NOT NULL
-       )"))
+       )")
+
+    ;;── List Management Tables ──────────────────────────────────────────────
+
+    ;; List definitions (temporal)
+    (sqlite:execute-non-query db "
+      CREATE TABLE IF NOT EXISTS list_definitions (
+        row_id INTEGER PRIMARY KEY AUTOINCREMENT,
+        id TEXT NOT NULL,
+        name TEXT NOT NULL,
+        description TEXT,
+        sections TEXT,
+        created_at TEXT NOT NULL,
+        device_id TEXT NOT NULL DEFAULT 'unknown',
+        valid_from TEXT NOT NULL,
+        valid_to TEXT
+      )")
+
+    ;; Indexes for list definitions
+    (sqlite:execute-non-query db "
+      CREATE INDEX IF NOT EXISTS idx_list_defs_current
+      ON list_definitions(id, valid_to) WHERE valid_to IS NULL")
+
+    ;; Case-insensitive unique name index for current definitions
+    (handler-case
+        (sqlite:execute-non-query db "
+          CREATE UNIQUE INDEX IF NOT EXISTS idx_list_defs_unique_name
+          ON list_definitions(LOWER(name)) WHERE valid_to IS NULL")
+      (error () nil))  ; May fail if index exists with different definition
+
+    ;; List items (temporal, no SQL FK — app-level integrity)
+    (sqlite:execute-non-query db "
+      CREATE TABLE IF NOT EXISTS list_items (
+        row_id INTEGER PRIMARY KEY AUTOINCREMENT,
+        id TEXT NOT NULL,
+        list_id TEXT NOT NULL,
+        title TEXT NOT NULL,
+        section TEXT,
+        checked INTEGER DEFAULT 0,
+        notes TEXT,
+        created_at TEXT NOT NULL,
+        device_id TEXT NOT NULL DEFAULT 'unknown',
+        valid_from TEXT NOT NULL,
+        valid_to TEXT
+      )")
+
+    ;; Indexes for list items
+    (sqlite:execute-non-query db "
+      CREATE INDEX IF NOT EXISTS idx_list_items_current
+      ON list_items(id, valid_to) WHERE valid_to IS NULL")
+
+    (sqlite:execute-non-query db "
+      CREATE INDEX IF NOT EXISTS idx_list_items_list_id
+      ON list_items(list_id) WHERE valid_to IS NULL")
+
+    ;; Device capabilities table for sync capability negotiation
+    (sqlite:execute-non-query db "
+      CREATE TABLE IF NOT EXISTS device_capabilities (
+        device_id TEXT PRIMARY KEY,
+        capabilities TEXT,
+        last_seen TEXT,
+        device_name TEXT
+      )"))
   t)
 
 ;;── Timestamp Helpers ─────────────────────────────────────────────────────────
@@ -446,7 +507,7 @@
                        location-info url parent-id created-at completed-at
                        valid-from valid-to device-id
                        &optional repeat-interval repeat-unit enriching-p attachment-hashes) row
-    (declare (ignore row-id valid-from valid-to parent-id))
+    (declare (ignore row-id valid-from valid-to parent-id estimated-minutes))
     (make-instance 'todo
                    :id id
                    :title title
@@ -457,8 +518,6 @@
                    :due-date (parse-timestamp due-date)
                    :tags (when (and tags (not (eql tags :null)))
                            (coerce (jzon:parse tags) 'list))
-                   :estimated-minutes (unless (eql estimated-minutes :null)
-                                        estimated-minutes)
                    :location-info (when (and location-info (not (eql location-info :null)))
                                     (let ((ht (jzon:parse location-info)))
                                       (when (hash-table-p ht)
@@ -539,7 +598,7 @@
           (lt:format-rfc3339-timestring nil (todo-due-date todo)))
         (when (todo-tags todo)
           (jzon:stringify (coerce (todo-tags todo) 'vector)))
-        (todo-estimated-minutes todo)
+        nil  ; estimated_minutes removed
         (when (todo-location-info todo)
           (let ((loc (todo-location-info todo)))
             (jzon:stringify
@@ -762,23 +821,31 @@
 (defvar *use-sqlite* t
   "When T, use SQLite storage. When NIL, use JSON storage.")
 
+(defvar *db-initializing* nil
+  "Guard against re-entrant calls to ensure-db-initialized.")
+
 (defun ensure-db-initialized ()
   "Ensure the database is initialized, migrating from JSON if needed."
-  (when *use-sqlite*
-    (let ((db-exists (probe-file (db-file)))
-          (json-exists (probe-file (todos-file))))
-      (cond
-        ;; Database exists - just ensure tables exist
-        (db-exists
-         (init-db))
-        ;; JSON exists but no database - migrate
-        ((and json-exists (not db-exists))
-         (migrate-json-to-db))
-        ;; Neither exists - create fresh database
-        (t
-         (init-db))))
-    ;; Always attempt user context migration (idempotent)
-    (migrate-user-context-to-db)))
+  (when (and *use-sqlite* (not *db-initializing*))
+    (let ((*db-initializing* t))
+      (let ((db-exists (probe-file (db-file)))
+            (json-exists (probe-file (todos-file))))
+        (cond
+          ;; Database exists - just ensure tables exist
+          (db-exists
+           (init-db))
+          ;; JSON exists but no database - migrate
+          ((and json-exists (not db-exists))
+           (migrate-json-to-db))
+          ;; Neither exists - create fresh database
+          (t
+           (init-db))))
+      ;; Always attempt user context migration (idempotent)
+      (migrate-user-context-to-db)
+      ;; Seed default lists if none exist (seed-default-lists is defined in lists.lisp,
+      ;; loaded after db.lisp, but this runs lazily at first use, not at load time)
+      (when (fboundp 'seed-default-lists)
+        (seed-default-lists)))))
 
 ;;── Redefine Storage Functions to Use SQLite ──────────────────────────────────
 
@@ -859,6 +926,466 @@
   (ensure-db-initialized)
   (db-load-todos-at timestamp))
 
+;;── List Definition CRUD ──────────────────────────────────────────────────────
+
+(defun row-to-list-definition (row)
+  "Convert a database row to a list-definition object.
+   ROW is a list: (row_id id name description sections created_at device_id valid_from valid_to)."
+  (destructuring-bind (row-id id name description sections created-at
+                       device-id valid-from valid-to) row
+    (declare (ignore row-id valid-from valid-to))
+    (make-instance 'list-definition
+                   :id id
+                   :name name
+                   :description (unless (or (eql description :null)
+                                          (eql description 'null))
+                                 description)
+                   :sections (when (and sections
+                                        (not (eql sections :null))
+                                        (not (eql sections 'null)))
+                               (coerce (jzon:parse sections) 'list))
+                   :created-at (lt:parse-timestring created-at)
+                   :device-id (unless (or (eql device-id :null)
+                                          (eql device-id 'null))
+                                device-id))))
+
+(defun db-save-list-definition (list-def &key valid-from)
+  "Save a list definition using append-only temporal semantics.
+   Returns T on success, NIL if the upsert was rejected (e.g., stale)."
+  (with-db (db)
+    (let ((now (or valid-from (now-iso)))
+          (committed nil))
+      (sqlite:execute-non-query db "BEGIN IMMEDIATE")
+      (unwind-protect
+           (progn
+             ;; Check if this list was deleted more recently than the incoming upsert.
+             ;; If the most recent row for this ID has valid_to > incoming valid_from,
+             ;; then a delete happened after this upsert was created — reject it.
+             (let ((most-recent-valid-to
+                     (sqlite:execute-single db "
+                       SELECT MAX(valid_to) FROM list_definitions
+                       WHERE id = ? AND valid_to IS NOT NULL"
+                       (list-def-id list-def))))
+               (when (and most-recent-valid-to
+                          (stringp most-recent-valid-to)
+                          (string> most-recent-valid-to now))
+                 (llog:info "Rejecting stale list upsert (deleted more recently)"
+                            :id (list-def-id list-def)
+                            :upsert-time now
+                            :delete-time most-recent-valid-to)
+                 (sqlite:execute-non-query db "ROLLBACK")
+                 (setf committed t)  ; prevent double rollback in cleanup
+                 (return-from db-save-list-definition nil)))
+             ;; Mark existing current version as superseded (by id)
+             (sqlite:execute-non-query db "
+               UPDATE list_definitions SET valid_to = ?
+               WHERE id = ? AND valid_to IS NULL"
+               now (list-def-id list-def))
+             ;; Also supersede any current row with the same normalized name
+             ;; (handles merge when two devices independently created same-named list)
+             (sqlite:execute-non-query db "
+               UPDATE list_definitions SET valid_to = ?
+               WHERE LOWER(name) = LOWER(?) AND valid_to IS NULL"
+               now (list-def-name list-def))
+             ;; Insert the new version
+             (sqlite:execute-non-query db "
+               INSERT INTO list_definitions (id, name, description, sections, created_at,
+                                             device_id, valid_from, valid_to)
+               VALUES (?, ?, ?, ?, ?, ?, ?, NULL)"
+               (list-def-id list-def)
+               (list-def-name list-def)
+               (list-def-description list-def)
+               (when (list-def-sections list-def)
+                 (jzon:stringify (coerce (list-def-sections list-def) 'vector)))
+               (lt:format-rfc3339-timestring nil (list-def-created-at list-def))
+               (or (list-def-device-id list-def) (get-device-id))
+               now)
+             (sqlite:execute-non-query db "COMMIT")
+             (setf committed t)
+             ;; Notify sync
+             (when (and *list-change-hook* (not *suppress-change-notifications*))
+               (handler-case (funcall *list-change-hook* list-def)
+                 (error (e) (llog:warn "List change notification failed: ~A" e))))
+             t)
+        (unless committed
+          (ignore-errors (sqlite:execute-non-query db "ROLLBACK")))))))
+
+(defun db-load-list-definitions ()
+  "Load all current (non-superseded) list definitions."
+  (ensure-db-initialized)
+  (with-db (db)
+    (let ((rows (sqlite:execute-to-list db "
+      SELECT row_id, id, name, description, sections, created_at,
+             device_id, valid_from, valid_to
+      FROM list_definitions
+      WHERE valid_to IS NULL
+      ORDER BY name COLLATE NOCASE")))
+      (mapcar #'row-to-list-definition rows))))
+
+(defun db-find-list-by-name (name)
+  "Find a current list definition by exact case-insensitive name match.
+   Returns a list-definition or NIL."
+  (with-db (db)
+    (let ((rows (sqlite:execute-to-list db "
+      SELECT row_id, id, name, description, sections, created_at,
+             device_id, valid_from, valid_to
+      FROM list_definitions
+      WHERE LOWER(name) = LOWER(?) AND valid_to IS NULL"
+      name)))
+      (when rows
+        (row-to-list-definition (first rows))))))
+
+(defun db-find-list-by-id (list-id)
+  "Find a current list definition by ID.
+   Returns a list-definition or NIL."
+  (with-db (db)
+    (let ((rows (sqlite:execute-to-list db "
+      SELECT row_id, id, name, description, sections, created_at,
+             device_id, valid_from, valid_to
+      FROM list_definitions
+      WHERE id = ? AND valid_to IS NULL"
+      list-id)))
+      (when rows
+        (row-to-list-definition (first rows))))))
+
+(defun db-delete-list-definition (list-def-id)
+  "Delete a list definition and all its items by temporal close-out.
+   Both the definition and items are closed in one transaction."
+  (with-db (db)
+    (let ((now (now-iso))
+          (committed nil))
+      (sqlite:execute-non-query db "BEGIN IMMEDIATE")
+      (unwind-protect
+           (progn
+             ;; Close all current items on this list
+             (sqlite:execute-non-query db "
+               UPDATE list_items SET valid_to = ?
+               WHERE list_id = ? AND valid_to IS NULL"
+               now list-def-id)
+             ;; Close the definition
+             (sqlite:execute-non-query db "
+               UPDATE list_definitions SET valid_to = ?
+               WHERE id = ? AND valid_to IS NULL"
+               now list-def-id)
+             (sqlite:execute-non-query db "COMMIT")
+             (setf committed t)
+             ;; Notify sync
+             (when (and *list-delete-hook* (not *suppress-change-notifications*))
+               (handler-case (funcall *list-delete-hook* list-def-id)
+                 (error (e) (llog:warn "List delete notification failed: ~A" e)))))
+        (unless committed
+          (ignore-errors (sqlite:execute-non-query db "ROLLBACK")))))))
+
+;;── List Item CRUD ───────────────────────────────────────────────────────────
+
+(defun row-to-list-item (row)
+  "Convert a database row to a list-item object.
+   ROW is a list: (row_id id list_id title section checked notes created_at device_id valid_from valid_to)."
+  (destructuring-bind (row-id id list-id title section checked notes
+                       created-at device-id valid-from valid-to) row
+    (declare (ignore row-id valid-from valid-to))
+    (make-instance 'list-item
+                   :id id
+                   :list-id list-id
+                   :title title
+                   :section (unless (or (eql section :null) (eql section 'null))
+                              section)
+                   :checked (and checked
+                                 (not (eql checked :null))
+                                 (not (eql checked 'null))
+                                 (= checked 1))
+                   :notes (unless (or (eql notes :null) (eql notes 'null))
+                            notes)
+                   :created-at (lt:parse-timestring created-at)
+                   :device-id (unless (or (eql device-id :null) (eql device-id 'null))
+                                device-id))))
+
+(defun db-save-list-item (item &key valid-from)
+  "Save a list item using append-only temporal semantics.
+   Validates that list_id references a current list definition.
+   Returns T on success, NIL if list doesn't exist."
+  (with-db (db)
+    ;; Validate list_id exists
+    (let ((list-exists (sqlite:execute-single db
+                         "SELECT 1 FROM list_definitions WHERE id = ? AND valid_to IS NULL"
+                         (list-item-list-id item))))
+      (unless list-exists
+        (llog:warn "Cannot save list item: list not found" :list-id (list-item-list-id item))
+        (return-from db-save-list-item nil)))
+    (let ((now (or valid-from (now-iso)))
+          (committed nil))
+      (sqlite:execute-non-query db "BEGIN IMMEDIATE")
+      (unwind-protect
+           (progn
+             ;; Mark existing current version as superseded
+             (sqlite:execute-non-query db "
+               UPDATE list_items SET valid_to = ?
+               WHERE id = ? AND valid_to IS NULL"
+               now (list-item-id item))
+             ;; Insert the new version
+             (sqlite:execute-non-query db "
+               INSERT INTO list_items (id, list_id, title, section, checked, notes,
+                                       created_at, device_id, valid_from, valid_to)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)"
+               (list-item-id item)
+               (list-item-list-id item)
+               (list-item-title item)
+               (list-item-section item)
+               (if (list-item-checked item) 1 0)
+               (list-item-notes item)
+               (lt:format-rfc3339-timestring nil (list-item-created-at item))
+               (or (list-item-device-id item) (get-device-id))
+               now)
+             (sqlite:execute-non-query db "COMMIT")
+             (setf committed t)
+             ;; Notify sync
+             (when (and *list-item-change-hook* (not *suppress-change-notifications*))
+               (handler-case (funcall *list-item-change-hook* item)
+                 (error (e) (llog:warn "List item change notification failed: ~A" e))))
+             t)
+        (unless committed
+          (ignore-errors (sqlite:execute-non-query db "ROLLBACK")))))))
+
+(defun db-load-list-items (list-id)
+  "Load all current items for a given list, ordered by section then title."
+  (with-db (db)
+    (let ((rows (sqlite:execute-to-list db "
+      SELECT row_id, id, list_id, title, section, checked, notes,
+             created_at, device_id, valid_from, valid_to
+      FROM list_items
+      WHERE list_id = ? AND valid_to IS NULL
+      ORDER BY section COLLATE NOCASE, title COLLATE NOCASE"
+      list-id)))
+      (mapcar #'row-to-list-item rows))))
+
+(defun db-check-list-item (item-id checked)
+  "Toggle the checked state of a list item.
+   CHECKED should be T or NIL. Returns T on success."
+  (with-db (db)
+    (let ((rows (sqlite:execute-to-list db "
+      SELECT row_id, id, list_id, title, section, checked, notes,
+             created_at, device_id, valid_from, valid_to
+      FROM list_items
+      WHERE id = ? AND valid_to IS NULL"
+      item-id)))
+      (when rows
+        (let* ((item (row-to-list-item (first rows)))
+               (now (now-iso)))
+          ;; Close out old row
+          (sqlite:execute-non-query db "
+            UPDATE list_items SET valid_to = ?
+            WHERE id = ? AND valid_to IS NULL"
+            now item-id)
+          ;; Insert updated row
+          (sqlite:execute-non-query db "
+            INSERT INTO list_items (id, list_id, title, section, checked, notes,
+                                    created_at, device_id, valid_from)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
+            (list-item-id item)
+            (list-item-list-id item)
+            (list-item-title item)
+            (or (list-item-section item) "")
+            (if checked 1 0)
+            (or (list-item-notes item) "")
+            (lt:format-rfc3339-timestring nil (list-item-created-at item))
+            (or (list-item-device-id item) "")
+            now)
+          ;; Notify sync
+          (setf (list-item-checked item) checked)
+          (when (and *list-item-change-hook* (not *suppress-change-notifications*))
+            (handler-case (funcall *list-item-change-hook* item)
+              (error (e) (llog:warn "List item change notification failed: ~A" e))))
+          t)))))
+
+(defun db-delete-list-item (item-id)
+  "Delete a list item by temporal close-out."
+  (with-db (db)
+    (let ((now (now-iso)))
+      (sqlite:execute-non-query db "
+        UPDATE list_items SET valid_to = ?
+        WHERE id = ? AND valid_to IS NULL"
+        now item-id)
+      ;; Notify sync
+      (when (and *list-item-delete-hook* (not *suppress-change-notifications*))
+        (handler-case (funcall *list-item-delete-hook* item-id)
+          (error (e) (llog:warn "List item delete notification failed: ~A" e)))))))
+
+(defun db-find-list-item-by-title (list-id title)
+  "Find a current list item by list-id and case-insensitive title match.
+   Returns a list-item or NIL."
+  (with-db (db)
+    (let ((rows (sqlite:execute-to-list db "
+      SELECT row_id, id, list_id, title, section, checked, notes,
+             created_at, device_id, valid_from, valid_to
+      FROM list_items
+      WHERE list_id = ? AND LOWER(title) = LOWER(?) AND valid_to IS NULL"
+      list-id title)))
+      (when rows
+        (row-to-list-item (first rows))))))
+
+;;── Atomic Todo-to-List-Item Conversion ──────────────────────────────────────
+
+(defun db-convert-todo-to-list-item (todo-id list-id title &key section notes)
+  "Atomically convert a todo into a list item.
+   Creates the list item and deletes the todo in a single transaction.
+   Returns the new list-item on success, NIL on failure."
+  (with-db (db)
+    ;; Validate list exists
+    (let ((list-exists (sqlite:execute-single db
+                         "SELECT 1 FROM list_definitions WHERE id = ? AND valid_to IS NULL"
+                         list-id)))
+      (unless list-exists
+        (llog:warn "Cannot convert: list not found" :list-id list-id)
+        (return-from db-convert-todo-to-list-item nil)))
+    ;; Validate todo exists
+    (let ((todo-exists (sqlite:execute-single db
+                         "SELECT 1 FROM todos WHERE id = ? AND valid_to IS NULL"
+                         todo-id)))
+      (unless todo-exists
+        (llog:warn "Cannot convert: todo not found" :todo-id todo-id)
+        (return-from db-convert-todo-to-list-item nil)))
+    (let ((now (now-iso))
+          (item-id (generate-id))
+          (committed nil)
+          (new-item nil))
+      (sqlite:execute-non-query db "BEGIN IMMEDIATE")
+      (unwind-protect
+           (progn
+             ;; Close the todo
+             (sqlite:execute-non-query db "
+               UPDATE todos SET valid_to = ?
+               WHERE id = ? AND valid_to IS NULL"
+               now todo-id)
+             ;; Create the list item
+             (sqlite:execute-non-query db "
+               INSERT INTO list_items (id, list_id, title, section, checked, notes,
+                                       created_at, device_id, valid_from, valid_to)
+               VALUES (?, ?, ?, ?, 0, ?, ?, ?, ?, NULL)"
+               item-id list-id title section notes
+               now (get-device-id) now)
+             (sqlite:execute-non-query db "COMMIT")
+             (setf committed t)
+             (setf new-item (make-instance 'list-item
+                                           :id item-id
+                                           :list-id list-id
+                                           :title title
+                                           :section section
+                                           :notes notes
+                                           :device-id (get-device-id)
+                                           :created-at (lt:now)))
+             new-item)
+        (unless committed
+          (ignore-errors (sqlite:execute-non-query db "ROLLBACK")))))))
+
+;;── List Sync Helpers ────────────────────────────────────────────────────────
+
+(defun db-load-current-list-rows-since (timestamp)
+  "Load current list definition rows where valid_from > timestamp.
+   Returns list of hash tables for sync."
+  (ensure-db-initialized)
+  (let ((ts (if (stringp timestamp) timestamp
+                (lt:format-rfc3339-timestring nil timestamp))))
+    (with-db (db)
+      (let ((rows (sqlite:execute-to-list db "
+        SELECT row_id, id, name, description, sections, created_at,
+               device_id, valid_from, valid_to
+        FROM list_definitions
+        WHERE valid_from > ? AND valid_to IS NULL
+        ORDER BY valid_from ASC" ts)))
+        (mapcar (lambda (row)
+                  (destructuring-bind (row-id id name description sections created-at
+                                      device-id valid-from valid-to) row
+                    (declare (ignore row-id))
+                    (let ((ht (make-hash-table :test #'equal)))
+                      (setf (gethash "id" ht) id)
+                      (setf (gethash "name" ht) name)
+                      (setf (gethash "description" ht) (db-null-to-json-null description))
+                      (setf (gethash "sections" ht) (db-null-to-json-null sections))
+                      (setf (gethash "created_at" ht) created-at)
+                      (setf (gethash "device_id" ht) device-id)
+                      (setf (gethash "valid_from" ht) valid-from)
+                      (setf (gethash "valid_to" ht) (db-null-to-json-null valid-to))
+                      ht)))
+                rows)))))
+
+(defun db-load-current-list-item-rows-since (timestamp)
+  "Load current list item rows where valid_from > timestamp.
+   Returns list of hash tables for sync."
+  (ensure-db-initialized)
+  (let ((ts (if (stringp timestamp) timestamp
+                (lt:format-rfc3339-timestring nil timestamp))))
+    (with-db (db)
+      (let ((rows (sqlite:execute-to-list db "
+        SELECT row_id, id, list_id, title, section, checked, notes,
+               created_at, device_id, valid_from, valid_to
+        FROM list_items
+        WHERE valid_from > ? AND valid_to IS NULL
+        ORDER BY valid_from ASC" ts)))
+        (mapcar (lambda (row)
+                  (destructuring-bind (row-id id list-id title section checked notes
+                                      created-at device-id valid-from valid-to) row
+                    (declare (ignore row-id))
+                    (let ((ht (make-hash-table :test #'equal)))
+                      (setf (gethash "id" ht) id)
+                      (setf (gethash "list_id" ht) list-id)
+                      (setf (gethash "title" ht) title)
+                      (setf (gethash "section" ht) (db-null-to-json-null section))
+                      (setf (gethash "checked" ht) (and checked (not (eql checked :null)) (= checked 1)))
+                      (setf (gethash "notes" ht) (db-null-to-json-null notes))
+                      (setf (gethash "created_at" ht) created-at)
+                      (setf (gethash "device_id" ht) device-id)
+                      (setf (gethash "valid_from" ht) valid-from)
+                      (setf (gethash "valid_to" ht) (db-null-to-json-null valid-to))
+                      ht)))
+                rows)))))
+
+;;── Device Capabilities ─────────────────────────────────────────────────────
+
+(defun db-save-device-capabilities (device-id capabilities &optional device-name)
+  "Save or update device capabilities. CAPABILITIES is a list of strings."
+  (with-db (db)
+    (sqlite:execute-non-query db "
+      INSERT INTO device_capabilities (device_id, capabilities, last_seen, device_name)
+      VALUES (?, ?, ?, ?)
+      ON CONFLICT(device_id) DO UPDATE SET
+        capabilities = excluded.capabilities,
+        last_seen = excluded.last_seen,
+        device_name = COALESCE(excluded.device_name, device_capabilities.device_name)"
+      device-id
+      (jzon:stringify (coerce capabilities 'vector))
+      (now-iso)
+      device-name)))
+
+(defun db-load-device-capabilities (device-id)
+  "Load capabilities for a device. Returns a list of capability strings."
+  (with-db (db)
+    (let ((caps-json (sqlite:execute-single db
+                       "SELECT capabilities FROM device_capabilities WHERE device_id = ?"
+                       device-id)))
+      (when (and caps-json (not (eql caps-json :null)))
+        (coerce (jzon:parse caps-json) 'list)))))
+
+(defun db-all-active-devices-have-capability-p (capability &key (days 90))
+  "Check if all devices seen within DAYS have the given capability.
+   Returns T if so (or if no devices at all)."
+  (with-db (db)
+    (let* ((cutoff (lt:format-rfc3339-timestring nil
+                     (lt:timestamp- (lt:now) days :day)))
+           (without (sqlite:execute-single db "
+             SELECT COUNT(*) FROM device_capabilities
+             WHERE last_seen > ?
+               AND (capabilities IS NULL
+                    OR capabilities NOT LIKE ?)"
+             cutoff (format nil "%~A%" capability))))
+      (or (null without) (eql without :null) (zerop without)))))
+
+(defun db-remove-device-capabilities (device-id)
+  "Remove a device from the capabilities table (for cert revoke)."
+  (with-db (db)
+    (sqlite:execute-non-query db
+      "DELETE FROM device_capabilities WHERE device_id = ?"
+      device-id)))
+
 ;;── Sync API ─────────────────────────────────────────────────────────────────
 
 (defun db-null-to-json-null (value)
@@ -875,6 +1402,7 @@
                        location-info url parent-id created-at completed-at
                        valid-from valid-to device-id
                        &optional repeat-interval repeat-unit enriching-p attachment-hashes) row
+    (declare (ignore estimated-minutes))
     (let ((ht (make-hash-table :test #'equal)))
       (setf (gethash "row_id" ht) row-id)
       (setf (gethash "id" ht) id)
@@ -885,7 +1413,6 @@
       (setf (gethash "scheduled_date" ht) (db-null-to-json-null scheduled-date))
       (setf (gethash "due_date" ht) (db-null-to-json-null due-date))
       (setf (gethash "tags" ht) (db-null-to-json-null tags))
-      (setf (gethash "estimated_minutes" ht) (db-null-to-json-null estimated-minutes))
       (setf (gethash "location_info" ht) (db-null-to-json-null location-info))
       (setf (gethash "url" ht) (db-null-to-json-null url))
       (setf (gethash "parent_id" ht) 'null)  ; parent-id no longer used

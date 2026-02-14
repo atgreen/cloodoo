@@ -14,12 +14,15 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.cloodoo.app.data.local.AppSettingsEntity
 import com.cloodoo.app.data.local.CloodooDatabase
+import com.cloodoo.app.data.local.ListDefinitionEntity
+import com.cloodoo.app.data.local.ListItemEntity
 import com.cloodoo.app.data.local.TodoEntity
 import com.cloodoo.app.data.remote.AttachmentSyncManager
 import com.cloodoo.app.data.remote.ConnectionState
 import com.cloodoo.app.data.remote.SyncEvent
 import com.cloodoo.app.data.remote.SyncManager
 import com.cloodoo.app.data.repository.AttachmentRepository
+import com.cloodoo.app.data.repository.ListRepository
 import com.cloodoo.app.data.repository.TodoRepository
 import com.cloodoo.app.ui.components.LocalAttachment
 import org.json.JSONArray
@@ -47,11 +50,16 @@ class TodoListViewModel(
     private val database = CloodooDatabase.getDatabase(application)
     private val repository = TodoRepository(database, deviceId)
     private val attachmentRepository = AttachmentRepository(application, database.attachmentDao())
+    private val listRepository = ListRepository(database, deviceId)
     private val syncManager = SyncManager(database, certificateManager, deviceId)
 
     // UI State
     private val _uiState = MutableStateFlow(TodoListUiState())
     val uiState: StateFlow<TodoListUiState> = _uiState.asStateFlow()
+
+    // List UI State
+    private val _listUiState = MutableStateFlow(ListUiState())
+    val listUiState: StateFlow<ListUiState> = _listUiState.asStateFlow()
 
     // Track which sections are collapsed (all groups start collapsed)
     private val _collapsedSections = MutableStateFlow(DateGroup.values().toSet())
@@ -79,6 +87,13 @@ class TodoListViewModel(
                 Pair(todos, grouped)
             }.collect { (todos, grouped) ->
                 _uiState.update { it.copy(todos = todos, groupedTodos = grouped, isLoading = false) }
+            }
+        }
+
+        // Observe list definitions
+        viewModelScope.launch {
+            listRepository.getListDefinitions().collect { lists ->
+                _listUiState.update { it.copy(lists = lists, isLoading = false) }
             }
         }
 
@@ -246,7 +261,8 @@ class TodoListViewModel(
                 tags = tags,
                 repeatInterval = repeatInterval,
                 repeatUnit = repeatUnit,
-                attachmentHashes = attachmentHashesJson
+                attachmentHashes = attachmentHashesJson,
+                enrichingP = true
             )
             syncManager.sendTodoUpsert(todo)
 
@@ -402,6 +418,73 @@ class TodoListViewModel(
         }
     }
 
+    // ── List management methods ──
+
+    fun getListItems(listId: String): Flow<List<ListItemEntity>> =
+        listRepository.getListItems(listId)
+
+    fun createList(name: String, description: String?, sections: String?) {
+        if (name.isBlank()) return
+        viewModelScope.launch {
+            val entity = listRepository.createListDefinition(
+                name = name.trim(),
+                description = description,
+                sections = sections
+            )
+            syncManager.sendListDefinitionUpsert(entity)
+        }
+    }
+
+    fun updateList(id: String, name: String?, description: String?, sections: String?) {
+        viewModelScope.launch {
+            val updated = listRepository.updateListDefinition(id, name, description, sections)
+            if (updated != null) {
+                syncManager.sendListDefinitionUpsert(updated)
+            }
+        }
+    }
+
+    fun deleteList(id: String) {
+        viewModelScope.launch {
+            listRepository.deleteListDefinition(id)
+            syncManager.sendListDefinitionDelete(id)
+        }
+    }
+
+    fun addListItem(listId: String, title: String, section: String?, notes: String?) {
+        if (title.isBlank()) return
+        viewModelScope.launch {
+            val entity = listRepository.addListItem(listId, title.trim(), section, notes)
+            syncManager.sendListItemUpsert(entity)
+        }
+    }
+
+    fun toggleListItem(itemId: String) {
+        viewModelScope.launch {
+            val updated = listRepository.toggleListItem(itemId)
+            if (updated != null) {
+                syncManager.sendListItemUpsert(updated)
+            }
+        }
+    }
+
+    fun deleteListItem(itemId: String) {
+        viewModelScope.launch {
+            listRepository.deleteListItem(itemId)
+            syncManager.sendListItemDelete(itemId)
+        }
+    }
+
+    fun deleteCheckedListItems(listId: String) {
+        viewModelScope.launch {
+            val items = listRepository.getCheckedListItems(listId)
+            items.forEach { item ->
+                listRepository.deleteListItem(item.id)
+                syncManager.sendListItemDelete(item.id)
+            }
+        }
+    }
+
     fun clearSyncMessage() {
         _uiState.update { it.copy(lastSyncResult = null, syncError = null) }
     }
@@ -510,4 +593,9 @@ data class TodoListUiState(
     val lastSyncResult: String? = null,
     val syncError: String? = null,
     val showConfetti: Boolean = false
+)
+
+data class ListUiState(
+    val lists: List<ListDefinitionEntity> = emptyList(),
+    val isLoading: Boolean = true
 )

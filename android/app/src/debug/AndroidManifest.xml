@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <application>
+        <!-- Debug-only: Enable PII, screenshots, and view hierarchy for detailed crash reports -->
+        <meta-data android:name="io.sentry.send-default-pii" android:value="true" tools:replace="android:value" />
+        <meta-data android:name="io.sentry.attach-screenshot" android:value="true" tools:replace="android:value" />
+        <meta-data android:name="io.sentry.attach-view-hierarchy" android:value="true" tools:replace="android:value" />
+
+        <!-- Debug: 100% performance trace sampling -->
+        <meta-data android:name="io.sentry.traces.sample-rate" android:value="1.0" tools:replace="android:value" />
+    </application>
+
+</manifest>

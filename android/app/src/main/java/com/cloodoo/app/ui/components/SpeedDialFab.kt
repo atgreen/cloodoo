@@ -21,6 +21,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.FlashOn
+import androidx.compose.material.icons.outlined.Checklist
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -34,6 +35,7 @@ import androidx.compose.ui.unit.dp
 fun SpeedDialFab(
     onTypeClick: () -> Unit,
     onQuickAddClick: () -> Unit,
+    onNewListClick: () -> Unit,
 ) {
     var expanded by remember { mutableStateOf(false) }
     val rotation by animateFloatAsState(
@@ -67,7 +69,7 @@ fun SpeedDialFab(
             verticalArrangement = Arrangement.spacedBy(12.dp),
             modifier = Modifier
                 .align(Alignment.BottomEnd)
-                .padding(end = 16.dp, bottom = 16.dp)
+                .padding(end = 16.dp, bottom = 88.dp)
         ) {
             // Mini-FABs (bottom to top, closest to FAB first)
             AnimatedVisibility(
@@ -85,6 +87,15 @@ fun SpeedDialFab(
                     horizontalAlignment = Alignment.End,
                     verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
+                    MiniFabWithLabel(
+                        label = "List",
+                        icon = Icons.Outlined.Checklist,
+                        contentDescription = "New list",
+                        onClick = {
+                            expanded = false
+                            onNewListClick()
+                        }
+                    )
                     MiniFabWithLabel(
                         label = "Form",
                         icon = Icons.Default.Edit,

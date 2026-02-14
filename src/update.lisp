@@ -224,7 +224,56 @@
    (sync-error-message
     :initform nil
     :accessor model-sync-error-message
-    :documentation "Error message if sync failed."))
+    :documentation "Error message if sync failed.")
+   ;; Lists management state
+   (lists-data
+    :initform nil
+    :accessor model-lists-data
+    :documentation "Loaded list definitions for lists overview.")
+   (lists-cursor
+    :initform 0
+    :accessor model-lists-cursor
+    :documentation "Selected list index in lists overview.")
+   (list-detail-def
+    :initform nil
+    :accessor model-list-detail-def
+    :documentation "List definition currently being viewed.")
+   (list-detail-items
+    :initform nil
+    :accessor model-list-detail-items
+    :documentation "Items for the list being viewed.")
+   (list-detail-cursor
+    :initform 0
+    :accessor model-list-detail-cursor
+    :documentation "Selected item index in list detail view.")
+   (list-detail-scroll
+    :initform 0
+    :accessor model-list-detail-scroll
+    :documentation "Scroll offset in list detail view.")
+   (list-form-name-input
+    :initform nil
+    :accessor model-list-form-name-input
+    :documentation "Text input for list name in create/edit form.")
+   (list-form-desc-input
+    :initform nil
+    :accessor model-list-form-desc-input
+    :documentation "Text input for list description in create/edit form.")
+   (list-form-sections-input
+    :initform nil
+    :accessor model-list-form-sections-input
+    :documentation "Text input for list sections in create/edit form.")
+   (list-form-active-field
+    :initform :name
+    :accessor model-list-form-active-field
+    :documentation "Active field in list create/edit form: :name, :desc, :sections, :submit.")
+   (list-form-editing-id
+    :initform nil
+    :accessor model-list-form-editing-id
+    :documentation "List ID being edited, nil for new list.")
+   (list-item-add-input
+    :initform nil
+    :accessor model-list-item-add-input
+    :documentation "Text input for adding a new item to a list."))
   (:documentation "The application model following TEA pattern."))
 
 (defun make-initial-model ()
@@ -1074,6 +1123,13 @@
        (setf (model-cursor model) 0)
        (values model nil))
 
+      ;; Lists management (W)
+      ((and (characterp key) (char= key #\W))
+       (setf (model-lists-data model) (db-load-list-definitions))
+       (setf (model-lists-cursor model) 0)
+       (setf (model-view-state model) :lists-overview)
+       (values model nil))
+
       ;; Help view
       ((and (characterp key) (char= key #\?))
        (setf (model-view-state model) :help)
@@ -1125,8 +1181,7 @@
                 (return-from handle-list-keys
                   (values model (list (make-enrichment-cmd (todo-id todo)
                                                            (todo-title todo)
-                                                           (todo-description todo)
-                                                           nil)  ; No parent context
+                                                           (todo-description todo))
                                       (make-spinner-start-cmd
                                        (model-enrichment-spinner model))))))))))
        (values model nil))
@@ -1436,8 +1491,7 @@
                     (return-from handle-add-edit-keys
                       (values model (list (make-enrichment-cmd (todo-id new-todo)
                                                                title
-                                                               desc-input
-                                                               nil)
+                                                               desc-input)
                                           (make-spinner-start-cmd
                                            (model-enrichment-spinner model)))))))))))
        (values model nil))
@@ -1982,6 +2036,309 @@
   (setf (model-view-state model) :list)
   (values model nil))
 
+;;── Lists Overview Key Handling ────────────────────────────────────────────────
+
+(defun reload-lists-data (model)
+  "Reload list definitions from DB into model."
+  (setf (model-lists-data model) (db-load-list-definitions))
+  (setf (model-lists-cursor model)
+        (min (model-lists-cursor model)
+             (max 0 (1- (length (model-lists-data model)))))))
+
+(defun handle-lists-overview-keys (model msg)
+  "Handle keyboard input in lists overview view."
+  (let ((key (tui:key-msg-key msg))
+        (lists (model-lists-data model)))
+    (cond
+      ;; Quit / back to main
+      ((or (eql key :escape)
+           (and (characterp key) (char= key #\q)))
+       (setf (model-view-state model) :list)
+       (values model nil))
+
+      ;; Navigate up
+      ((or (eql key :up) (and (characterp key) (member key '(#\k #\p))))
+       (when (> (model-lists-cursor model) 0)
+         (decf (model-lists-cursor model)))
+       (values model nil))
+
+      ;; Navigate down
+      ((or (eql key :down) (and (characterp key) (member key '(#\j #\n))))
+       (when (< (model-lists-cursor model) (1- (length lists)))
+         (incf (model-lists-cursor model)))
+       (values model nil))
+
+      ;; Enter - open list detail
+      ((eql key :enter)
+       (when (and lists (< (model-lists-cursor model) (length lists)))
+         (let ((list-def (nth (model-lists-cursor model) lists)))
+           (setf (model-list-detail-def model) list-def)
+           (setf (model-list-detail-items model) (db-load-list-items (list-def-id list-def)))
+           (setf (model-list-detail-cursor model) 0)
+           (setf (model-list-detail-scroll model) 0)
+           (setf (model-view-state model) :list-detail)))
+       (values model nil))
+
+      ;; Create new list
+      ((and (characterp key) (char= key #\a))
+       (unless (model-list-form-name-input model)
+         (setf (model-list-form-name-input model) (tui.textinput:make-textinput :placeholder "List name" :width 40))
+         (setf (model-list-form-desc-input model) (tui.textinput:make-textinput :placeholder "Description (LLM hint)" :width 40))
+         (setf (model-list-form-sections-input model) (tui.textinput:make-textinput :placeholder "Produce, Dairy, ..." :width 40)))
+       (tui.textinput:textinput-set-value (model-list-form-name-input model) "")
+       (tui.textinput:textinput-set-value (model-list-form-desc-input model) "")
+       (tui.textinput:textinput-set-value (model-list-form-sections-input model) "")
+       (tui.textinput:textinput-focus (model-list-form-name-input model))
+       (setf (model-list-form-active-field model) :name)
+       (setf (model-list-form-editing-id model) nil)
+       (setf (model-view-state model) :list-create)
+       (values model nil))
+
+      ;; Edit selected list
+      ((and (characterp key) (char= key #\e))
+       (when (and lists (< (model-lists-cursor model) (length lists)))
+         (let ((list-def (nth (model-lists-cursor model) lists)))
+           (unless (model-list-form-name-input model)
+             (setf (model-list-form-name-input model) (tui.textinput:make-textinput :placeholder "List name" :width 40))
+             (setf (model-list-form-desc-input model) (tui.textinput:make-textinput :placeholder "Description" :width 40))
+             (setf (model-list-form-sections-input model) (tui.textinput:make-textinput :placeholder "Sections" :width 40)))
+           (tui.textinput:textinput-set-value (model-list-form-name-input model) (list-def-name list-def))
+           (tui.textinput:textinput-set-value (model-list-form-desc-input model) (or (list-def-description list-def) ""))
+           (tui.textinput:textinput-set-value (model-list-form-sections-input model)
+                                               (format nil "~{~A~^, ~}" (or (list-def-sections list-def) '())))
+           (tui.textinput:textinput-focus (model-list-form-name-input model))
+           (setf (model-list-form-active-field model) :name)
+           (setf (model-list-form-editing-id model) (list-def-id list-def))
+           (setf (model-view-state model) :list-edit)))
+       (values model nil))
+
+      ;; Delete selected list
+      ((or (eql key :delete) (and (characterp key) (char= key #\d)))
+       (when (and lists (< (model-lists-cursor model) (length lists)))
+         (setf (model-view-state model) :list-delete-confirm))
+       (values model nil))
+
+      (t (values model nil)))))
+
+;;── List Detail Key Handling ──────────────────────────────────────────────────
+
+(defun build-list-detail-flat-items (list-def items)
+  "Build a flat list of (:section name) or (:item list-item) entries for rendering.
+   Items are grouped by section in defined order, then unsectioned items at end."
+  (let ((sections (list-def-sections list-def))
+        (section-items (make-hash-table :test #'equal))
+        (no-section nil)
+        (result nil))
+    (dolist (item items)
+      (let ((sec (list-item-section item)))
+        (if (and sec (> (length sec) 0))
+            (push item (gethash sec section-items nil))
+            (push item no-section))))
+    ;; Add sections in defined order
+    (dolist (sec sections)
+      (let ((sec-items (nreverse (gethash sec section-items nil))))
+        (when sec-items
+          (push (list :section sec) result)
+          (dolist (item sec-items)
+            (push (list :item item) result)))))
+    ;; Add unsectioned items
+    (when no-section
+      (push (list :section "Other") result)
+      (dolist (item (nreverse no-section))
+        (push (list :item item) result)))
+    (nreverse result)))
+
+(defun handle-list-detail-keys (model msg)
+  "Handle keyboard input in list detail view."
+  (let ((key (tui:key-msg-key msg))
+        (items (model-list-detail-items model))
+        (list-def (model-list-detail-def model)))
+    (cond
+      ;; Back to lists overview
+      ((or (eql key :escape) (and (characterp key) (char= key #\q)))
+       (reload-lists-data model)
+       (setf (model-view-state model) :lists-overview)
+       (values model nil))
+
+      ;; Navigate up
+      ((or (eql key :up) (and (characterp key) (member key '(#\k #\p))))
+       (when (> (model-list-detail-cursor model) 0)
+         (decf (model-list-detail-cursor model)))
+       (values model nil))
+
+      ;; Navigate down
+      ((or (eql key :down) (and (characterp key) (member key '(#\j #\n))))
+       (when (< (model-list-detail-cursor model) (1- (length items)))
+         (incf (model-list-detail-cursor model)))
+       (values model nil))
+
+      ;; Toggle checked (Space)
+      ((and (characterp key) (char= key #\Space))
+       (when (and items (< (model-list-detail-cursor model) (length items)))
+         (let ((item (nth (model-list-detail-cursor model) items)))
+           (db-check-list-item (list-item-id item) (not (list-item-checked item)))
+           (setf (model-list-detail-items model) (db-load-list-items (list-def-id list-def)))))
+       (values model nil))
+
+      ;; Add item
+      ((and (characterp key) (char= key #\a))
+       (unless (model-list-item-add-input model)
+         (setf (model-list-item-add-input model) (tui.textinput:make-textinput :placeholder "Item title" :width 40)))
+       (tui.textinput:textinput-set-value (model-list-item-add-input model) "")
+       (tui.textinput:textinput-focus (model-list-item-add-input model))
+       (setf (model-view-state model) :list-item-add)
+       (values model nil))
+
+      ;; Delete item
+      ((or (eql key :delete) (and (characterp key) (char= key #\d)))
+       (when (and items (< (model-list-detail-cursor model) (length items)))
+         (let ((item (nth (model-list-detail-cursor model) items)))
+           (db-delete-list-item (list-item-id item))
+           (setf (model-list-detail-items model) (db-load-list-items (list-def-id list-def)))
+           (setf (model-list-detail-cursor model)
+                 (min (model-list-detail-cursor model)
+                      (max 0 (1- (length (model-list-detail-items model))))))))
+       (values model nil))
+
+      ;; Share / export list
+      ((and (characterp key) (char= key #\s))
+       (when list-def
+         (let ((text (with-output-to-string (s)
+                       (export-list list-def items :stream s))))
+           ;; Copy to clipboard if possible
+           (handler-case
+               (let ((proc (uiop:launch-program '("xclip" "-selection" "clipboard")
+                                                 :input :stream)))
+                 (write-string text (uiop:process-info-input proc))
+                 (close (uiop:process-info-input proc))
+                 (setf (model-status-message model) "List copied to clipboard"))
+             (error ()
+               (setf (model-status-message model) "Could not copy (xclip not found)")))))
+       (values model nil))
+
+      (t (values model nil)))))
+
+;;── List Form Key Handling ────────────────────────────────────────────────────
+
+(defun handle-list-form-keys (model msg)
+  "Handle keyboard input in list create/edit form."
+  (let ((key (tui:key-msg-key msg))
+        (ctrl (tui:key-msg-ctrl msg)))
+    (cond
+      ;; Cancel
+      ((or (and ctrl (characterp key) (char= key #\c))
+           (eql key :escape))
+       (reload-lists-data model)
+       (setf (model-view-state model) :lists-overview)
+       (values model nil))
+
+      ;; Tab - cycle fields
+      ((eql key :tab)
+       (let ((fields '(:name :desc :sections :submit)))
+         (setf (model-list-form-active-field model)
+               (let* ((current (model-list-form-active-field model))
+                      (pos (position current fields))
+                      (next (mod (1+ (or pos 0)) (length fields))))
+                 (nth next fields))))
+       ;; Manage focus
+       (case (model-list-form-active-field model)
+         (:name (tui.textinput:textinput-focus (model-list-form-name-input model))
+                (tui.textinput:textinput-blur (model-list-form-desc-input model))
+                (tui.textinput:textinput-blur (model-list-form-sections-input model)))
+         (:desc (tui.textinput:textinput-blur (model-list-form-name-input model))
+                (tui.textinput:textinput-focus (model-list-form-desc-input model))
+                (tui.textinput:textinput-blur (model-list-form-sections-input model)))
+         (:sections (tui.textinput:textinput-blur (model-list-form-name-input model))
+                    (tui.textinput:textinput-blur (model-list-form-desc-input model))
+                    (tui.textinput:textinput-focus (model-list-form-sections-input model)))
+         (:submit (tui.textinput:textinput-blur (model-list-form-name-input model))
+                  (tui.textinput:textinput-blur (model-list-form-desc-input model))
+                  (tui.textinput:textinput-blur (model-list-form-sections-input model))))
+       (values model nil))
+
+      ;; Enter on submit field - save
+      ((and (eql key :enter) (eql (model-list-form-active-field model) :submit))
+       (let* ((name (str:trim (tui.textinput:textinput-value (model-list-form-name-input model))))
+              (desc (str:trim (tui.textinput:textinput-value (model-list-form-desc-input model))))
+              (sections-str (tui.textinput:textinput-value (model-list-form-sections-input model)))
+              (sections (when (> (length sections-str) 0)
+                          (mapcar (lambda (s) (str:trim s))
+                                  (str:split #\, sections-str)))))
+         (when (> (length name) 0)
+           (if (model-list-form-editing-id model)
+               ;; Edit existing list
+               (let* ((existing (db-find-list-by-id (model-list-form-editing-id model)))
+                      (updated (make-instance 'list-definition
+                                              :id (list-def-id existing)
+                                              :name name
+                                              :description (when (> (length desc) 0) desc)
+                                              :sections sections
+                                              :created-at (list-def-created-at existing))))
+                 (db-save-list-definition updated)
+                 (setf (model-status-message model)
+                       (format nil "Updated list: ~A" name)))
+               ;; Create new list
+               (let ((list-def (make-list-definition name
+                                                     :description (when (> (length desc) 0) desc)
+                                                     :sections sections)))
+                 (db-save-list-definition list-def)
+                 (setf (model-status-message model)
+                       (format nil "Created list: ~A" name))))))
+       (reload-lists-data model)
+       (setf (model-view-state model) :lists-overview)
+       (values model nil))
+
+      ;; Pass to active text input
+      (t
+       (case (model-list-form-active-field model)
+         (:name (tui.textinput:textinput-update (model-list-form-name-input model) msg))
+         (:desc (tui.textinput:textinput-update (model-list-form-desc-input model) msg))
+         (:sections (tui.textinput:textinput-update (model-list-form-sections-input model) msg)))
+       (values model nil)))))
+
+;;── List Item Add Key Handling ────────────────────────────────────────────────
+
+(defun handle-list-item-add-keys (model msg)
+  "Handle keyboard input when adding an item to a list."
+  (let ((key (tui:key-msg-key msg))
+        (list-def (model-list-detail-def model)))
+    (cond
+      ;; Cancel
+      ((eql key :escape)
+       (setf (model-view-state model) :list-detail)
+       (values model nil))
+
+      ;; Submit
+      ((eql key :enter)
+       (let ((title (str:trim (tui.textinput:textinput-value (model-list-item-add-input model)))))
+         (when (and (> (length title) 0) list-def)
+           (let ((item (make-list-item (list-def-id list-def) title)))
+             (db-save-list-item item)
+             (setf (model-list-detail-items model) (db-load-list-items (list-def-id list-def))))))
+       (setf (model-view-state model) :list-detail)
+       (values model nil))
+
+      ;; Pass to text input
+      (t
+       (tui.textinput:textinput-update (model-list-item-add-input model) msg)
+       (values model nil)))))
+
+;;── List Delete Confirm Key Handling ──────────────────────────────────────────
+
+(defun handle-list-delete-confirm-keys (model msg)
+  "Handle confirmation for deleting a list."
+  (let ((key (tui:key-msg-key msg)))
+    (when (and (characterp key) (char= key #\y))
+      (let* ((lists (model-lists-data model))
+             (list-def (nth (model-lists-cursor model) lists)))
+        (when list-def
+          (db-delete-list-definition (list-def-id list-def))
+          (setf (model-status-message model)
+                (format nil "Deleted list: ~A" (list-def-name list-def))))))
+    (reload-lists-data model)
+    (setf (model-view-state model) :lists-overview)
+    (values model nil)))
+
 ;;── Main Update Dispatch ───────────────────────────────────────────────────────
 
 (defmethod tui:update-message ((model app-model) (msg tui:key-msg))
@@ -2001,6 +2358,11 @@
     ((:add-scheduled-date :add-due-date) (handle-form-date-edit-keys model msg))
     (:help (handle-help-keys model msg))
     (:context-info (handle-context-info-keys model msg))
+    (:lists-overview (handle-lists-overview-keys model msg))
+    (:list-detail (handle-list-detail-keys model msg))
+    ((:list-create :list-edit) (handle-list-form-keys model msg))
+    (:list-item-add (handle-list-item-add-keys model msg))
+    (:list-delete-confirm (handle-list-delete-confirm-keys model msg))
     (otherwise (values model nil))))
 
 (defmethod tui:update-message ((model app-model) (msg tui:window-size-msg))
@@ -2014,9 +2376,10 @@
   (values model nil))
 
 (defmethod tui:update-message ((model app-model) (msg sync-reload-msg))
-  "Handle sync reload - reload todos from database and trigger redraw."
+  "Handle sync reload - reload todos and lists from database and trigger redraw."
   (setf (model-todos model) (load-todos))
   (setf (model-visible-todos-dirty model) t)
+  (reload-lists-data model)
   (values model nil))
 
 (defmethod tui:update-message ((model app-model) (msg tui:mouse-scroll-event))
@@ -2196,52 +2559,99 @@
                :has-data (if data "yes" "no")
                :found-todo (if todo "yes" "no"))
     (when todo
-      ;; Clear enriching flag
-      (setf (todo-enriching-p todo) nil)
-      ;; Apply enriched data if available
       (when data
-        (when (getf data :title)
-          (setf (todo-title todo) (getf data :title)))
-        (when (getf data :description)
-          (setf (todo-description todo) (getf data :description)))
-        (when (getf data :priority)
-          (setf (todo-priority todo) (getf data :priority)))
-        (when (getf data :category)
-          (let ((tag (category-to-tag (getf data :category))))
-            (when tag
-              (setf (todo-tags todo) (list tag)))))
-        (when (getf data :estimated-minutes)
-          (setf (todo-estimated-minutes todo) (getf data :estimated-minutes)))
-        (when (getf data :scheduled-date)
-          (setf (todo-scheduled-date todo) (getf data :scheduled-date)))
-        (when (getf data :due-date)
-          (setf (todo-due-date todo) (getf data :due-date)))
-        (when (getf data :location-info)
-          (setf (todo-location-info todo) (getf data :location-info)))
-        (when (getf data :repeat-interval)
-          (setf (todo-repeat-interval todo) (getf data :repeat-interval)))
-        (when (getf data :repeat-unit)
-          (setf (todo-repeat-unit todo) (getf data :repeat-unit)))
-        ;; Only set URL if todo doesn't already have one (preserve original URLs)
-        (when (and (getf data :url) (not (todo-url todo)))
-          (setf (todo-url todo) (getf data :url))))
-      ;; Save updated todo
-      (save-todo todo)
+        ;; Check if LLM says this belongs on a list
+        (let ((list-name (getf data :list-name))
+              (list-section (getf data :list-section))
+              (list-items (getf data :list-items)))
+          (if (and list-name (stringp list-name) (> (length list-name) 0))
+              ;; Redirect to list: create list item(s), delete TODO
+              (let ((list-def (db-find-list-by-name list-name)))
+                (if list-def
+                    (let ((items-to-create
+                            (if list-items
+                                ;; Multiple items from LLM
+                                (mapcar (lambda (li)
+                                          (list :title (or (getf li :title) "")
+                                                :section (getf li :section)))
+                                        list-items)
+                                ;; Single item
+                                (list (list :title (or (getf data :title) (todo-title todo))
+                                            :section list-section)))))
+                      (dolist (item-spec items-to-create)
+                        (let ((item (make-list-item
+                                      (list-def-id list-def)
+                                      (getf item-spec :title)
+                                      :section (getf item-spec :section)
+                                      :device-id (get-device-id))))
+                          (db-save-list-item item)
+                          (notify-sync-list-item-changed item)
+                          (llog:info "Created list item from TODO"
+                                     :title (getf item-spec :title)
+                                     :list-name list-name
+                                     :section (getf item-spec :section))))
+                      ;; Remove TODO from model and database
+                      (setf (model-todos model)
+                            (remove todo-id (model-todos model) :key #'todo-id :test #'string=))
+                      (db-delete-todo todo-id)
+                      ;; Refresh list data
+                      (setf (model-lists-data model) (db-load-list-definitions))
+                      (notify-sync-todo-deleted todo-id)
+                      (invalidate-visible-todos-cache model)
+                      (llog:info "Redirected TODO to list"
+                                 :todo-id todo-id
+                                 :list-name list-name
+                                 :item-count (length items-to-create)))
+                    ;; List not found - fall through to normal enrichment
+                    (progn
+                      (llog:warn "List not found for redirect, treating as normal TODO"
+                                 :list-name list-name)
+                      (apply-enrichment-to-todo todo data))))
+              ;; Normal enrichment (no list redirect)
+              (apply-enrichment-to-todo todo data))))
+      ;; If no data, just clear enriching flag
+      (unless data
+        (setf (todo-enriching-p todo) nil))
       ;; Refresh tags cache since enrichment may add tags
       (refresh-tags-cache model))
     (values model nil)))
 
-(defun make-enrichment-cmd (todo-id raw-title raw-notes &optional parent-context)
+(defun apply-enrichment-to-todo (todo data)
+  "Apply enrichment data fields to a TODO and save it."
+  (setf (todo-enriching-p todo) nil)
+  (when (getf data :title)
+    (setf (todo-title todo) (getf data :title)))
+  (when (getf data :description)
+    (setf (todo-description todo) (getf data :description)))
+  (when (getf data :priority)
+    (setf (todo-priority todo) (getf data :priority)))
+  (when (getf data :category)
+    (let ((tag (category-to-tag (getf data :category))))
+      (when tag
+        (setf (todo-tags todo) (list tag)))))
+  (when (getf data :scheduled-date)
+    (setf (todo-scheduled-date todo) (getf data :scheduled-date)))
+  (when (getf data :due-date)
+    (setf (todo-due-date todo) (getf data :due-date)))
+  (when (getf data :location-info)
+    (setf (todo-location-info todo) (getf data :location-info)))
+  (when (getf data :repeat-interval)
+    (setf (todo-repeat-interval todo) (getf data :repeat-interval)))
+  (when (getf data :repeat-unit)
+    (setf (todo-repeat-unit todo) (getf data :repeat-unit)))
+  (when (and (getf data :url) (not (todo-url todo)))
+    (setf (todo-url todo) (getf data :url)))
+  (save-todo todo))
+
+(defun make-enrichment-cmd (todo-id raw-title raw-notes)
   "Create a command that performs async enrichment and returns completion message.
-   PARENT-CONTEXT is an optional list of (title . description) pairs for parent tasks.
    Tuition runs this in a separate thread."
   (lambda ()
     (llog:info "Starting async enrichment"
                :todo-id todo-id
-               :raw-title raw-title
-               :has-parent-context (if parent-context "yes" "no"))
+               :raw-title raw-title)
     (let ((result (handler-case
-                      (enrich-todo-input raw-title raw-notes parent-context)
+                      (enrich-todo-input raw-title raw-notes)
                     (error (e)
                       (llog:error "Enrichment failed"
                                   :todo-id todo-id
@@ -2284,28 +2694,43 @@
                :num-todos (if todos-data (length todos-data) 0))
     (when todos-data
       (dolist (data todos-data)
-        (let ((new-todo (make-todo (or (getf data :title) "Imported item")
-                                   :description (getf data :description)
-                                   :priority (or (getf data :priority) :medium))))
-          ;; Apply enriched fields
-          (when (getf data :category)
-            (let ((tag (category-to-tag (getf data :category))))
-              (when tag
-                (setf (todo-tags new-todo) (list tag)))))
-          (when (getf data :estimated-minutes)
-            (setf (todo-estimated-minutes new-todo) (getf data :estimated-minutes)))
-          (when (getf data :scheduled-date)
-            (setf (todo-scheduled-date new-todo) (getf data :scheduled-date)))
-          (when (getf data :due-date)
-            (setf (todo-due-date new-todo) (getf data :due-date)))
-          (when (getf data :location-info)
-            (setf (todo-location-info new-todo) (getf data :location-info)))
-          ;; Add to model and save
-          (push new-todo (model-todos model))
-          (save-todo new-todo)))
-      ;; Invalidate cache so new todos appear
+        ;; Check if this item belongs on a list
+        (let ((list-name (getf data :list-name))
+              (list-section (getf data :list-section)))
+          (if (and list-name (stringp list-name) (> (length list-name) 0))
+              ;; Create as a list item
+              (let ((list-def (db-find-list-by-name list-name)))
+                (when list-def
+                  (let ((item (make-list-item
+                                (list-def-id list-def)
+                                (or (getf data :title) "Imported item")
+                                :section list-section
+                                :notes (getf data :description)
+                                :device-id (get-device-id))))
+                    (db-save-list-item item)
+                    (notify-sync-list-item-changed item)
+                    (llog:info "Imported item to list"
+                               :list-name list-name
+                               :item-title (list-item-title item)))))
+              ;; Create as a regular TODO
+              (let ((new-todo (make-todo (or (getf data :title) "Imported item")
+                                         :description (getf data :description)
+                                         :priority (or (getf data :priority) :medium))))
+                (when (getf data :category)
+                  (let ((tag (category-to-tag (getf data :category))))
+                    (when tag
+                      (setf (todo-tags new-todo) (list tag)))))
+                (when (getf data :scheduled-date)
+                  (setf (todo-scheduled-date new-todo) (getf data :scheduled-date)))
+                (when (getf data :due-date)
+                  (setf (todo-due-date new-todo) (getf data :due-date)))
+                (when (getf data :location-info)
+                  (setf (todo-location-info new-todo) (getf data :location-info)))
+                (push new-todo (model-todos model))
+                (save-todo new-todo)))))
+      ;; Refresh data
+      (setf (model-lists-data model) (db-load-list-definitions))
       (invalidate-visible-todos-cache model)
-      ;; Refresh tags cache after import
       (refresh-tags-cache model)
       (llog:info "Imported todos saved" :count (length todos-data)))
     (values model nil)))

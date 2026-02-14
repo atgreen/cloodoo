@@ -475,15 +475,19 @@ private fun parseAttachmentHashes(attachmentHashes: String?): List<String> {
  * Options for postponing a task
  */
 enum class PostponeOption(val label: String, val icon: androidx.compose.ui.graphics.vector.ImageVector) {
-    TOMORROW("Tomorrow", Icons.Default.Done),
-    NEXT_WEEK("Next Week", Icons.Default.Done),
-    NEXT_MONDAY("Next Monday", Icons.Default.Done);
+    PLUS_1_DAY("+1 day", Icons.Default.Done),
+    PLUS_7_DAYS("+7 days", Icons.Default.Done),
+    NEXT_SATURDAY("Next Saturday", Icons.Default.Done),
+    NEXT_MONDAY("Next Monday", Icons.Default.Done),
+    PLUS_30_DAYS("+30 days", Icons.Default.Done);
 
     fun calculateNewDate(currentDate: LocalDate = LocalDate.now()): LocalDate {
         return when (this) {
-            TOMORROW -> currentDate.plusDays(1)
-            NEXT_WEEK -> currentDate.plusWeeks(1)
+            PLUS_1_DAY -> currentDate.plusDays(1)
+            PLUS_7_DAYS -> currentDate.plusDays(7)
+            NEXT_SATURDAY -> currentDate.with(TemporalAdjusters.next(DayOfWeek.SATURDAY))
             NEXT_MONDAY -> currentDate.with(TemporalAdjusters.next(DayOfWeek.MONDAY))
+            PLUS_30_DAYS -> currentDate.plusDays(30)
         }
     }
 }
@@ -515,10 +519,7 @@ fun PostponeBottomSheet(
 
             PostponeOption.entries.forEach { option ->
                 val targetDate = option.calculateNewDate(today)
-                val dateLabel = when {
-                    targetDate == today.plusDays(1) -> "Tomorrow"
-                    else -> targetDate.format(DateTimeFormatter.ofPattern("EEE, MMM d"))
-                }
+                val dateLabel = targetDate.format(DateTimeFormatter.ofPattern("EEE, MMM d"))
 
                 ListItem(
                     headlineContent = { Text(option.label) },

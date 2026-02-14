@@ -243,111 +243,81 @@
         nil))))
 
 (defparameter *enrichment-system-prompt-template*
-  "Role: You are a Task Optimization Assistant. Your goal is to transform rough, fragmented user input into structured, actionable, and categorized TODO items.
+  "You convert raw user input into structured TODO data. Fix all typos. Preserve all important details (destinations, names, locations, brands, quantities).
 
-Today's date is: ~A (~A)
+Today: ~A (~A)
 
-Primary Objectives:
-- Clarification: Expand abbreviations and fix ALL typos in both title and notes.
-- Enrichment: Assign a logical category, priority level, and estimated time requirement.
-- Date Extraction: Parse any date/time references into scheduled_date and due_date.
-- Contextualization: Make the task title action-oriented but PRESERVE ALL IMPORTANT DETAILS.
-- Location Awareness: When a business, place, or location is mentioned, extract useful contact info.
+Return ONLY valid JSON with these keys:
+- task_title: Action-verb title for tasks; bare item name for list items (see rules below)
+- description: Cleaned-up notes, or null
+- category: Work | Personal | Health | Finance | Home | Family | Shopping | Travel | Learning | Other
+- priority: \"high\" (urgent/ASAP/≤48h deadline/health/safety/financial/blocking) | \"medium\" (≤1 week/routine/appointments) | \"low\" (no deadline/someday/leisure)
+- scheduled_date: ISO 8601 when to work on it, or null
+- due_date: ISO 8601 deadline, or null
+- repeat_interval: integer (1=every, 2=every other...), or null
+- repeat_unit: \"day\" | \"week\" | \"month\" | \"year\", or null
+- url: any URL from input (http/https/message/file) - NEVER drop URLs, or null
+- list_name: exact list name if item belongs on a user-defined list, else null
+- list_section: section for first item if list has sections, else null
+- list_items: [{\"title\":\"...\",\"section\":\"...\"}] for multi-item or enumerable input; null for single items
+- location: {\"name\",\"address\",\"phone\",\"map_url\",\"website\"} for any place/business, or null. map_url: https://www.google.com/maps/search/?api=1&query=URL+Encoded+Name
 
-USER CONTEXT GUIDELINES:
-- You may receive User Context describing the user's life, work, relationships, and preferences
-- If a person's name is mentioned, check User Context for their relationship/role to better categorize the task
-- Use User Context to infer the user's location for local business lookups
-- Apply domain knowledge from User Context (e.g., if user works in tech, \"deploy\" means software deployment)
-- Respect any preferences mentioned in User Context (e.g., preferred doctors, stores, etc.)
+TITLE RULES:
+- Tasks (list_name=null): Start with action verb. Keep all details.
+  \"call CAA to tow car to Canadian Tire\" -> \"Call CAA to Tow Car to Canadian Tire\"
+- List items (list_name set): BARE NAME ONLY. Strip verbs (buy/watch/read/get/add/pick up), articles (the/some), list-echoing words. KEEP brands, qualifiers, quantities.
+  \"buy a2 milk\" -> \"A2 Milk\" | \"3 lbs ground beef\" -> \"3 lbs Ground Beef\" | \"watch Trading Places\" -> \"Trading Places\" | \"get organic eggs\" -> \"Organic Eggs\"
 
-PRIORITY INTELLIGENCE:
-Assign priority based on these signals:
-- HIGH (A): Contains \"urgent\", \"ASAP\", \"emergency\", \"critical\", \"important\"
-- HIGH (A): Deadline within 24-48 hours, health/safety related, financial deadlines
-- HIGH (A): Blocking other work, time-sensitive appointments, legal/compliance matters
-- MEDIUM (B): Deadline within 1 week, important but not urgent, routine appointments
-- MEDIUM (B): Regular work tasks, scheduled meetings, planned activities
-- LOW (C): No deadline mentioned, \"someday\", \"when I have time\", nice-to-have
-- LOW (C): Ideas to explore, optional improvements, leisure activities
+DATES: Parse relative to today. \"on tuesday\"/\"friday 3pm\" -> scheduled_date. \"due friday\" -> due_date. Include time (\"3pm\" -> \"T15:00:00\"). Ambiguous -> scheduled_date.
+RECURRENCE: daily=1/day | weekly=1/week | biweekly=2/week | monthly=1/month | yearly=1/year | else null.
+LOCATION: For any business/doctor/store/venue, fill location object. For calls, include known phone in description.
 
-CRITICAL RULES FOR TITLES:
-- Start with an action verb (Call, Go to, Buy, Schedule, etc.)
-- NEVER remove destinations, locations, or important context from the title
-- \"call CAA to tow car to Canadian Tire\" -> \"Call CAA to Tow Car to Canadian Tire\" (keep destination!)
-- \"dentist appointment at Dr Smith\" -> \"Dentist Appointment at Dr. Smith\" (keep doctor name!)
-- Fix typos and capitalize properly, but DO NOT summarize away important details
+LIST ITEMS EXPANSION:
+- Multiple items (comma/and-separated): generate list_items array
+- \"all of\"/\"every\"/known collections: enumerate ALL items using your knowledge (e.g., complete filmographies, discographies, series entries)
+- \"ingredients for\"/recipes: recall the ACTUAL recipe from authoritative culinary knowledge. List every ingredient with realistic quantities and correct grocery sections. Do not guess or abbreviate—use a real recipe.
+- When expanding items, draw on your training data as if consulting a reference source: cookbooks for recipes, music databases for discographies, film databases for filmographies, etc. If you have access to the internet, consult authoritative sources.
+- Single item: list_items=null, use task_title only
 
-CRITICAL RULES FOR URLs:
-- If a URL appears ANYWHERE in the input (title or notes), you MUST extract it to the \"url\" field
-- NEVER remove or lose URLs - they are critical reference information
-- URLs may be email links (message://), web links (https://), or file links (file://)
-- If multiple URLs exist, extract the most relevant one to \"url\" and keep others in description
-
-Output Schema (JSON):
-Return ONLY a valid JSON object with these keys:
-- task_title: (Action-oriented title that PRESERVES all important details like destinations, names, locations)
-- description: (Clean up any typos in the user's notes, or null if no notes provided)
-- category: (One of: Work, Personal, Health, Finance, Home, Family, Shopping, Travel, Learning, Other)
-- priority: (One of: \"high\", \"medium\", \"low\" - use Priority Intelligence rules above)
-- estimated_minutes: (Integer estimate)
-- scheduled_date: (ISO 8601 date when task should be worked on, e.g. \"2026-01-20\" or \"2026-01-20T14:00:00\", or null)
-- due_date: (ISO 8601 date when task must be completed by, e.g. \"2026-01-25\", or null)
-- repeat_interval: (Integer for recurrence, e.g. 1 for every 1 unit, 2 for every 2 units, or null if not recurring)
-- repeat_unit: (One of: \"day\", \"week\", \"month\", \"year\", or null if not recurring)
-- url: (Any URL found in the input - email links, web links, file links - MUST be preserved, or null if none)
-- location: (Object with business/place info, or null if no location mentioned)
-  - name: (Business or place name, properly formatted)
-  - address: (Full street address if known or can be inferred, otherwise null)
-  - phone: (Phone number if you know it, otherwise null)
-  - map_url: (Google Maps search URL in format: https://www.google.com/maps/search/?api=1&query=URL+Encoded+Name+and+City)
-  - website: (Business website URL if you know it, otherwise null)
-
-Date Extraction Rules:
-- SCHEDULED (scheduled_date): When user mentions doing something ON a date (\"dentist on tuesday\", \"meeting friday 3pm\")
-- DEADLINE (due_date): When user mentions something is DUE BY a date (\"report due friday\", \"deadline jan 20\")
-- Parse relative dates like \"tomorrow\", \"next tuesday\", \"this friday\" using today's date (shown above with ISO format)
-- IMPORTANT: Calculate day of week carefully! If today is Friday 2026-01-30, then:
-  - \"Saturday\" = 2026-01-31 (tomorrow)
-  - \"Sunday\" = 2026-02-01 (2 days from now)
-  - \"Monday\" = 2026-02-02 (3 days from now)
-  - \"next Saturday\" = 2026-02-07 (8 days from now)
-- Include time if mentioned (\"3pm\" -> \"T15:00:00\")
-- If only a day is mentioned without context, assume it's the SCHEDULED date
-- If a date seems like both (appointment), use scheduled_date
-
-Recurrence Rules:
-- If the user says \"every day\", \"daily\", set repeat_interval=1, repeat_unit=\"day\"
-- If the user says \"every week\", \"weekly\", set repeat_interval=1, repeat_unit=\"week\"
-- If the user says \"every month\", \"monthly\", set repeat_interval=1, repeat_unit=\"month\"
-- If the user says \"every year\", \"yearly\", \"annually\", set repeat_interval=1, repeat_unit=\"year\"
-- If the user says \"every 2 weeks\", \"biweekly\", set repeat_interval=2, repeat_unit=\"week\"
-- If there is no recurrence, set both repeat_interval and repeat_unit to null
-
-Rules for Processing:
-- Action Verbs: Always start the task_title with a verb (Schedule, Buy, Call, Fix, Review, etc.)
-- Fix ALL typos and spelling errors in both title and description/notes
-- Smart Defaults: If no time is mentioned, estimate based on task type (Email = 5 mins, Meeting = 30 mins, Project = 60 mins)
-- Keep descriptions brief and professional
-- Location Detection: If the task mentions a business, restaurant, doctor, store, venue, or any physical location, populate the location object with as much info as you can provide ; lint:suppress max-line-length
-- Phone Calls: If the task involves calling someone (title contains \"call\" or implies phone contact), include the phone number in the description field if you know it, but do NOT guess why the user is calling - just provide the number (e.g., \"Phone: (555) 123-4567\") ; lint:suppress max-line-length
-
+USER CONTEXT: If provided, use it to infer location, relationships, domain knowledge, and preferences.
+~A
 Examples:
-Input: title=\"dentist next tues\" notes=\"dr tam @ lawernce dentust\" -> {\"task_title\": \"Schedule Dentist Appointment\", \"description\": \"Dr. Tam @ Lawrence Dentist\", \"category\": \"Health\", \"priority\": \"medium\", \"estimated_minutes\": 60, \"scheduled_date\": \"2026-01-21\", \"due_date\": null, \"location\": {\"name\": \"Lawrence Family Dentist\", \"address\": null, \"phone\": null, \"map_url\": \"https://www.google.com/maps/search/?api=1&query=Lawrence+Family+Dentist\", \"website\": null}} ; lint:suppress max-line-length
-Input: title=\"report due friday\" notes=\"quarterly sales\" -> {\"task_title\": \"Complete Quarterly Sales Report\", \"description\": \"Quarterly sales\", \"category\": \"Work\", \"priority\": \"high\", \"estimated_minutes\": 120, \"scheduled_date\": null, \"due_date\": \"2026-01-24\", \"location\": null} ; lint:suppress max-line-length
-Input: title=\"dinner at joes pizza\" notes=\"6pm friday\" -> {\"task_title\": \"Dinner at Joe's Pizza\", \"description\": null, \"category\": \"Personal\", \"priority\": \"medium\", \"estimated_minutes\": 90, \"scheduled_date\": \"2026-01-24T18:00:00\", \"due_date\": null, \"location\": {\"name\": \"Joe's Pizza\", \"address\": null, \"phone\": null, \"map_url\": \"https://www.google.com/maps/search/?api=1&query=Joe%27s+Pizza\", \"website\": null}} ; lint:suppress max-line-length
-Input: title=\"call dr smith\" notes=\"\" -> {\"task_title\": \"Call Dr. Smith\", \"description\": null, \"category\": \"Health\", \"priority\": \"medium\", \"estimated_minutes\": 10, \"scheduled_date\": null, \"due_date\": null, \"location\": null} ; lint:suppress max-line-length
+title=\"dentist next tues\" notes=\"dr tam @ lawernce dentust\" -> {\"task_title\":\"Schedule Dentist Appointment\",\"description\":\"Dr. Tam @ Lawrence Dentist\",\"category\":\"Health\",\"priority\":\"medium\",\"scheduled_date\":\"2026-01-21\",\"due_date\":null,\"location\":{\"name\":\"Lawrence Family Dentist\",\"address\":null,\"phone\":null,\"map_url\":\"https://www.google.com/maps/search/?api=1&query=Lawrence+Family+Dentist\",\"website\":null}} ; lint:suppress max-line-length
+title=\"report due friday\" notes=\"quarterly sales\" -> {\"task_title\":\"Complete Quarterly Sales Report\",\"description\":\"Quarterly sales\",\"category\":\"Work\",\"priority\":\"high\",\"scheduled_date\":null,\"due_date\":\"2026-01-24\",\"location\":null} ; lint:suppress max-line-length
+title=\"buy milk and eggs\" (Grocery list) -> {\"task_title\":\"Milk\",\"list_name\":\"Grocery\",\"list_section\":\"Dairy\",\"list_items\":[{\"title\":\"Milk\",\"section\":\"Dairy\"},{\"title\":\"Eggs\",\"section\":\"Dairy\"}],\"category\":\"Shopping\",\"priority\":\"medium\"} ; lint:suppress max-line-length
+title=\"watch all Christopher Nolan movies\" (Movie list) -> {\"task_title\":\"Memento\",\"list_name\":\"Movie\",\"list_items\":[{\"title\":\"Memento\",\"section\":null},{\"title\":\"Insomnia\",\"section\":null},{\"title\":\"Batman Begins\",\"section\":null},{\"title\":\"The Prestige\",\"section\":null},{\"title\":\"The Dark Knight\",\"section\":null},{\"title\":\"Inception\",\"section\":null},{\"title\":\"The Dark Knight Rises\",\"section\":null},{\"title\":\"Interstellar\",\"section\":null},{\"title\":\"Dunkirk\",\"section\":null},{\"title\":\"Tenet\",\"section\":null},{\"title\":\"Oppenheimer\",\"section\":null}]} ; lint:suppress max-line-length
+title=\"ingredients for pound cake\" (Grocery list, sections: Produce/Dairy/Meat/Pantry/...) -> {\"task_title\":\"Butter\",\"list_name\":\"Grocery\",\"list_section\":\"Dairy\",\"list_items\":[{\"title\":\"Butter\",\"section\":\"Dairy\"},{\"title\":\"Sugar\",\"section\":\"Pantry\"},{\"title\":\"Eggs\",\"section\":\"Dairy\"},{\"title\":\"All-Purpose Flour\",\"section\":\"Pantry\"},{\"title\":\"Vanilla Extract\",\"section\":\"Pantry\"}]} ; lint:suppress max-line-length
 
-Respond with ONLY the JSON object, no markdown formatting or additional text.")
+Respond with ONLY the JSON object, no markdown.")
 
-(defun get-enrichment-system-prompt ()
-  "Get the enrichment system prompt with today's date filled in."
+(defun format-list-definitions-for-prompt ()
+  "Format list definitions from the database for inclusion in the LLM prompt.
+   Returns a string describing available lists, or empty string if none."
+  (handler-case
+      (let ((lists (db-load-list-definitions)))
+        (if lists
+            (with-output-to-string (s)
+              (format s "~%USER LISTS (use exact names; only assign if input clearly matches):~%")
+              (dolist (list-def lists)
+                (format s "- ~A" (list-def-name list-def))
+                (when (list-def-description list-def)
+                  (format s ": ~A" (list-def-description list-def)))
+                (when (list-def-sections list-def)
+                  (format s " [sections: ~{~A~^, ~}]" (list-def-sections list-def)))
+                (format s "~%"))
+              (format s "If no list matches, set list_name=null (regular task).~%"))
+            ""))
+    (error () "")))
+
+(defun get-enrichment-system-prompt (&optional list-definitions-text)
+  "Get the enrichment system prompt with today's date and optional list definitions filled in."
   (let ((now (lt:now)))
     (format nil *enrichment-system-prompt-template*
             (lt:format-timestring nil now
                                  :format '(:long-weekday ", " :long-month " " :day ", " :year))
             (lt:format-timestring nil now
-                                 :format '(:year "-" (:month 2) "-" (:day 2))))))
+                                 :format '(:year "-" (:month 2) "-" (:day 2)))
+            (or list-definitions-text ""))))
 
 (defun make-completer ()
   "Create an LLM completer based on the configured provider."
@@ -470,7 +440,7 @@ Respond with ONLY the JSON object, no markdown formatting or additional text.")
 
 (defun parse-enrichment-response (response)
   "Parse the JSON response from the LLM enrichment.
-   Returns a plist with :title, :description, :category, :priority, :estimated-minutes, :location-info,
+   Returns a plist with :title, :description, :category, :priority, :location-info,
    :repeat-interval, :repeat-unit or NIL if parsing fails."
   (llog:debug "Parsing enrichment response"
               :response-length (length response)
@@ -490,6 +460,14 @@ Respond with ONLY the JSON object, no markdown formatting or additional text.")
                                         (truncate raw-repeat-interval)))
                      (repeat-unit (when repeat-interval (parse-repeat-unit raw-repeat-unit)))
                      (extracted-url (json-null-to-nil (gethash "url" data)))
+                     (list-name (json-null-to-nil (gethash "list_name" data)))
+                     (list-section (json-null-to-nil (gethash "list_section" data)))
+                     (raw-list-items (json-null-to-nil (gethash "list_items" data)))
+                     (list-items (when (and raw-list-items (vectorp raw-list-items))
+                                   (loop for item across raw-list-items
+                                         when (hash-table-p item)
+                                         collect (list :title (json-null-to-nil (gethash "title" item))
+                                                       :section (json-null-to-nil (gethash "section" item))))))
                      (result (list :title (json-null-to-nil (gethash "task_title" data))
                                    :description (json-null-to-nil (gethash "description" data))
                                    :category (json-null-to-nil (gethash "category" data))
@@ -499,19 +477,19 @@ Respond with ONLY the JSON object, no markdown formatting or additional text.")
                                                 ((or (string-equal p "medium") (string-equal p "medium") (string-equal p "B")) :medium)
                                                 ((or (string-equal p "low") (string-equal p "low") (string-equal p "C")) :low)
                                                 (t :medium)))
-                                   :estimated-minutes (let ((m (gethash "estimated_minutes" data)))
-                                                       (if (numberp m) (truncate m) 15))
                                    :scheduled-date scheduled-date
                                    :due-date due-date
                                    :repeat-interval repeat-interval
                                    :repeat-unit repeat-unit
                                    :url extracted-url
+                                   :list-name list-name
+                                   :list-section list-section
+                                   :list-items list-items
                                    :location-info location-info)))
                 (llog:info "Successfully parsed enrichment response"
                            :title (getf result :title)
                            :category (getf result :category)
                            :priority (getf result :priority)
-                           :estimated-minutes (getf result :estimated-minutes)
                            :scheduled-date (when scheduled-date
                                             (lt:format-rfc3339-timestring nil scheduled-date))
                            :due-date (when due-date
@@ -519,7 +497,9 @@ Respond with ONLY the JSON object, no markdown formatting or additional text.")
                            :has-location (if location-info "yes" "no")
                            :repeat-interval repeat-interval
                            :repeat-unit repeat-unit
-                           :url extracted-url)
+                           :url extracted-url
+                           :list-name list-name
+                           :list-section list-section)
                 (when location-info
                   (llog:debug "Location info extracted"
                               :location-name (getf location-info :name)
@@ -538,15 +518,13 @@ Respond with ONLY the JSON object, no markdown formatting or additional text.")
                   :response response)
       nil)))
 
-(defun enrich-todo-input (raw-title &optional raw-notes parent-context)
+(defun enrich-todo-input (raw-title &optional raw-notes)
   "Enrich a raw TODO input string using the LLM.
    RAW-TITLE is the task title, RAW-NOTES is optional description/notes.
-   PARENT-CONTEXT is an optional plist with :title and :description of parent task(s).
    Returns a plist with enriched fields, or NIL if enrichment fails or is disabled."
   (llog:info "Enrichment request received"
              :raw-title raw-title
              :raw-notes raw-notes
-             :has-parent-context (if parent-context "yes" "no")
              :title-length (length raw-title)
              :enrichment-enabled *enrichment-enabled*
              :provider *llm-provider*)
@@ -580,26 +558,17 @@ Respond with ONLY the JSON object, no markdown formatting or additional text.")
                            (getf url-metadata :description)))))
 
         (let* ((user-context (load-user-context))
-               (system-prompt (get-enrichment-system-prompt))
+               (list-defs-text (format-list-definitions-for-prompt))
+               (system-prompt (get-enrichment-system-prompt list-defs-text))
                (user-input (if (and raw-notes (> (length raw-notes) 0))
                                (format nil "title=\"~A\" notes=\"~A\"" raw-title raw-notes)
                                (format nil "title=\"~A\" notes=\"\"" raw-title)))
-               ;; Build parent context string if available
-               (parent-context-str
-                 (when parent-context
-                   (format nil "~%~%Parent Task Context (this is a subtask):~%~{~A~^~%~}"
-                           (loop for (title . desc) in parent-context
-                                 collect (if desc
-                                             (format nil "- ~A: ~A" title desc)
-                                             (format nil "- ~A" title))))))
-               (prompt (format nil "~A~@[~%~%User Context (use this to better understand the user):~%~A~]~@[~A~]~@[~A~]~%~%User input: ~A"
-                               system-prompt user-context parent-context-str url-context-str user-input)))
+               (prompt (format nil "~A~@[~%~%User Context:~%~A~]~@[~A~]~%~%~A"
+                               system-prompt user-context url-context-str user-input)))
 
           (llog:debug "Context status"
                       :has-user-context (if user-context "yes" "no")
                       :user-context-length (if user-context (length user-context) 0)
-                      :has-parent-context (if parent-context "yes" "no")
-                      :parent-depth (if parent-context (length parent-context) 0)
                       :detected-url detected-url
                       :has-url-metadata (if url-metadata "yes" "no"))
 
@@ -638,7 +607,6 @@ Respond with ONLY the JSON object, no markdown formatting or additional text.")
                              :enriched-desc (getf result :description)
                              :category (getf result :category)
                              :priority (getf result :priority)
-                             :estimated-minutes (getf result :estimated-minutes)
                              :elapsed-ms elapsed-ms)
                   (llog:warn "Enrichment parsing failed"
                              :raw-title raw-title
@@ -675,16 +643,17 @@ Return ONLY a valid JSON object with a \"todos\" key containing an array. Each i
 - description: (Any notes or body text associated with the item, or null)
 - category: (One of: Work, Personal, Health, Finance, Home, Family, Shopping, Travel, Learning, Other)
 - priority: (high for urgent/important, medium for important, low for can wait - infer from org priority cookies like [#A], [#B], [#C])
-- estimated_minutes: (Integer estimate based on task complexity)
 - scheduled_date: (ISO 8601 date from SCHEDULED: property, or null)
 - due_date: (ISO 8601 date from DEADLINE: property, or null)
+- list_name: (If this item belongs on a user-defined list rather than being a task, return the exact list name. Null if regular task.)
+- list_section: (If list_name is set and the list has sections, the appropriate section. Null otherwise.)
 - location: (Object with business/place info if mentioned, or null)
   - name: (Business or place name)
   - address: (Address if known, otherwise null)
   - phone: (Phone if known, otherwise null)
   - map_url: (Google Maps URL, or null)
   - website: (Website if known, otherwise null)
-
+~A
 Org-Mode Parsing Rules:
 - TODO keywords: TODO, NEXT, WAITING, HOLD, IN-PROGRESS, STARTED, etc. are active items
 - DONE keywords: DONE, COMPLETED, CANCELLED, CANCELED, ARCHIVED are completed - SKIP THESE
@@ -712,19 +681,20 @@ DEADLINE: <2026-01-25 Fri>
 
 Example Output:
 {\"todos\": [
-  {\"task_title\": \"Call Dentist for Appointment\", \"description\": \"Need to schedule cleaning\", \"category\": \"Health\", \"priority\": \"high\", \"estimated_minutes\": 10, \"scheduled_date\": \"2026-01-20\", \"due_date\": null, \"location\": {\"name\": \"Downtown Dental\", \"address\": null, \"phone\": null, \"map_url\": \"https://www.google.com/maps/search/?api=1&query=Downtown+Dental\", \"website\": null}}, ; lint:suppress max-line-length
-  {\"task_title\": \"Review Quarterly Report\", \"description\": null, \"category\": \"Work\", \"priority\": \"medium\", \"estimated_minutes\": 60, \"scheduled_date\": null, \"due_date\": \"2026-01-25\", \"location\": null} ; lint:suppress max-line-length
+  {\"task_title\": \"Call Dentist for Appointment\", \"description\": \"Need to schedule cleaning\", \"category\": \"Health\", \"priority\": \"high\", \"scheduled_date\": \"2026-01-20\", \"due_date\": null, \"location\": {\"name\": \"Downtown Dental\", \"address\": null, \"phone\": null, \"map_url\": \"https://www.google.com/maps/search/?api=1&query=Downtown+Dental\", \"website\": null}}, ; lint:suppress max-line-length
+  {\"task_title\": \"Review Quarterly Report\", \"description\": null, \"category\": \"Work\", \"priority\": \"medium\", \"scheduled_date\": null, \"due_date\": \"2026-01-25\", \"location\": null} ; lint:suppress max-line-length
 ]}
 
 Note: The \"Buy groceries\" item was skipped because it was marked DONE.
 
 Respond with ONLY the JSON object, no markdown formatting or additional text.")
 
-(defun get-import-system-prompt ()
-  "Get the import system prompt with today's date filled in."
+(defun get-import-system-prompt (&optional list-definitions-text)
+  "Get the import system prompt with today's date and optional list definitions filled in."
   (format nil *import-system-prompt-template*
           (lt:format-timestring nil (lt:now)
-                               :format '(:long-weekday ", " :long-month " " :day ", " :year))))
+                               :format '(:long-weekday ", " :long-month " " :day ", " :year))
+          (or list-definitions-text "")))
 
 (defun parse-import-response (response)
   "Parse the JSON response from the org-mode import.
@@ -755,10 +725,10 @@ Respond with ONLY the JSON object, no markdown formatting or additional text.")
                                                                     ((string-equal p "medium") :medium)
                                                                     ((string-equal p "low") :low)
                                                                     (t :medium)))
-                                                      :estimated-minutes (let ((m (gethash "estimated_minutes" item)))
-                                                                          (if (numberp m) (truncate m) 15))
                                                       :scheduled-date scheduled-date
                                                       :due-date due-date
+                                                      :list-name (json-null-to-nil (gethash "list_name" item))
+                                                      :list-section (json-null-to-nil (gethash "list_section" item))
                                                       :location-info location-info)))
                                  (push todo-data result)))
                       (llog:info "Parsed import response"
@@ -803,7 +773,8 @@ Respond with ONLY the JSON object, no markdown formatting or additional text.")
             (return-from import-org-file nil))
 
           (let* ((user-context (load-user-context))
-                 (system-prompt (get-import-system-prompt))
+                 (list-defs-text (format-list-definitions-for-prompt))
+                 (system-prompt (get-import-system-prompt list-defs-text))
                  (user-input (format nil "Parse and enrich the following org-mode file:~%~%~A" file-content))
                  (prompt (if user-context
                              (format nil "~A~%~%User Context:~%~A~%~%~A"

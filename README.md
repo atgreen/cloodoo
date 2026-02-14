@@ -219,7 +219,7 @@ Press `?` in the TUI for the full help overlay.
 
 ```
 cloodoo                     Launch the TUI
-cloodoo add TITLE           Add a task (--priority, --due, --tag, --note)
+cloodoo add TITLE           Add a task (--priority, --due, --schedule, --tag, --note, --attachment)
 cloodoo list                List tasks (--status, --priority, --all)
 cloodoo done SEARCH         Mark a task completed
 cloodoo stats               Show counts and overdue tasks
@@ -227,6 +227,8 @@ cloodoo export              Export tasks in org-agenda format (text or PDF)
 
 cloodoo sync-server         Start gRPC sync server (default 0.0.0.0:50051)
 cloodoo sync-connect        Connect TUI to a remote sync server
+cloodoo sync-reset          Force a full resync across all connected devices
+cloodoo sync-upload-attachments  Upload all local attachments to the sync server
 
 cloodoo cert init           Initialize certificate authority
 cloodoo cert issue NAME     Issue client certificate (shows QR code)
@@ -441,32 +443,6 @@ state is always `WHERE valid_to IS NULL`.
 ./cloodoo dump       # Export as SQL
 ./cloodoo compact    # Remove old versions to reclaim space
 ./cloodoo stats      # Counts, overdue tasks, priorities
-```
-
-## Project layout
-
-```
-src/
-  package.lisp       Package definition
-  model.lisp         Todo data model
-  db.lisp            SQLite with temporal versioning
-  storage.lisp       File-based persistence and XDG paths
-  enrich.lisp        LLM enrichment (Gemini, OpenAI, Anthropic, Ollama)
-  export.lisp        Export to org-agenda format (text and PDF)
-  view.lisp          TUI rendering
-  components.lisp    Reusable UI components
-  update.lisp        TUI event handling and keybindings
-  server.lisp        HTTP server for certificate pairing
-  sync.lisp          gRPC bidirectional sync server and client
-  grpc-proto.lisp    Protocol buffer definitions
-  certs.lisp         Certificate authority and mTLS
-  cli.lisp           CLI commands (clingon)
-  main.lisp          Entry point
-android/             Jetpack Compose companion app
-browser-extension/   Browser extension (Manifest V3)
-gnome-extension/     GNOME Shell extension for screenshot capture
-cloodoo.asd          ASDF system definition
-Makefile             Build script
 ```
 
 ## License

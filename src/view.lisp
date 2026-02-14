@@ -599,13 +599,6 @@
                          (format s "~%~%~A"
                                  (tui:colored (org-tags-string (todo-tags todo)) :fg tui:*fg-magenta*)))
 
-                       ;; Estimated time
-                       (when (todo-estimated-minutes todo)
-                         (format s "~%~%~A"
-                                 (tui:colored
-                                  (format nil "Estimated: ~A min" (todo-estimated-minutes todo))
-                                  :fg tui:*fg-yellow*)))
-
                        ;; Location info
                        (when (todo-location-info todo)
                          (let ((loc (todo-location-info todo)))
@@ -1134,7 +1127,8 @@
                   ("a" . "Add item")
                   ("e" . "Edit item")
                   ("DEL/D" . "Delete item/done")
-                  ("S-↑/↓" . "Priority +/-"))))
+                  ("S-↑/↓" . "Priority +/-")
+                  ("" . ""))))
          (col2 (render-help-column "ORGANIZE"
                 '(("t" . "Edit tags")
                   ("/" . "Search")
@@ -1144,6 +1138,7 @@
                   ("r" . "Refresh list")
                   ("S/L" . "Set sched/due")
                   ("&" . "Re-enrich")
+                  ("" . "")
                   ("" . "")
                   ("" . ""))))
          (col3 (render-help-column "SIDEBAR"
@@ -1156,9 +1151,11 @@
                   ("Esc" . "Return to list")
                   ("" . "")
                   ("" . "")
+                  ("" . "")
                   ("" . ""))))
          (col4 (render-help-column "OTHER"
-                '(("i" . "Import org")
+                '(("W" . "Lists view")
+                  ("i" . "Import org")
                   ("u/U" . "Edit context")
                   ("?" . "This help")
                   ("q" . "Quit")
@@ -1170,7 +1167,7 @@
                   ("Del" . "Clear date"))))
          (presets (model-tag-presets model)))
     ;; Create vertical separator spanning all rows
-    (let* ((num-rows 11)  ; title + 10 entries
+    (let* ((num-rows 12)  ; title + 11 entries
            (sep-line (tui:colored " │ " :fg tui:*fg-bright-black*))
            (sep (format nil "~{~A~^~%~}" (loop repeat num-rows collect sep-line)))
            (keys-section (tui:join-horizontal :top col1 sep col2 sep col3 sep col4))
@@ -1438,6 +1435,217 @@
                                :x-position tui:+center+
                                :y-position tui:+middle+)))
 
+;;── List Management Views ─────────────────────────────────────────────────────
+
+(defun render-lists-overview (model)
+  "Render the lists overview as a modal overlay on the main list view."
+  (let* ((background (render-list-view model))
+         (term-width (model-term-width model))
+         (lists (model-lists-data model))
+         (cursor (model-lists-cursor model))
+         (modal-width (min 60 (max 40 (- term-width 10))))
+         (content-width (- modal-width 6))
+         (content
+           (with-output-to-string (c)
+             (if (null lists)
+                 (format c "~A~%~%~A"
+                         (tui:colored "No lists defined." :fg tui:*fg-bright-black*)
+                         (tui:colored "Press 'a' to create one." :fg tui:*fg-bright-black*))
+                 (loop for list-def in lists
+                       for idx from 0
+                       for selected = (= idx cursor)
+                       for name = (list-def-name list-def)
+                       for desc = (list-def-description list-def)
+                       for item-count = (length (db-load-list-items (list-def-id list-def)))
+                       for count-str = (format nil "(~D item~:P)" item-count)
+                       for line = (format nil "~A  ~A"
+                                          (pad-to-width name (min 30 (- content-width (length count-str) 3)))
+                                          (tui:colored count-str :fg tui:*fg-bright-black*))
+                       do (if selected
+                              (format c "~A~%"
+                                      (tui:colored (pad-to-width line content-width)
+                                                   :bg tui:*bg-cyan* :fg tui:*fg-black*))
+                              (format c "~A~%" line))
+                          (when (and desc selected)
+                            (format c "  ~A~%"
+                                    (tui:colored
+                                     (if (> (length desc) (- content-width 2))
+                                         (concatenate 'string (subseq desc 0 (- content-width 4)) "..")
+                                         desc)
+                                     :fg tui:*fg-bright-black*)))))
+             ;; Help line
+             (format c "~%~A"
+                     (tui:colored "jk:nav  Enter:open  a:create  e:edit  d:del  Esc:back"
+                                 :fg tui:*fg-bright-black*))))
+         (modal (render-box-with-title "LISTS" content :min-width modal-width)))
+    (tui:composite-with-shadow modal background
+                               :x-position tui:+center+
+                               :y-position tui:+middle+)))
+
+(defun render-list-detail-view (model)
+  "Render the list detail view as a modal overlay showing items grouped by section."
+  (let* ((background (render-list-view model))
+         (term-width (model-term-width model))
+         (term-height (model-term-height model))
+         (list-def (model-list-detail-def model))
+         (items (model-list-detail-items model))
+         (cursor (model-list-detail-cursor model))
+         (modal-width (min 65 (max 45 (- term-width 8))))
+         (content-width (- modal-width 6))
+         (max-visible (max 5 (- term-height 10)))
+         (content
+           (with-output-to-string (c)
+             (if (null items)
+                 (format c "~A~%~%~A"
+                         (tui:colored "No items in this list." :fg tui:*fg-bright-black*)
+                         (tui:colored "Press 'a' to add one." :fg tui:*fg-bright-black*))
+                 (let* ((flat (build-list-detail-flat-items list-def items))
+                        ;; Map item cursor position to flat list position
+                        (item-idx 0)
+                        (visible-count 0))
+                   (dolist (entry flat)
+                     (when (>= visible-count max-visible)
+                       (return))
+                     (let ((type (first entry)))
+                       (case type
+                         (:section
+                          (let ((sec-name (second entry)))
+                            (when (> visible-count 0)
+                              (format c "~%"))
+                            (format c "~A~%"
+                                    (tui:bold (tui:colored (string-upcase sec-name) :fg tui:*fg-cyan*)))
+                            (incf visible-count)))
+                         (:item
+                          (let* ((item (second entry))
+                                 (selected (= item-idx cursor))
+                                 (check (if (list-item-checked item) "x" " "))
+                                 (title (list-item-title item))
+                                 (line (format nil "  [~A] ~A" check title)))
+                            (if selected
+                                (format c "~A~%"
+                                        (tui:colored (pad-to-width line content-width)
+                                                     :bg tui:*bg-cyan* :fg tui:*fg-black*))
+                                (if (list-item-checked item)
+                                    (format c "~A~%"
+                                            (tui:render-styled
+                                             (tui:make-style :strikethrough t
+                                                             :foreground tui:*fg-bright-black*)
+                                             line))
+                                    (format c "~A~%" line)))
+                            (incf item-idx)
+                            (incf visible-count))))))))
+             ;; Footer stats
+             (let ((total (length items))
+                   (checked (count-if #'list-item-checked items)))
+               (format c "~%~A"
+                       (tui:colored (format nil "~D/~D checked" checked total)
+                                   :fg tui:*fg-bright-black*)))
+             ;; Help line
+             (format c "~%~A"
+                     (tui:colored "jk:nav  Space:check  a:add  d:del  s:share  Esc:back"
+                                 :fg tui:*fg-bright-black*))))
+         (title (if list-def (string-upcase (list-def-name list-def)) "LIST"))
+         (modal (render-box-with-title title content :min-width modal-width)))
+    (tui:composite-with-shadow modal background
+                               :x-position tui:+center+
+                               :y-position tui:+middle+)))
+
+(defun render-list-form-view (model)
+  "Render the list create/edit form as a modal overlay."
+  (let* ((background (render-list-view model))
+         (term-width (model-term-width model))
+         (dialog-width (calculate-dialog-width term-width))
+         (is-edit (model-list-form-editing-id model))
+         (title (if is-edit "EDIT LIST" "NEW LIST"))
+         (active (model-list-form-active-field model))
+         (content
+           (with-output-to-string (c)
+             ;; Name input
+             (format c "~A ~A ~A~%"
+                     (if (eql active :name)
+                         (tui:colored ">" :fg tui:*fg-cyan*)
+                         " ")
+                     (tui:bold "Name:")
+                     (tui.textinput:textinput-view (model-list-form-name-input model)))
+
+             ;; Description input
+             (format c "~A ~A ~A~%"
+                     (if (eql active :desc)
+                         (tui:colored ">" :fg tui:*fg-cyan*)
+                         " ")
+                     (tui:bold "Desc:")
+                     (tui.textinput:textinput-view (model-list-form-desc-input model)))
+
+             ;; Sections input
+             (format c "~A ~A ~A~%"
+                     (if (eql active :sections)
+                         (tui:colored ">" :fg tui:*fg-cyan*)
+                         " ")
+                     (tui:bold "Secs:")
+                     (tui.textinput:textinput-view (model-list-form-sections-input model)))
+             (format c "  ~A~%"
+                     (tui:colored "comma-separated section names" :fg tui:*fg-bright-black*))
+
+             ;; Submit button
+             (format c "~%~A ~A"
+                     (if (eql active :submit)
+                         (tui:colored ">" :fg tui:*fg-cyan*)
+                         " ")
+                     (if (eql active :submit)
+                         (tui:bold (tui:colored "[ Save ]" :fg tui:*fg-green*))
+                         (tui:colored "[ Save ]" :fg tui:*fg-bright-black*)))
+
+             ;; Help
+             (format c "~%~%~A"
+                     (tui:colored "Tab:next field  Enter:save  Esc:cancel" :fg tui:*fg-bright-black*))))
+         (modal (render-box-with-title title content :min-width dialog-width)))
+    (tui:composite-with-shadow modal background
+                               :x-position tui:+center+
+                               :y-position tui:+middle+)))
+
+(defun render-list-item-add-view (model)
+  "Render the add list item dialog as a modal overlay."
+  (let* ((background (render-list-detail-view model))
+         (term-width (model-term-width model))
+         (list-def (model-list-detail-def model))
+         (modal-width (min 55 (max 40 (- term-width 10))))
+         (content
+           (with-output-to-string (c)
+             (format c "~A ~A~%"
+                     (tui:bold "Item:")
+                     (tui.textinput:textinput-view (model-list-item-add-input model)))
+             (format c "~%~A"
+                     (tui:colored "Enter:add  Esc:cancel" :fg tui:*fg-bright-black*))))
+         (title (format nil "ADD TO ~A" (if list-def (string-upcase (list-def-name list-def)) "LIST")))
+         (modal (render-box-with-title title content :min-width modal-width)))
+    (tui:composite-with-shadow modal background
+                               :x-position tui:+center+
+                               :y-position tui:+middle+)))
+
+(defun render-list-delete-confirm-view (model)
+  "Render the delete list confirmation dialog as an overlay."
+  (let* ((term-width (model-term-width model))
+         (lists (model-lists-data model))
+         (list-def (when (and lists (< (model-lists-cursor model) (length lists)))
+                     (nth (model-lists-cursor model) lists)))
+         (background (render-lists-overview model))
+         (modal-width (min 50 (max 30 (- term-width 10))))
+         (content (if list-def
+                      (with-output-to-string (c)
+                        (format c "~A~%~%"
+                                (tui:bold (format nil "Delete list \"~A\"?" (list-def-name list-def))))
+                        (let ((item-count (length (db-load-list-items (list-def-id list-def)))))
+                          (when (> item-count 0)
+                            (format c "This will remove ~D item~:P.~%~%" item-count)))
+                        (format c "~A"
+                                (tui:colored "y:confirm  any other key:cancel"
+                                            :fg tui:*fg-bright-black*)))
+                      "No list selected"))
+         (modal (render-box-with-title "DELETE LIST" content :min-width modal-width)))
+    (tui:composite-with-shadow modal background
+                               :x-position tui:+center+
+                               :y-position tui:+middle+)))
+
 ;;── Main View Method ───────────────────────────────────────────────────────────
 
 (defmethod tui:view ((model app-model))
@@ -1463,4 +1671,9 @@
     (:help (render-help-view model))
     (:inline-tags (render-inline-tag-editor model))
     (:context-info (render-context-info-view model))
+    (:lists-overview (render-lists-overview model))
+    (:list-detail (render-list-detail-view model))
+    ((:list-create :list-edit) (render-list-form-view model))
+    (:list-item-add (render-list-item-add-view model))
+    (:list-delete-confirm (render-list-delete-confirm-view model))
     (otherwise (render-list-view model))))
