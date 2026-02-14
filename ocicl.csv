@@ -1,8 +1,8 @@
-ag-grpc, ghcr.io/ocicl/ag-proto-cli@sha256:8ea66b16ff2d49545106a4cef96734fb645dd6d18c3e0f647e32b2f548afb253, ag-gRPC-20260209-af9f6b8/ag-grpc.asd
-ag-grpc-all, ghcr.io/ocicl/ag-proto-cli@sha256:8ea66b16ff2d49545106a4cef96734fb645dd6d18c3e0f647e32b2f548afb253, ag-gRPC-20260209-af9f6b8/ag-grpc-all.asd
-ag-http2, ghcr.io/ocicl/ag-proto-cli@sha256:8ea66b16ff2d49545106a4cef96734fb645dd6d18c3e0f647e32b2f548afb253, ag-gRPC-20260209-af9f6b8/ag-http2.asd
-ag-proto, ghcr.io/ocicl/ag-proto-cli@sha256:8ea66b16ff2d49545106a4cef96734fb645dd6d18c3e0f647e32b2f548afb253, ag-gRPC-20260209-af9f6b8/ag-proto.asd
-ag-proto-cli, ghcr.io/ocicl/ag-proto-cli@sha256:8ea66b16ff2d49545106a4cef96734fb645dd6d18c3e0f647e32b2f548afb253, ag-gRPC-20260209-af9f6b8/ag-proto-cli.asd
+ag-grpc, ghcr.io/ocicl/ag-proto-cli@sha256:c7bcd827fbbae24cca2d605d3e4cd88bb1bd788f2f775db0957f994c2d052a47, ag-gRPC-20260214-dd7b561/ag-grpc.asd
+ag-grpc-all, ghcr.io/ocicl/ag-proto-cli@sha256:c7bcd827fbbae24cca2d605d3e4cd88bb1bd788f2f775db0957f994c2d052a47, ag-gRPC-20260214-dd7b561/ag-grpc-all.asd
+ag-http2, ghcr.io/ocicl/ag-proto-cli@sha256:c7bcd827fbbae24cca2d605d3e4cd88bb1bd788f2f775db0957f994c2d052a47, ag-gRPC-20260214-dd7b561/ag-http2.asd
+ag-proto, ghcr.io/ocicl/ag-proto-cli@sha256:c7bcd827fbbae24cca2d605d3e4cd88bb1bd788f2f775db0957f994c2d052a47, ag-gRPC-20260214-dd7b561/ag-proto.asd
+ag-proto-cli, ghcr.io/ocicl/ag-proto-cli@sha256:c7bcd827fbbae24cca2d605d3e4cd88bb1bd788f2f775db0957f994c2d052a47, ag-gRPC-20260214-dd7b561/ag-proto-cli.asd
 alexandria, ghcr.io/ocicl/alexandria@sha256:e433c2e076ed3bcf8641b97b00192680db2201d305efac9293539dee88c7fbf7, alexandria-20240503-8514d8e/alexandria.asd
 asn1, ghcr.io/ocicl/asn1@sha256:b9913fbf4fcdacf7a01930d1b05ccfb64ad778263a29418dc0a00c6d7919cd87, asn1-20240503-b0388fa/asn1.asd
 atomics, ghcr.io/ocicl/atomics@sha256:ae5daa72b09318c1b07aca6203411181d8bed4382596b27f64d718968131f3a4, atomics-20250813-bf0e261/atomics.asd
@@ -85,7 +85,7 @@ iolib.base, ghcr.io/ocicl/iolib@sha256:953f1cb142e647da50562d51eca562afc2c5b941b
 iolib.common-lisp, ghcr.io/ocicl/iolib@sha256:953f1cb142e647da50562d51eca562afc2c5b941b89ae622332b53c7dbed7e1b, iolib-20240503-396cc43/iolib.common-lisp.asd
 iolib.conf, ghcr.io/ocicl/iolib@sha256:953f1cb142e647da50562d51eca562afc2c5b941b89ae622332b53c7dbed7e1b, iolib-20240503-396cc43/iolib.conf.asd
 iolib.examples, ghcr.io/ocicl/iolib@sha256:953f1cb142e647da50562d51eca562afc2c5b941b89ae622332b53c7dbed7e1b, iolib-20240503-396cc43/iolib.examples.asd
-iparse, ghcr.io/ocicl/iparse@sha256:8e3f197636c96586e81aed730a3272b60d004d29d58862be459b03b507fb82bd, cl-iparse-20260131-3eae242/iparse.asd
+iparse, ghcr.io/ocicl/iparse@sha256:6c71dc826f98672ee86df5bab7420e9a9934e755cb2c5d60ec78b21ae6d5137e, cl-iparse-20260213-74a8c35/iparse.asd
 ironclad, ghcr.io/ocicl/ironclad@sha256:3117e5a26a3e94924074c3548c235a2b733609ed61a2731880ac9e31df55428b, ironclad-20240503-6da010f/ironclad.asd
 ironclad-text, ghcr.io/ocicl/ironclad@sha256:3117e5a26a3e94924074c3548c235a2b733609ed61a2731880ac9e31df55428b, ironclad-20240503-6da010f/ironclad-text.asd
 iterate, ghcr.io/ocicl/iterate@sha256:6950c55e3782d58cabbbb5753111a70d8cafab8348b7fd6f2143d9abeaab46fb, iterate-20250703-d27d7ff/iterate.asd
@@ -117,7 +117,7 @@ quri-test, ghcr.io/ocicl/quri@sha256:e2559f91600e4895e115b42dde88fcaac3677f05133
 rfc2388, ghcr.io/ocicl/rfc2388@sha256:4190f6eb36b3b2f53def6eff56b44e76edf4086ada2feb6d88bb671a40fc9f70, rfc2388-20240503-591bcf7/rfc2388.asd
 routes, ghcr.io/ocicl/routes@sha256:e64fe3e85f8c0f19ada40f6cbda843f63ee73c705d5c243a2b8730b6308d664e, cl-routes-20240503-1b79e85/routes.asd
 salza2, ghcr.io/ocicl/salza2@sha256:0f9d930524b469e1442372a6e12b26742d9e6a1144e6a455006943190d1ea71e, salza2-2.1/salza2.asd
-serapeum, ghcr.io/ocicl/serapeum@sha256:7dbd35bae30799072da0ddd8bf1b1d03d81354bd74f89ec48d24d8157e80eb38, serapeum-20260211-1049f53/serapeum.asd
+serapeum, ghcr.io/ocicl/serapeum@sha256:31bccc85079addd0cb5583b484b121e54fab8cb156e8919f5e7ff2ae9b1de076, serapeum-20260213-71f35c9/serapeum.asd
 smart-buffer, ghcr.io/ocicl/smart-buffer@sha256:b8d194f5881c415fd7f0099b88dfd9e2158405c2966de15c716b155a364bf0f7, smart-buffer-20240503-619759d/smart-buffer.asd
 smart-buffer-test, ghcr.io/ocicl/smart-buffer@sha256:b8d194f5881c415fd7f0099b88dfd9e2158405c2966de15c716b155a364bf0f7, smart-buffer-20240503-619759d/smart-buffer-test.asd
 split-sequence, ghcr.io/ocicl/split-sequence@sha256:3a37662eedd99c42995587b9d443c4631f25c4c523091bcca31a27b880585b8e, split-sequence-2.0.1/split-sequence.asd

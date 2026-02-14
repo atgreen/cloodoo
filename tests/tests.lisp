@@ -299,6 +299,126 @@
             (is (search "[x] Milk" output))
             (is (search "[ ] Apples" output))))))))
 
+;;── Multi-User Isolation Tests ────────────────────────────────────────────────
+
+(test multi-user-todo-isolation-test
+  "Test that todos saved with different user_ids are isolated."
+  (with-test-db
+    ;; Save a todo as alice
+    (let ((alice-todo (cloodoo:make-todo "Alice's task")))
+      (cloodoo::db-save-todo alice-todo :user-id "alice")
+      ;; Save a todo as bob
+      (let ((bob-todo (cloodoo:make-todo "Bob's task")))
+        (cloodoo::db-save-todo bob-todo :user-id "bob")
+        ;; Query as alice - should only see alice's todo
+        (let ((alice-rows (cloodoo::db-load-current-rows-since "1970-01-01T00:00:00Z"
+                                                                :user-id "alice")))
+          (is (= 1 (length alice-rows)))
+          (is (string= "Alice's task" (gethash "title" (first alice-rows)))))
+        ;; Query as bob - should only see bob's todo
+        (let ((bob-rows (cloodoo::db-load-current-rows-since "1970-01-01T00:00:00Z"
+                                                              :user-id "bob")))
+          (is (= 1 (length bob-rows)))
+          (is (string= "Bob's task" (gethash "title" (first bob-rows)))))
+        ;; Query without user-id - should see both
+        (let ((all-rows (cloodoo::db-load-current-rows-since "1970-01-01T00:00:00Z")))
+          (is (= 2 (length all-rows))))))))
+
+(test multi-user-todo-delete-isolation-test
+  "Test that deleting a todo with user_id only affects that user's data."
+  (with-test-db
+    (let ((alice-todo (cloodoo:make-todo "Shared title")))
+      (cloodoo::db-save-todo alice-todo :user-id "alice")
+      (let ((bob-todo (cloodoo:make-todo "Shared title")))
+        (cloodoo::db-save-todo bob-todo :user-id "bob")
+        ;; Delete alice's todo
+        (cloodoo::db-delete-todo (cloodoo:todo-id alice-todo) :user-id "alice")
+        ;; Bob's todo should still exist
+        (let ((bob-rows (cloodoo::db-load-current-rows-since "1970-01-01T00:00:00Z"
+                                                              :user-id "bob")))
+          (is (= 1 (length bob-rows))))
+        ;; Alice should have nothing
+        (let ((alice-rows (cloodoo::db-load-current-rows-since "1970-01-01T00:00:00Z"
+                                                                :user-id "alice")))
+          (is (= 0 (length alice-rows))))))))
+
+(test multi-user-list-isolation-test
+  "Test that list definitions are isolated by user_id."
+  (with-test-db
+    ;; Create a list as alice
+    (let ((alice-list (cloodoo:make-list-definition "Grocery"
+                        :sections '("Produce" "Dairy"))))
+      (cloodoo::db-save-list-definition alice-list :user-id "alice")
+      ;; Create a list as bob
+      (let ((bob-list (cloodoo:make-list-definition "Movies")))
+        (cloodoo::db-save-list-definition bob-list :user-id "bob")
+        ;; Query list defs as alice
+        (let ((alice-lists (cloodoo::db-load-current-list-rows-since
+                             "1970-01-01T00:00:00Z" :user-id "alice")))
+          (is (= 1 (length alice-lists)))
+          (is (string= "Grocery" (gethash "name" (first alice-lists)))))
+        ;; Query list defs as bob
+        (let ((bob-lists (cloodoo::db-load-current-list-rows-since
+                           "1970-01-01T00:00:00Z" :user-id "bob")))
+          (is (= 1 (length bob-lists)))
+          (is (string= "Movies" (gethash "name" (first bob-lists)))))))))
+
+(test multi-user-list-item-isolation-test
+  "Test that list items are isolated by user_id."
+  (with-test-db
+    (let ((list-def (cloodoo:make-list-definition "Shared List")))
+      (cloodoo::db-save-list-definition list-def)
+      (let ((list-id (cloodoo:list-def-id list-def)))
+        ;; Add item as alice
+        (let ((alice-item (cloodoo:make-list-item list-id "Alice's item")))
+          (cloodoo::db-save-list-item alice-item :user-id "alice")
+          ;; Add item as bob
+          (let ((bob-item (cloodoo:make-list-item list-id "Bob's item")))
+            (cloodoo::db-save-list-item bob-item :user-id "bob")
+            ;; Query items as alice
+            (let ((alice-items (cloodoo::db-load-current-list-item-rows-since
+                                 "1970-01-01T00:00:00Z" :user-id "alice")))
+              (is (= 1 (length alice-items)))
+              (is (string= "Alice's item" (gethash "title" (first alice-items)))))
+            ;; Query items as bob
+            (let ((bob-items (cloodoo::db-load-current-list-item-rows-since
+                               "1970-01-01T00:00:00Z" :user-id "bob")))
+              (is (= 1 (length bob-items)))
+              (is (string= "Bob's item" (gethash "title" (first bob-items)))))))))))
+
+(test multi-user-settings-isolation-test
+  "Test that settings are isolated by user_id."
+  (with-test-db
+    ;; Save setting for alice
+    (cloodoo::db-save-setting "theme" "dark" :user-id "alice")
+    ;; Save setting for bob
+    (cloodoo::db-save-setting "theme" "light" :user-id "bob")
+    ;; Load alice's settings
+    (let ((alice-settings (cloodoo::db-load-all-settings :user-id "alice")))
+      (is (= 1 (hash-table-count alice-settings)))
+      (is (string= "dark" (getf (gethash "theme" alice-settings) :value))))
+    ;; Load bob's settings
+    (let ((bob-settings (cloodoo::db-load-all-settings :user-id "bob")))
+      (is (= 1 (hash-table-count bob-settings)))
+      (is (string= "light" (getf (gethash "theme" bob-settings) :value))))
+    ;; Load setting with timestamp for alice
+    (multiple-value-bind (value updated-at)
+        (cloodoo::db-load-setting-with-timestamp "theme" :user-id "alice")
+      (is (string= "dark" value))
+      (is (not (null updated-at))))))
+
+(test migration-default-user-id-test
+  "Test that existing data gets user_id = 'default' after migration."
+  (with-test-db
+    ;; Save a todo without user-id (standalone mode)
+    (let ((todo (cloodoo:make-todo "Legacy task")))
+      (cloodoo::db-save-todo todo)
+      ;; Query with user-id "default" should find it
+      (let ((rows (cloodoo::db-load-current-rows-since "1970-01-01T00:00:00Z"
+                                                        :user-id "default")))
+        (is (= 1 (length rows)))
+        (is (string= "Legacy task" (gethash "title" (first rows))))))))
+
 ;;── Run Tests ──────────────────────────────────────────────────────────────────
 
 (defun run-tests ()

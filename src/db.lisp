@@ -143,6 +143,7 @@
         scheduled_date TEXT,
         due_date TEXT,
         tags TEXT,
+        estimated_minutes INTEGER,
         location_info TEXT,
         url TEXT,
         parent_id TEXT,
@@ -246,11 +247,14 @@
             "INSERT INTO tag_presets (slot, tags) VALUES (?, NULL)" i))))
 
     ;; App settings table for user context and other settings
+    ;; Uses composite PK (key, user_id) for multi-user isolation.
     (sqlite:execute-non-query db
       "CREATE TABLE IF NOT EXISTS app_settings (
-         key TEXT PRIMARY KEY,
+         key TEXT NOT NULL,
          value TEXT,
-         updated_at TEXT NOT NULL
+         updated_at TEXT NOT NULL,
+         user_id TEXT NOT NULL DEFAULT 'default',
+         PRIMARY KEY (key, user_id)
        )")
 
     ;;── List Management Tables ──────────────────────────────────────────────
@@ -313,7 +317,84 @@
         capabilities TEXT,
         last_seen TEXT,
         device_name TEXT
-      )"))
+      )")
+
+    ;;── Multi-User Migrations ──────────────────────────────────────────────
+
+    ;; Migration: add user_id column to todos
+    (handler-case
+        (sqlite:execute-non-query db "
+          ALTER TABLE todos ADD COLUMN user_id TEXT NOT NULL DEFAULT 'default'")
+      (error () nil))
+
+    ;; Migration: add user_id column to list_definitions
+    (handler-case
+        (sqlite:execute-non-query db "
+          ALTER TABLE list_definitions ADD COLUMN user_id TEXT NOT NULL DEFAULT 'default'")
+      (error () nil))
+
+    ;; Migration: add user_id column to list_items
+    (handler-case
+        (sqlite:execute-non-query db "
+          ALTER TABLE list_items ADD COLUMN user_id TEXT NOT NULL DEFAULT 'default'")
+      (error () nil))
+
+    ;; Migration: add user_id column to app_settings and recreate with composite PK.
+    ;; app_settings originally had key TEXT PRIMARY KEY; multi-user needs (key, user_id).
+    (handler-case
+        (sqlite:execute-non-query db "
+          ALTER TABLE app_settings ADD COLUMN user_id TEXT NOT NULL DEFAULT 'default'")
+      (error () nil))
+
+    ;; Migrate app_settings to composite PK (key, user_id) if needed.
+    ;; Check if the table still has single-column PK by trying to insert two rows
+    ;; with the same key but different user_id. If that fails, recreate the table.
+    (handler-case
+        (progn
+          ;; Test if composite PK is already in place
+          (sqlite:execute-non-query db "
+            INSERT INTO app_settings (key, value, updated_at, user_id)
+            VALUES ('__pk_test__', '', '', '__a__')")
+          (sqlite:execute-non-query db "
+            INSERT INTO app_settings (key, value, updated_at, user_id)
+            VALUES ('__pk_test__', '', '', '__b__')")
+          ;; If we get here, composite PK is already in place. Clean up.
+          (sqlite:execute-non-query db
+            "DELETE FROM app_settings WHERE key = '__pk_test__'"))
+      (error ()
+        ;; Composite PK not in place. Recreate the table.
+        (ignore-errors
+          (sqlite:execute-non-query db
+            "DELETE FROM app_settings WHERE key = '__pk_test__'"))
+        (handler-case
+            (progn
+              (sqlite:execute-non-query db "
+                CREATE TABLE app_settings_new (
+                  key TEXT NOT NULL,
+                  value TEXT,
+                  updated_at TEXT NOT NULL,
+                  user_id TEXT NOT NULL DEFAULT 'default',
+                  PRIMARY KEY (key, user_id)
+                )")
+              (sqlite:execute-non-query db "
+                INSERT INTO app_settings_new (key, value, updated_at, user_id)
+                SELECT key, value, updated_at, user_id FROM app_settings")
+              (sqlite:execute-non-query db "DROP TABLE app_settings")
+              (sqlite:execute-non-query db "ALTER TABLE app_settings_new RENAME TO app_settings"))
+          (error () nil))))
+
+    ;; Indexes for user-scoped queries
+    (sqlite:execute-non-query db "
+      CREATE INDEX IF NOT EXISTS idx_todos_user_current
+      ON todos(user_id, valid_to) WHERE valid_to IS NULL")
+
+    (sqlite:execute-non-query db "
+      CREATE INDEX IF NOT EXISTS idx_list_defs_user_current
+      ON list_definitions(user_id, valid_to) WHERE valid_to IS NULL")
+
+    (sqlite:execute-non-query db "
+      CREATE INDEX IF NOT EXISTS idx_list_items_user_current
+      ON list_items(user_id, valid_to) WHERE valid_to IS NULL"))
   t)
 
 ;;── Timestamp Helpers ─────────────────────────────────────────────────────────
@@ -449,28 +530,46 @@
     (sqlite:execute-single db
       "SELECT value FROM app_settings WHERE key = ?" key)))
 
-(defun db-load-setting-with-timestamp (key)
-  "Load a setting by KEY with its timestamp, returning (values value updated-at) or NIL."
+(defun db-load-setting-with-timestamp (key &key user-id)
+  "Load a setting by KEY with its timestamp, returning (values value updated-at) or NIL.
+   USER-ID scopes the query for multi-user sync; NIL queries without user filtering."
   (with-db (db)
-    (let ((row (sqlite:execute-to-list db
-                 "SELECT value, updated_at FROM app_settings WHERE key = ?" key)))
+    (let ((row (if user-id
+                   (sqlite:execute-to-list db
+                     "SELECT value, updated_at FROM app_settings WHERE key = ? AND user_id = ?"
+                     key user-id)
+                   (sqlite:execute-to-list db
+                     "SELECT value, updated_at FROM app_settings WHERE key = ?" key))))
       (when row
         (values (first (first row)) (second (first row)))))))
 
-(defun db-save-setting (key value)
-  "Save a SETTING with KEY and VALUE, auto-timestamping."
+(defun db-save-setting (key value &key user-id updated-at)
+  "Save a SETTING with KEY and VALUE.
+   UPDATED-AT overrides the timestamp (for sync); defaults to now.
+   USER-ID scopes the setting for multi-user sync; NIL for standalone mode."
   (with-db (db)
-    (sqlite:execute-non-query db
-      "INSERT OR REPLACE INTO app_settings (key, value, updated_at)
-       VALUES (?, ?, ?)"
-      key value (now-iso))))
+    (let ((ts (or updated-at (now-iso))))
+      (if user-id
+          (sqlite:execute-non-query db
+            "INSERT OR REPLACE INTO app_settings (key, value, updated_at, user_id)
+             VALUES (?, ?, ?, ?)"
+            key value ts user-id)
+          (sqlite:execute-non-query db
+            "INSERT OR REPLACE INTO app_settings (key, value, updated_at, user_id)
+             VALUES (?, ?, ?, 'default')"
+            key value ts)))))
 
-(defun db-load-all-settings ()
-  "Return all settings as a hash table."
+(defun db-load-all-settings (&key user-id)
+  "Return all settings as a hash table.
+   USER-ID scopes the query for multi-user sync; NIL returns all settings."
   (with-db (db)
     (let ((ht (make-hash-table :test 'equal))
-          (rows (sqlite:execute-to-list db
-                  "SELECT key, value, updated_at FROM app_settings")))
+          (rows (if user-id
+                    (sqlite:execute-to-list db
+                      "SELECT key, value, updated_at FROM app_settings WHERE user_id = ?"
+                      user-id)
+                    (sqlite:execute-to-list db
+                      "SELECT key, value, updated_at FROM app_settings"))))
       (dolist (row rows)
         (destructuring-bind (key value updated-at) row
           (setf (gethash key ht)
@@ -626,11 +725,12 @@
         (when (todo-attachment-hashes todo)
           (jzon:stringify (coerce (todo-attachment-hashes todo) 'vector)))))
 
-(defun db-save-todo (todo &key valid-from)
+(defun db-save-todo (todo &key valid-from user-id)
   "Save a TODO to the database using append-only semantics.
    If the TODO already exists (by ID), the old version is marked as superseded.
    Large text fields (description, location_info) are stored in the blobs table.
    VALID-FROM can be specified for sync operations to preserve original timestamp.
+   USER-ID scopes the row for multi-user sync; NIL for standalone mode.
    Returns T if saved, NIL if rejected due to conflict (incoming timestamp older than current)."
   (with-db (db)
     (let ((now (or valid-from (now-iso)))
@@ -658,18 +758,26 @@
                  WHERE id = ? AND valid_to IS NULL"
                  now (todo-id todo))
                ;; Insert the new version (description/location_info as hashes)
-               (sqlite:execute-non-query db "
-                 INSERT INTO todos (id, title, description_hash, priority, status,
-                                    scheduled_date, due_date, tags, estimated_minutes,
-                                    location_info_hash, url, parent_id, created_at,
-                                    completed_at, valid_from, valid_to, device_id,
-                                    repeat_interval, repeat_unit, enriching_p, attachment_hashes)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?)"
-                 (first values) (second values) desc-hash (fourth values)
-                 (fifth values) (sixth values) (seventh values) (eighth values)
-                 (ninth values) loc-hash (nth 10 values) (nth 11 values)
-                 (nth 12 values) (nth 13 values) now (nth 14 values)
-                 (nth 15 values) (nth 16 values) (nth 17 values) (nth 18 values))
+               (apply #'sqlite:execute-non-query db
+                 (if user-id
+                     "INSERT INTO todos (id, title, description_hash, priority, status,
+                                        scheduled_date, due_date, tags, estimated_minutes,
+                                        location_info_hash, url, parent_id, created_at,
+                                        completed_at, valid_from, valid_to, device_id,
+                                        repeat_interval, repeat_unit, enriching_p, attachment_hashes, user_id)
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?)"
+                     "INSERT INTO todos (id, title, description_hash, priority, status,
+                                        scheduled_date, due_date, tags, estimated_minutes,
+                                        location_info_hash, url, parent_id, created_at,
+                                        completed_at, valid_from, valid_to, device_id,
+                                        repeat_interval, repeat_unit, enriching_p, attachment_hashes)
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?)")
+                 (append (list (first values) (second values) desc-hash (fourth values)
+                               (fifth values) (sixth values) (seventh values) (eighth values)
+                               (ninth values) loc-hash (nth 10 values) (nth 11 values)
+                               (nth 12 values) (nth 13 values) now (nth 14 values)
+                               (nth 15 values) (nth 16 values) (nth 17 values) (nth 18 values))
+                         (when user-id (list user-id))))
                (sqlite:execute-non-query db "COMMIT")
                (setf committed t)
                t)  ; Return T on success
@@ -722,15 +830,21 @@
         (unless committed
           (ignore-errors (sqlite:execute-non-query db "ROLLBACK")))))))
 
-(defun db-delete-todo (todo-id)
+(defun db-delete-todo (todo-id &key user-id)
   "Delete a TODO by marking all its versions as superseded.
+   USER-ID scopes the delete for multi-user sync; NIL for standalone mode.
    The data remains for time-travel queries."
   (with-db (db)
     (let ((now (now-iso)))
-      (sqlite:execute-non-query db "
-        UPDATE todos SET valid_to = ?
-        WHERE id = ? AND valid_to IS NULL"
-        now todo-id))))
+      (if user-id
+          (sqlite:execute-non-query db "
+            UPDATE todos SET valid_to = ?
+            WHERE id = ? AND valid_to IS NULL AND user_id = ?"
+            now todo-id user-id)
+          (sqlite:execute-non-query db "
+            UPDATE todos SET valid_to = ?
+            WHERE id = ? AND valid_to IS NULL"
+            now todo-id)))))
 
 ;;── Tag Presets ───────────────────────────────────────────────────────────────
 
@@ -949,8 +1063,9 @@
                                           (eql device-id 'null))
                                 device-id))))
 
-(defun db-save-list-definition (list-def &key valid-from)
+(defun db-save-list-definition (list-def &key valid-from user-id)
   "Save a list definition using append-only temporal semantics.
+   USER-ID scopes the row for multi-user sync; NIL for standalone mode.
    Returns T on success, NIL if the upsert was rejected (e.g., stale)."
   (with-db (db)
     (let ((now (or valid-from (now-iso)))
@@ -988,18 +1103,23 @@
                WHERE LOWER(name) = LOWER(?) AND valid_to IS NULL"
                now (list-def-name list-def))
              ;; Insert the new version
-             (sqlite:execute-non-query db "
-               INSERT INTO list_definitions (id, name, description, sections, created_at,
-                                             device_id, valid_from, valid_to)
-               VALUES (?, ?, ?, ?, ?, ?, ?, NULL)"
-               (list-def-id list-def)
-               (list-def-name list-def)
-               (list-def-description list-def)
-               (when (list-def-sections list-def)
-                 (jzon:stringify (coerce (list-def-sections list-def) 'vector)))
-               (lt:format-rfc3339-timestring nil (list-def-created-at list-def))
-               (or (list-def-device-id list-def) (get-device-id))
-               now)
+             (apply #'sqlite:execute-non-query db
+               (if user-id
+                   "INSERT INTO list_definitions (id, name, description, sections, created_at,
+                                                  device_id, valid_from, valid_to, user_id)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?)"
+                   "INSERT INTO list_definitions (id, name, description, sections, created_at,
+                                                  device_id, valid_from, valid_to)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, NULL)")
+               (append (list (list-def-id list-def)
+                             (list-def-name list-def)
+                             (list-def-description list-def)
+                             (when (list-def-sections list-def)
+                               (jzon:stringify (coerce (list-def-sections list-def) 'vector)))
+                             (lt:format-rfc3339-timestring nil (list-def-created-at list-def))
+                             (or (list-def-device-id list-def) (get-device-id))
+                             now)
+                       (when user-id (list user-id))))
              (sqlite:execute-non-query db "COMMIT")
              (setf committed t)
              ;; Notify sync
@@ -1048,8 +1168,9 @@
       (when rows
         (row-to-list-definition (first rows))))))
 
-(defun db-delete-list-definition (list-def-id)
+(defun db-delete-list-definition (list-def-id &key user-id)
   "Delete a list definition and all its items by temporal close-out.
+   USER-ID scopes the delete for multi-user sync; NIL for standalone mode.
    Both the definition and items are closed in one transaction."
   (with-db (db)
     (let ((now (now-iso))
@@ -1058,15 +1179,25 @@
       (unwind-protect
            (progn
              ;; Close all current items on this list
-             (sqlite:execute-non-query db "
-               UPDATE list_items SET valid_to = ?
-               WHERE list_id = ? AND valid_to IS NULL"
-               now list-def-id)
+             (if user-id
+                 (sqlite:execute-non-query db "
+                   UPDATE list_items SET valid_to = ?
+                   WHERE list_id = ? AND valid_to IS NULL AND user_id = ?"
+                   now list-def-id user-id)
+                 (sqlite:execute-non-query db "
+                   UPDATE list_items SET valid_to = ?
+                   WHERE list_id = ? AND valid_to IS NULL"
+                   now list-def-id))
              ;; Close the definition
-             (sqlite:execute-non-query db "
-               UPDATE list_definitions SET valid_to = ?
-               WHERE id = ? AND valid_to IS NULL"
-               now list-def-id)
+             (if user-id
+                 (sqlite:execute-non-query db "
+                   UPDATE list_definitions SET valid_to = ?
+                   WHERE id = ? AND valid_to IS NULL AND user_id = ?"
+                   now list-def-id user-id)
+                 (sqlite:execute-non-query db "
+                   UPDATE list_definitions SET valid_to = ?
+                   WHERE id = ? AND valid_to IS NULL"
+                   now list-def-id))
              (sqlite:execute-non-query db "COMMIT")
              (setf committed t)
              ;; Notify sync
@@ -1100,9 +1231,10 @@
                    :device-id (unless (or (eql device-id :null) (eql device-id 'null))
                                 device-id))))
 
-(defun db-save-list-item (item &key valid-from)
+(defun db-save-list-item (item &key valid-from user-id)
   "Save a list item using append-only temporal semantics.
    Validates that list_id references a current list definition.
+   USER-ID scopes the row for multi-user sync; NIL for standalone mode.
    Returns T on success, NIL if list doesn't exist."
   (with-db (db)
     ;; Validate list_id exists
@@ -1123,19 +1255,24 @@
                WHERE id = ? AND valid_to IS NULL"
                now (list-item-id item))
              ;; Insert the new version
-             (sqlite:execute-non-query db "
-               INSERT INTO list_items (id, list_id, title, section, checked, notes,
-                                       created_at, device_id, valid_from, valid_to)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)"
-               (list-item-id item)
-               (list-item-list-id item)
-               (list-item-title item)
-               (list-item-section item)
-               (if (list-item-checked item) 1 0)
-               (list-item-notes item)
-               (lt:format-rfc3339-timestring nil (list-item-created-at item))
-               (or (list-item-device-id item) (get-device-id))
-               now)
+             (apply #'sqlite:execute-non-query db
+               (if user-id
+                   "INSERT INTO list_items (id, list_id, title, section, checked, notes,
+                                            created_at, device_id, valid_from, valid_to, user_id)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?)"
+                   "INSERT INTO list_items (id, list_id, title, section, checked, notes,
+                                            created_at, device_id, valid_from, valid_to)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)")
+               (append (list (list-item-id item)
+                             (list-item-list-id item)
+                             (list-item-title item)
+                             (list-item-section item)
+                             (if (list-item-checked item) 1 0)
+                             (list-item-notes item)
+                             (lt:format-rfc3339-timestring nil (list-item-created-at item))
+                             (or (list-item-device-id item) (get-device-id))
+                             now)
+                       (when user-id (list user-id))))
              (sqlite:execute-non-query db "COMMIT")
              (setf committed t)
              ;; Notify sync
@@ -1197,14 +1334,20 @@
               (error (e) (llog:warn "List item change notification failed: ~A" e))))
           t)))))
 
-(defun db-delete-list-item (item-id)
-  "Delete a list item by temporal close-out."
+(defun db-delete-list-item (item-id &key user-id)
+  "Delete a list item by temporal close-out.
+   USER-ID scopes the delete for multi-user sync; NIL for standalone mode."
   (with-db (db)
     (let ((now (now-iso)))
-      (sqlite:execute-non-query db "
-        UPDATE list_items SET valid_to = ?
-        WHERE id = ? AND valid_to IS NULL"
-        now item-id)
+      (if user-id
+          (sqlite:execute-non-query db "
+            UPDATE list_items SET valid_to = ?
+            WHERE id = ? AND valid_to IS NULL AND user_id = ?"
+            now item-id user-id)
+          (sqlite:execute-non-query db "
+            UPDATE list_items SET valid_to = ?
+            WHERE id = ? AND valid_to IS NULL"
+            now item-id))
       ;; Notify sync
       (when (and *list-item-delete-hook* (not *suppress-change-notifications*))
         (handler-case (funcall *list-item-delete-hook* item-id)
@@ -1279,19 +1422,27 @@
 
 ;;── List Sync Helpers ────────────────────────────────────────────────────────
 
-(defun db-load-current-list-rows-since (timestamp)
+(defun db-load-current-list-rows-since (timestamp &key user-id)
   "Load current list definition rows where valid_from > timestamp.
+   USER-ID scopes the query for multi-user sync; NIL returns all rows.
    Returns list of hash tables for sync."
   (ensure-db-initialized)
   (let ((ts (if (stringp timestamp) timestamp
                 (lt:format-rfc3339-timestring nil timestamp))))
     (with-db (db)
-      (let ((rows (sqlite:execute-to-list db "
+      (let ((rows (if user-id
+                      (sqlite:execute-to-list db "
+        SELECT row_id, id, name, description, sections, created_at,
+               device_id, valid_from, valid_to
+        FROM list_definitions
+        WHERE valid_from > ? AND valid_to IS NULL AND user_id = ?
+        ORDER BY valid_from ASC" ts user-id)
+                      (sqlite:execute-to-list db "
         SELECT row_id, id, name, description, sections, created_at,
                device_id, valid_from, valid_to
         FROM list_definitions
         WHERE valid_from > ? AND valid_to IS NULL
-        ORDER BY valid_from ASC" ts)))
+        ORDER BY valid_from ASC" ts))))
         (mapcar (lambda (row)
                   (destructuring-bind (row-id id name description sections created-at
                                       device-id valid-from valid-to) row
@@ -1308,19 +1459,27 @@
                       ht)))
                 rows)))))
 
-(defun db-load-current-list-item-rows-since (timestamp)
+(defun db-load-current-list-item-rows-since (timestamp &key user-id)
   "Load current list item rows where valid_from > timestamp.
+   USER-ID scopes the query for multi-user sync; NIL returns all rows.
    Returns list of hash tables for sync."
   (ensure-db-initialized)
   (let ((ts (if (stringp timestamp) timestamp
                 (lt:format-rfc3339-timestring nil timestamp))))
     (with-db (db)
-      (let ((rows (sqlite:execute-to-list db "
+      (let ((rows (if user-id
+                      (sqlite:execute-to-list db "
+        SELECT row_id, id, list_id, title, section, checked, notes,
+               created_at, device_id, valid_from, valid_to
+        FROM list_items
+        WHERE valid_from > ? AND valid_to IS NULL AND user_id = ?
+        ORDER BY valid_from ASC" ts user-id)
+                      (sqlite:execute-to-list db "
         SELECT row_id, id, list_id, title, section, checked, notes,
                created_at, device_id, valid_from, valid_to
         FROM list_items
         WHERE valid_from > ? AND valid_to IS NULL
-        ORDER BY valid_from ASC" ts)))
+        ORDER BY valid_from ASC" ts))))
         (mapcar (lambda (row)
                   (destructuring-bind (row-id id list-id title section checked notes
                                       created-at device-id valid-from valid-to) row
@@ -1386,6 +1545,55 @@
       "DELETE FROM device_capabilities WHERE device_id = ?"
       device-id)))
 
+;;── User Data Migration ──────────────────────────────────────────────────────
+
+(defun db-migrate-user-data (from-user-id to-user-id)
+  "Migrate all data from FROM-USER-ID to TO-USER-ID.
+   Updates todos, list_definitions, list_items, and app_settings.
+   Returns a plist of counts for each table updated."
+  (ensure-db-initialized)
+  (with-db (db)
+    (let ((committed nil)
+          (todo-count 0)
+          (list-def-count 0)
+          (list-item-count 0)
+          (settings-count 0))
+      (sqlite:execute-non-query db "BEGIN IMMEDIATE")
+      (unwind-protect
+           (progn
+             (setf todo-count
+                   (progn
+                     (sqlite:execute-non-query db
+                       "UPDATE todos SET user_id = ? WHERE user_id = ?"
+                       to-user-id from-user-id)
+                     (sqlite:execute-single db "SELECT changes()")))
+             (setf list-def-count
+                   (progn
+                     (sqlite:execute-non-query db
+                       "UPDATE list_definitions SET user_id = ? WHERE user_id = ?"
+                       to-user-id from-user-id)
+                     (sqlite:execute-single db "SELECT changes()")))
+             (setf list-item-count
+                   (progn
+                     (sqlite:execute-non-query db
+                       "UPDATE list_items SET user_id = ? WHERE user_id = ?"
+                       to-user-id from-user-id)
+                     (sqlite:execute-single db "SELECT changes()")))
+             (setf settings-count
+                   (progn
+                     (sqlite:execute-non-query db
+                       "UPDATE app_settings SET user_id = ? WHERE user_id = ?"
+                       to-user-id from-user-id)
+                     (sqlite:execute-single db "SELECT changes()")))
+             (sqlite:execute-non-query db "COMMIT")
+             (setf committed t)
+             (list :todos todo-count
+                   :list-definitions list-def-count
+                   :list-items list-item-count
+                   :settings settings-count))
+        (unless committed
+          (ignore-errors (sqlite:execute-non-query db "ROLLBACK")))))))
+
 ;;── Sync API ─────────────────────────────────────────────────────────────────
 
 (defun db-null-to-json-null (value)
@@ -1427,17 +1635,33 @@
       (setf (gethash "attachment_hashes" ht) (db-null-to-json-null attachment-hashes))
       ht)))
 
-(defun db-load-current-rows-since (timestamp)
+(defun db-load-current-rows-since (timestamp &key user-id)
   "Load only CURRENT (non-superseded) rows where valid_from > timestamp.
    This is the correct function for sync - it sends the latest state of each todo
    without replaying historical versions that could overwrite newer data.
+   USER-ID scopes the query for multi-user sync; NIL returns all rows.
    Returns raw hash tables suitable for JSON serialization."
   (ensure-db-initialized)
   (let ((ts (if (stringp timestamp)
                 timestamp
                 (lt:format-rfc3339-timestring nil timestamp))))
     (with-db (db)
-      (let ((rows (sqlite:execute-to-list db "
+      (let ((rows (if user-id
+                      (sqlite:execute-to-list db "
+        SELECT t.row_id, t.id, t.title,
+               COALESCE(b1.content, t.description) as description,
+               t.priority, t.status,
+               t.scheduled_date, t.due_date, t.tags, t.estimated_minutes,
+               COALESCE(b2.content, t.location_info) as location_info,
+               t.url, t.parent_id, t.created_at, t.completed_at,
+               t.valid_from, t.valid_to, t.device_id, t.repeat_interval,
+               t.repeat_unit, t.enriching_p, t.attachment_hashes
+        FROM todos t
+        LEFT JOIN blobs b1 ON t.description_hash = b1.hash
+        LEFT JOIN blobs b2 ON t.location_info_hash = b2.hash
+        WHERE t.valid_from > ? AND t.valid_to IS NULL AND t.user_id = ?
+        ORDER BY t.valid_from ASC" ts user-id)
+                      (sqlite:execute-to-list db "
         SELECT t.row_id, t.id, t.title,
                COALESCE(b1.content, t.description) as description,
                t.priority, t.status,
@@ -1450,5 +1674,5 @@
         LEFT JOIN blobs b1 ON t.description_hash = b1.hash
         LEFT JOIN blobs b2 ON t.location_info_hash = b2.hash
         WHERE t.valid_from > ? AND t.valid_to IS NULL
-        ORDER BY t.valid_from ASC" ts)))
+        ORDER BY t.valid_from ASC" ts))))
         (mapcar #'row-to-sync-hash-table rows)))))

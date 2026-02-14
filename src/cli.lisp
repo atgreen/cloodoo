@@ -2180,6 +2180,218 @@ URL format: http://HOST:PORT/pair/TOKEN"
                        (make-lists-delete-command)
                        (make-lists-move-to-todo-command))))
 
+;;── User Management Commands ──────────────────────────────────────────────────
+
+(defun make-user-create-command ()
+  "Create the 'user create' subcommand."
+  (let ((days-opt (clingon:make-option
+                   :integer
+                   :short-name #\d
+                   :long-name "days"
+                   :key :days
+                   :initial-value 365
+                   :description "Certificate validity in days"))
+        (port-opt (clingon:make-option
+                   :integer
+                   :short-name #\p
+                   :long-name "port"
+                   :key :port
+                   :initial-value 9876
+                   :description "HTTP server port for pairing URL"))
+        (no-server-opt (clingon:make-option
+                        :flag
+                        :long-name "no-server"
+                        :key :no-server
+                        :description "Don't start pairing server, just create certificate")))
+    (clingon:make-command
+     :name "create"
+     :description "Create a new user (issues a client certificate with CN = username)"
+     :usage "USERNAME"
+     :options (list days-opt port-opt no-server-opt)
+     :handler (lambda (cmd)
+                (let ((args (clingon:command-arguments cmd))
+                      (days (clingon:getopt cmd :days))
+                      (port (clingon:getopt cmd :port))
+                      (no-server (clingon:getopt cmd :no-server)))
+                  (if args
+                      (let ((username (first args)))
+                        ;; Ensure CA is initialized
+                        (unless (ca-initialized-p)
+                          (format t "~A CA not initialized. Run 'cloodoo cert init' first.~%"
+                                  (tui:colored "✗" :fg tui:*fg-red*))
+                          (return-from make-user-create-command nil))
+                        (let ((cert-exists (client-cert-exists-p username)))
+                        (handler-case
+                            (if no-server
+                                (if cert-exists
+                                    (progn
+                                      (format t "~%~A User '~A' already exists.~%"
+                                              (tui:colored "✓" :fg tui:*fg-green*) username)
+                                      (format t "~%Cert: ~A~%" (namestring (client-cert-file username)))
+                                      (format t "Key:  ~A~%~%" (namestring (client-key-file username))))
+                                    (let ((passphrase (issue-client-cert username :days days)))
+                                      (format t "~%~A User '~A' created.~%"
+                                              (tui:colored "✓" :fg tui:*fg-green*) username)
+                                      (format t "~%Cert: ~A~%" (namestring (client-cert-file username)))
+                                      (format t "Key:  ~A~%" (namestring (client-key-file username)))
+                                      (format t "Passphrase: ~A~%~%" passphrase)))
+                                ;; Create user and start pairing server
+                                (let* ((request (if cert-exists
+                                                    (create-pairing-request-existing username)
+                                                    (create-pairing-request username)))
+                                       (token (pairing-request-token request))
+                                       (passphrase (pairing-request-passphrase request))
+                                       (ips (detect-local-ips))
+                                       (primary-ip
+                                         (cond
+                                           ((null ips) "localhost")
+                                           ((null (rest ips)) (first ips))
+                                           (t (format t "~%Available network addresses:~%")
+                                              (loop for ip in ips
+                                                    for i from 1
+                                                    do (format t "  ~A) ~A~A~%"
+                                                               i ip
+                                                               (if (str:starts-with-p "100." ip)
+                                                                   (tui:colored " (VPN)" :fg tui:*fg-cyan*)
+                                                                   "")))
+                                              (format t "~%Select address [1]: ")
+                                              (force-output)
+                                              (let* ((input (str:trim (read-line)))
+                                                     (choice (if (zerop (length input))
+                                                                 1
+                                                                 (parse-integer input :junk-allowed t))))
+                                                (if (and choice (>= choice 1) (<= choice (length ips)))
+                                                    (nth (1- choice) ips)
+                                                    (first ips))))))
+                                       (url (format nil "http://~A:~A/pair/~A" primary-ip port token)))
+                                  (format t "~%~A User '~A' ~A.~%"
+                                          (tui:colored "✓" :fg tui:*fg-green*) username
+                                          (if cert-exists "ready to pair" "created"))
+                                  (format t "~%Scan this QR code in the Cloodoo app to pair:~%")
+                                  (format t "  ~A~%~%" (tui:colored (format nil "cloodoo cert pair ~A" url) :fg tui:*fg-cyan*))
+                                  (let ((qr (generate-qr-ascii url)))
+                                    (when qr
+                                      (format t "~A~%" qr)))
+                                  (format t "~A Link expires in 10 minutes.~%"
+                                          (tui:colored "!" :fg tui:*fg-yellow*))
+                                  (format t "~%Passphrase: ~A~%~%"
+                                          (tui:bold (tui:colored passphrase :fg tui:*fg-green*)))
+                                  (start-server :port port :address "0.0.0.0")
+                                  (format t "Waiting for device to connect...~%")
+                                  (format t "(Press Ctrl+C when done)~%~%")
+                                  (handler-case
+                                      (loop
+                                        (sleep 2)
+                                        (cleanup-expired-pairings)
+                                        (unless (get-pairing-request token)
+                                          (format t "~%~A User '~A' has paired a device.~%"
+                                                  (tui:colored "✓" :fg tui:*fg-green*) username)
+                                          (return)))
+                                    (#+sbcl sb-sys:interactive-interrupt
+                                     #+ccl ccl:interrupt-signal-condition
+                                     #-(or sbcl ccl) error ()
+                                     (format t "~%")))
+                                  (stop-server)))
+                          (error (e)
+                            (format t "~A Error: ~A~%"
+                                    (tui:colored "✗" :fg tui:*fg-red*) e))))
+                      (format t "Usage: cloodoo user create USERNAME~%"))))))))
+
+(defun make-user-list-command ()
+  "Create the 'user list' subcommand."
+  (clingon:make-command
+   :name "list"
+   :description "List all users (issued client certificates)"
+   :handler (lambda (cmd)
+              (declare (ignore cmd))
+              (if (ca-initialized-p)
+                  (let ((certs (list-client-certs)))
+                    (cond (certs
+                           (format t "~%~A~%~%"
+                                   (tui:bold "Users"))
+                           (format t "  ~30A ~12A ~A~%"
+                                   "USERNAME" "STATUS" "CREATED")
+                           (format t "  ~30A ~12A ~A~%"
+                                   "--------" "------" "-------")
+                           (dolist (cert certs)
+                             (let ((name (getf cert :name))
+                                   (revoked (getf cert :revoked-p))
+                                   (issued (getf cert :issued-at)))
+                               (format t "  ~30A ~12A ~A~%"
+                                       name
+                                       (if revoked
+                                           (tui:colored "REVOKED" :fg tui:*fg-red*)
+                                           (tui:colored "active" :fg tui:*fg-green*))
+                                       (lt:format-timestring
+                                        nil (lt:universal-to-timestamp issued)
+                                        :format '(:year "-" (:month 2) "-" (:day 2))))))
+                           (format t "~%"))
+                          (t (format t "~%No users created yet.~%~%"))))
+                  (format t "~%CA not initialized. Run 'cloodoo cert init' first.~%~%")))))
+
+(defun make-user-delete-command ()
+  "Create the 'user delete' subcommand."
+  (clingon:make-command
+   :name "delete"
+   :description "Delete a user (revoke their client certificate)"
+   :usage "USERNAME"
+   :handler (lambda (cmd)
+              (let ((args (clingon:command-arguments cmd)))
+                (if args
+                    (let ((username (first args)))
+                      (handler-case
+                          (progn
+                            (revoke-client-cert username)
+                            (format t "~%~A User '~A' has been deleted (certificate revoked).~%~%"
+                                    (tui:colored "✓" :fg tui:*fg-green*) username))
+                        (error (e)
+                          (format t "~A Error: ~A~%"
+                                  (tui:colored "✗" :fg tui:*fg-red*) e))))
+                    (format t "Usage: cloodoo user delete USERNAME~%"))))))
+
+(defun make-user-migrate-data-command ()
+  "Create the 'user migrate-data' subcommand."
+  (clingon:make-command
+   :name "migrate-data"
+   :description "Migrate all data from one user_id to another (e.g., 'default' to your username)"
+   :usage "FROM_USER_ID TO_USERNAME"
+   :handler (lambda (cmd)
+              (let ((args (clingon:command-arguments cmd)))
+                (if (>= (length args) 2)
+                    (let ((from-id (first args))
+                          (to-id (second args)))
+                      (format t "~%Migrating data from '~A' to '~A'...~%" from-id to-id)
+                      (handler-case
+                          (let ((counts (db-migrate-user-data from-id to-id)))
+                            (format t "~%~A Migration complete:~%"
+                                    (tui:colored "✓" :fg tui:*fg-green*))
+                            (format t "  Todos:            ~D rows~%"
+                                    (getf counts :todos))
+                            (format t "  List definitions:  ~D rows~%"
+                                    (getf counts :list-definitions))
+                            (format t "  List items:        ~D rows~%"
+                                    (getf counts :list-items))
+                            (format t "  Settings:          ~D rows~%~%"
+                                    (getf counts :settings)))
+                        (error (e)
+                          (format t "~A Error: ~A~%"
+                                  (tui:colored "✗" :fg tui:*fg-red*) e))))
+                    (format t "Usage: cloodoo user migrate-data FROM_USER_ID TO_USERNAME~%~%~
+                              Example: cloodoo user migrate-data default alice~%"))))))
+
+(defun make-user-command ()
+  "Create the 'user' command group."
+  (clingon:make-command
+   :name "user"
+   :description "Manage users for multi-user sync"
+   :usage "[command]"
+   :handler (lambda (cmd)
+              (clingon:print-usage cmd t))
+   :sub-commands (list (make-user-create-command)
+                       (make-user-list-command)
+                       (make-user-delete-command)
+                       (make-user-migrate-data-command))))
+
 (defun make-app ()
   "Create and return the command-line application."
   (clingon:make-command
@@ -2207,6 +2419,7 @@ URL format: http://HOST:PORT/pair/TOKEN"
                        (make-sync-upload-attachments-command)
                        (make-sync-reset-command)
                        (make-cert-command)
+                       (make-user-command)
                        (make-enrich-pending-command)
                        (make-native-host-command)
                        (make-install-native-host-command))))

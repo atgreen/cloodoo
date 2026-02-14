@@ -24,20 +24,43 @@
   "When true, emit verbose sync debug output to *standard-output*.
    Do NOT enable in production -- debug output includes serialized message bytes.")
 
+;;── Username Extraction from mTLS Certificate ────────────────────────────────
+
+(defun extract-username-from-ctx (ctx)
+  "Extract authenticated username (CN) from the client certificate.
+   Returns NIL for non-TLS connections (backward compat / testing)."
+  (handler-case
+      (let* ((conn (ag-grpc::context-connection ctx))
+             (tls-stream (ag-http2:connection-stream conn)))
+        (when (typep tls-stream 'pure-tls:tls-stream)
+          (let ((peer-cert (pure-tls:tls-peer-certificate tls-stream)))
+            (when peer-cert
+              (first (pure-tls:certificate-subject-common-names peer-cert))))))
+    (error () nil)))
+
 ;;── Client Registration ───────────────────────────────────────────────────────
 
-(defun register-sync-client (stream device-id)
+(defstruct sync-client
+  "A connected sync client with identity information."
+  device-id
+  username
+  stream)
+
+(defun register-sync-client (stream device-id &optional username)
   "Register a connected sync client for broadcasting."
   (bt:with-lock-held (*clients-lock*)
-    (push (cons device-id stream) *connected-clients*)
-    (llog:info "Sync client connected" :device-id device-id)))
+    (push (make-sync-client :device-id device-id
+                            :username username
+                            :stream stream)
+          *connected-clients*)
+    (llog:info "Sync client connected" :device-id device-id :username username)))
 
 (defun unregister-sync-client-by-stream (stream device-id)
   "Unregister a specific sync client stream.
    Removes only the entry matching this specific stream, not all entries for device-id."
   (bt:with-lock-held (*clients-lock*)
     (setf *connected-clients*
-          (remove-if (lambda (entry) (eq (rest entry) stream))
+          (remove-if (lambda (client) (eq (sync-client-stream client) stream))
                      *connected-clients*))
     (llog:info "Sync client disconnected" :device-id device-id)))
 
@@ -45,13 +68,14 @@
   "Remove a dead client stream from the connected clients list."
   (bt:with-lock-held (*clients-lock*)
     (setf *connected-clients*
-          (remove-if (lambda (entry) (eq (rest entry) stream))
+          (remove-if (lambda (client) (eq (sync-client-stream client) stream))
                      *connected-clients*))
     (llog:info "Removed dead sync client" :device-id device-id)))
 
-(defun broadcast-change (change-msg &optional exclude-device-id)
+(defun broadcast-change (change-msg &optional exclude-device-id username)
   "Broadcast a change to all connected clients except the one specified.
    CHANGE-MSG should be a proto-sync-message.
+   When USERNAME is non-nil, only broadcast to clients with matching username.
    Snapshots the client list under lock, then sends outside the lock
    to avoid holding the lock during network I/O.
    Failed sends result in the client being removed from the list."
@@ -61,34 +85,55 @@
   (let ((clients-snapshot
           (bt:with-lock-held (*clients-lock*)
             (copy-list *connected-clients*))))
-    (dolist (entry clients-snapshot)
-      (destructuring-bind (device-id . stream) entry
-        (when (or (null exclude-device-id)
-                  (not (string= device-id exclude-device-id)))
+    (dolist (client clients-snapshot)
+      (let ((client-device-id (sync-client-device-id client))
+            (client-username (sync-client-username client))
+            (client-stream (sync-client-stream client)))
+        ;; Only send if: not excluded device, and username matches (when set)
+        (when (and (or (null exclude-device-id)
+                       (not (string= client-device-id exclude-device-id)))
+                   (or (null username)
+                       (null client-username)
+                       (string= username client-username)))
           (handler-case
-              (ag-grpc:stream-send stream change-msg)
+              (ag-grpc:stream-send client-stream change-msg)
             (error (e)
-              (llog:warn "Failed to send to client, removing" :device-id device-id :error (princ-to-string e))
-              (remove-dead-client stream device-id))))))))
+              (llog:warn "Failed to send to client, removing"
+                         :device-id client-device-id :error (princ-to-string e))
+              (remove-dead-client client-stream client-device-id))))))))
 
 ;;── List-Capable Client Broadcasting ─────────────────────────────────────────
 
-(defun broadcast-list-change (change-msg &optional exclude-device-id)
+(defun broadcast-list-change (change-msg &optional exclude-device-id username)
   "Broadcast a list change only to clients that have 'lists' capability.
+   When USERNAME is non-nil, only broadcast to clients with matching username.
    Falls back to regular broadcast (all clients) since capability tracking
    per-stream is not yet implemented at the connection level."
   ;; For now, broadcast to all clients. List-unaware clients will
   ;; simply ignore the unknown message type (protobuf forward compatibility).
-  (broadcast-change change-msg exclude-device-id))
+  (broadcast-change change-msg exclude-device-id username))
 
 ;;── SyncStream Handler ────────────────────────────────────────────────────────
 
 (defun handle-sync-stream (ctx stream)
   "Handler for bidirectional TodoSync.SyncStream RPC.
-   CTX is the call context, STREAM is for sending/receiving messages."
-  (declare (ignore ctx))
+   CTX is the call context, STREAM is for sending/receiving messages.
+   Extracts username from mTLS client certificate CN for user namespacing."
   (when *sync-debug* (format t "~&[SYNC-DEBUG] handle-sync-stream entered~%"))
-  (let ((client-device-id nil))
+  (let ((client-device-id nil)
+        (username (extract-username-from-ctx ctx)))
+    (when username
+      (llog:info "Authenticated user from certificate" :username username))
+    ;; Check if the certificate CN has been revoked
+    (when (and username (cert-revoked-p username))
+      (llog:warn "Rejected revoked certificate" :username username)
+      (handler-case
+          (let ((error-ack (make-sync-ack-message
+                             (now-iso) 0
+                             (format nil "Certificate for '~A' has been revoked." username))))
+            (ag-grpc:stream-send stream error-ack))
+        (error () nil))
+      (return-from handle-sync-stream))
     (unwind-protect
          (block sync-handler
            ;; Read the first message which should be SyncInit
@@ -149,7 +194,7 @@
                (let* ((effective-since (if (plusp (length since))
                                            since
                                            "1970-01-01T00:00:00Z"))
-                      (rows (db-load-current-rows-since effective-since))
+                      (rows (db-load-current-rows-since effective-since :user-id username))
                       (pending-count (length rows)))
                  (format t "~&[SYNC-INIT] device=~A since=~S effective=~S pending=~D~%"
                          device-id since effective-since pending-count)
@@ -187,7 +232,7 @@
                          (return-from sync-handler)))))
 
                  ;; Send all settings
-                 (let ((settings-hash (db-load-all-settings)))
+                 (let ((settings-hash (db-load-all-settings :user-id username)))
                    (when (> (hash-table-count settings-hash) 0)
                      (let ((settings-msg (make-sync-settings-message (get-device-id) settings-hash)))
                        (when *sync-debug*
@@ -205,7 +250,7 @@
                  ;; 2. Avoids missed lists when capability is newly added
                  ;; 3. The client handler is idempotent (supersedes existing rows)
                  (when client-has-lists
-                   (let ((list-def-rows (db-load-current-list-rows-since "1970-01-01T00:00:00Z")))
+                   (let ((list-def-rows (db-load-current-list-rows-since "1970-01-01T00:00:00Z" :user-id username)))
                      (when *sync-debug*
                        (format t "~&[SYNC-DEBUG] Sending ~D list definitions~%" (length list-def-rows)))
                      ;; Send definitions first (items reference list_id)
@@ -228,7 +273,7 @@
                            (llog:error "Failed to send list definition" :error (princ-to-string e))
                            (return-from sync-handler)))))
                    ;; Then send list items (also send ALL, same reasoning as definitions)
-                   (let ((item-rows (db-load-current-list-item-rows-since "1970-01-01T00:00:00Z")))
+                   (let ((item-rows (db-load-current-list-item-rows-since "1970-01-01T00:00:00Z" :user-id username)))
                      (when *sync-debug*
                        (format t "~&[SYNC-DEBUG] Sending ~D list items~%" (length item-rows)))
                      (dolist (row item-rows)
@@ -257,7 +302,7 @@
                    (force-output))
 
                  ;; Register this client for receiving broadcasts
-                 (register-sync-client stream device-id)
+                 (register-sync-client stream device-id username)
 
                  ;; Main receive loop - process incoming changes from this client
                  (loop
@@ -323,10 +368,10 @@
                                                                       (getf item-spec :title)
                                                                       :section (getf item-spec :section)
                                                                       :device-id origin-device-id)))
-                                                          (db-save-list-item item :valid-from change-timestamp)
+                                                          (db-save-list-item item :valid-from change-timestamp :user-id username)
                                                           (let ((item-msg (make-sync-list-item-upsert-message
                                                                             origin-device-id item)))
-                                                            (broadcast-list-change item-msg nil))
+                                                            (broadcast-list-change item-msg nil username))
                                                           (llog:info "Created list item from TODO"
                                                                      :title (getf item-spec :title)
                                                                      :list-name list-name
@@ -334,7 +379,7 @@
                                                       ;; Delete the original TODO from originator
                                                       (let ((delete-msg (make-sync-delete-message
                                                                           origin-device-id (todo-id todo))))
-                                                        (broadcast-change delete-msg nil))
+                                                        (broadcast-change delete-msg nil username))
                                                       (setf redirected-to-list t)
                                                       (llog:info "Redirected TODO to list"
                                                                  :todo-id (todo-id todo)
@@ -375,7 +420,7 @@
                                 (setf (todo-enriching-p todo) nil)
 
                                 ;; Save to local database with original timestamp
-                                (db-save-todo todo :valid-from change-timestamp)
+                                (db-save-todo todo :valid-from change-timestamp :user-id username)
 
                                 ;; If enriched, create a new change message with enriched data and broadcast
                                 ;; When enriched, send to ALL clients including the originator so they get the enrichment
@@ -384,15 +429,15 @@
                                     (let ((enriched-msg (make-sync-upsert-message-with-timestamp
                                                          origin-device-id todo change-timestamp)))
                                       (when enriched-msg
-                                        (broadcast-change enriched-msg nil)))
-                                    (broadcast-change msg device-id))))))
+                                        (broadcast-change enriched-msg nil username)))
+                                    (broadcast-change msg device-id username))))))
                            (:delete-id
                             ;; Client is requesting a delete
                             (let ((todo-id (proto-todo-change-delete-id change)))
                               ;; Delete locally
-                              (db-delete-todo todo-id)
+                              (db-delete-todo todo-id :user-id username)
                               ;; Broadcast to other clients
-                              (broadcast-change msg device-id))))))
+                              (broadcast-change msg device-id username))))))
 
                     (when (eql (proto-msg-case msg) :settings-change)
                       (handler-case
@@ -408,20 +453,16 @@
                                      (value (slot-value setting-data 'value))
                                      (updated-at (slot-value setting-data 'updated-at)))
                                 (multiple-value-bind (current-value current-timestamp)
-                                    (db-load-setting-with-timestamp key)
+                                    (db-load-setting-with-timestamp key :user-id username)
                                   ;; Only update if incoming timestamp is newer or setting doesn't exist
                                   (when (or (null current-value)
                                            (string< current-timestamp updated-at))
                                     (when *sync-debug*
                                       (format t "~&[SYNC-DEBUG] Updating setting ~A~%" key))
                                     ;; Save with the incoming timestamp to preserve causality
-                                    (with-db (db)
-                                      (sqlite:execute-non-query db
-                                        "INSERT OR REPLACE INTO app_settings (key, value, updated_at)
-                                         VALUES (?, ?, ?)"
-                                        key value updated-at))))))
+                                    (db-save-setting key value :user-id username :updated-at updated-at)))))
                             ;; Broadcast to other clients (excluding sender)
-                            (broadcast-change msg origin-device-id))
+                            (broadcast-change msg origin-device-id username))
                         (error (e)
                           (llog:error "Settings change processing failed"
                                      :error (princ-to-string e)))))
@@ -441,10 +482,10 @@
                                       (list-def (proto-to-list-definition proto-data)))
                                  (setf (list-def-device-id list-def) origin-device-id)
                                  (let* ((*suppress-change-notifications* t)
-                                        (saved (db-save-list-definition list-def :valid-from change-timestamp)))
+                                        (saved (db-save-list-definition list-def :valid-from change-timestamp :user-id username)))
                                    (if saved
                                        ;; Broadcast to other clients
-                                       (broadcast-list-change msg device-id)
+                                       (broadcast-list-change msg device-id username)
                                        ;; Stale upsert rejected (list was deleted more recently).
                                        ;; Send a delete back to the sender so it learns the list is gone.
                                        (handler-case
@@ -461,20 +502,20 @@
                           (:delete-list-id
                            (let ((list-id (proto-list-change-delete-list-id list-change)))
                              (let ((*suppress-change-notifications* t))
-                               (db-delete-list-definition list-id))
-                             (broadcast-list-change msg device-id)))
+                               (db-delete-list-definition list-id :user-id username))
+                             (broadcast-list-change msg device-id username)))
                           (:upsert-item
                            (let* ((proto-data (proto-list-change-upsert-item list-change))
                                   (item (proto-to-list-item proto-data)))
                              (setf (list-item-device-id item) origin-device-id)
                              (let ((*suppress-change-notifications* t))
-                               (db-save-list-item item :valid-from change-timestamp))
-                             (broadcast-list-change msg device-id)))
+                               (db-save-list-item item :valid-from change-timestamp :user-id username))
+                             (broadcast-list-change msg device-id username)))
                           (:delete-item-id
                            (let ((item-id (proto-list-change-delete-item-id list-change)))
                              (let ((*suppress-change-notifications* t))
-                               (db-delete-list-item item-id))
-                             (broadcast-list-change msg device-id)))))
+                               (db-delete-list-item item-id :user-id username))
+                             (broadcast-list-change msg device-id username)))))
                         (error (e)
                           (llog:error "List change processing failed"
                                      :error (princ-to-string e)))))
@@ -490,7 +531,7 @@
                                   origin-device-id reset-to))
                         ;; Broadcast reset to all connected clients (including sender)
                         ;; This tells all clients to clear their last-sync timestamps
-                        (broadcast-change msg nil))))))))) ; close loop, let (pending changes), block
+                        (broadcast-change msg nil username))))))))) ; close loop, let (pending changes), block
 
       ;; Cleanup on exit
       (when *sync-debug*
@@ -568,7 +609,10 @@
                                         :host host
                                         :tls t
                                         :tls-certificate (namestring (server-cert-file))
-                                        :tls-key (namestring (server-key-file)))
+                                        :tls-key (namestring (server-key-file))
+                                        :tls-verify-client t
+                                        :tls-ca-certificate (pure-tls::make-trust-store-from-sources
+                                                             (namestring (ca-cert-file)) nil))
               (ag-grpc:make-grpc-server port :host host)))
 
     ;; Register the SyncStream handler

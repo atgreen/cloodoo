@@ -383,8 +383,26 @@
 
 (defun create-pairing-request (device-name &key (expiry-minutes 10))
   "Create a pairing request for DEVICE-NAME.
-   Returns the pairing-request struct."
+   Issues a new certificate and returns the pairing-request struct."
   (let* ((passphrase (issue-client-cert device-name))
+         (token (generate-pairing-token))
+         (now (get-universal-time))
+         (request (make-pairing-request
+                   :token token
+                   :device-name device-name
+                   :passphrase passphrase
+                   :created-at now
+                   :expires-at (+ now (* expiry-minutes 60)))))
+    (bt:with-lock-held (*pairing-lock*)
+      (setf (gethash token *pending-pairings*) request))
+    request))
+
+(defun create-pairing-request-existing (device-name &key (expiry-minutes 10))
+  "Create a pairing request for an already-issued certificate.
+   Returns the pairing-request struct. The passphrase is for display only."
+  (unless (probe-file (client-cert-file device-name))
+    (error "No certificate found for '~A'." device-name))
+  (let* ((passphrase (generate-passphrase 4))
          (token (generate-pairing-token))
          (now (get-universal-time))
          (request (make-pairing-request
