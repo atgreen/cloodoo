@@ -982,10 +982,10 @@
            (init-db))))
       ;; Always attempt user context migration (idempotent)
       (migrate-user-context-to-db)
-      ;; Seed default lists if none exist (seed-default-lists is defined in lists.lisp,
-      ;; loaded after db.lisp, but this runs lazily at first use, not at load time)
-      (when (fboundp 'seed-default-lists)
-        (seed-default-lists)))))
+      ;; Ensure the built-in Groceries list exists (ensure-default-lists is defined
+      ;; in lists.lisp, loaded after db.lisp, but this runs lazily at first use)
+      (when (fboundp 'ensure-default-lists)
+        (ensure-default-lists)))))
 
 ;;── Redefine Storage Functions to Use SQLite ──────────────────────────────────
 
@@ -1210,7 +1210,11 @@
 (defun db-delete-list-definition (list-def-id &key user-id)
   "Delete a list definition and all its items by temporal close-out.
    USER-ID scopes the delete for multi-user sync; NIL for standalone mode.
-   Both the definition and items are closed in one transaction."
+   Both the definition and items are closed in one transaction.
+   The built-in Groceries list cannot be deleted."
+  (when (groceries-list-p list-def-id)
+    (llog:warn "Cannot delete the Groceries list" :id list-def-id)
+    (return-from db-delete-list-definition nil))
   (with-db (db)
     (let ((now (now-iso))
           (committed nil))

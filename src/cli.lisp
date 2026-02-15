@@ -2139,13 +2139,17 @@ URL format: http://HOST:PORT/pair/TOKEN"
                 (if args
                     (let* ((name (format nil "~{~A~^ ~}" args))
                            (list-def (db-find-list-by-name name)))
-                      (if list-def
-                          (progn
-                            (db-delete-list-definition (list-def-id list-def))
-                            (format t "~A Deleted list: ~A~%"
-                                    (tui:colored "✓" :fg tui:*fg-green*) name))
-                          (format t "~A List not found: ~A~%"
-                                  (tui:colored "✗" :fg tui:*fg-red*) name)))
+                      (cond
+                        ((null list-def)
+                         (format t "~A List not found: ~A~%"
+                                 (tui:colored "✗" :fg tui:*fg-red*) name))
+                        ((groceries-list-p (list-def-id list-def))
+                         (format t "~A The Groceries list cannot be deleted.~%"
+                                 (tui:colored "✗" :fg tui:*fg-red*)))
+                        (t
+                         (db-delete-list-definition (list-def-id list-def))
+                         (format t "~A Deleted list: ~A~%"
+                                 (tui:colored "✓" :fg tui:*fg-green*) name))))
                     (format t "Error: Please provide a list name~%"))))))
 
 (defun make-lists-move-to-todo-command ()

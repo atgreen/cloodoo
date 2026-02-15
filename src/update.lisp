@@ -2112,10 +2112,13 @@
            (setf (model-view-state model) :list-edit)))
        (values model nil))
 
-      ;; Delete selected list
+      ;; Delete selected list (Groceries list is protected)
       ((or (eql key :delete) (and (characterp key) (char= key #\d)))
        (when (and lists (< (model-lists-cursor model) (length lists)))
-         (setf (model-view-state model) :list-delete-confirm))
+         (let ((list-def (nth (model-lists-cursor model) lists)))
+           (if (groceries-list-p (list-def-id list-def))
+               (setf (model-status-message model) "The Groceries list cannot be deleted.")
+               (setf (model-view-state model) :list-delete-confirm))))
        (values model nil))
 
       (t (values model nil)))))

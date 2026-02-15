@@ -125,16 +125,27 @@
             (if (list-item-checked item) "x" " ")
             (list-item-title item))))
 
-;;── Default Lists ────────────────────────────────────────────────────────────
+;;── Groceries List (always exists, cannot be deleted) ────────────────────────
+
+(alexandria:define-constant +groceries-list-id+ "groceries"
+  :test #'string=
+  :documentation "Well-known ID for the built-in Groceries list.")
+
+(defun groceries-list-p (id)
+  "Return T when ID identifies the built-in Groceries list."
+  (string= id +groceries-list-id+))
 
 (defvar *default-lists*
   (list
-   (list :name "Grocery"
-         :description "Items to buy at a grocery store or supermarket."
-         :sections '("Produce" "Bakery" "Deli" "Meat & Seafood" "Dairy"
-                     "Frozen" "Pantry" "Snacks" "Beverages"
-                     "Cleaning & Household" "Paper Products"
-                     "Health & Beauty" "Other")))
+   (list :name "Groceries"
+         :description "Items I need to buy at a grocery store or supermarket."
+         :sections '("Produce" "Vegetables" "Meat & Seafood" "Deli"
+                     "Dairy & Eggs" "Bakery & Bread" "Frozen"
+                     "Pantry & Canned Goods" "Snacks" "Beverages"
+                     "Condiments & Sauces" "Breakfast & Cereal"
+                     "Pasta & Grains" "Baking" "Paper Products"
+                     "Cleaning Supplies" "Health & Beauty"
+                     "Baby & Pet" "Other")))
   "Default list definitions shipped with Cloodoo.")
 
 ;;── Change Notification Hooks ────────────────────────────────────────────────
@@ -157,15 +168,16 @@
 
 ;;── Default List Seeding ─────────────────────────────────────────────────────
 
-(defun seed-default-lists ()
-  "Seed default list definitions if none exist."
-  (let ((existing (db-load-list-definitions)))
-    (when (null existing)
-      (let ((*suppress-change-notifications* t))
-        (dolist (def-plist *default-lists*)
-          (let ((list-def (make-list-definition
-                           (getf def-plist :name)
-                           :description (getf def-plist :description)
-                           :sections (getf def-plist :sections)
-                           :device-id (get-device-id))))
-            (db-save-list-definition list-def)))))))
+(defun ensure-default-lists ()
+  "Ensure the built-in Groceries list exists, creating it if missing."
+  (unless (db-find-list-by-id +groceries-list-id+)
+    (let ((*suppress-change-notifications* t))
+      (let* ((def-plist (first *default-lists*))
+             (list-def (make-instance 'list-definition
+                                      :id +groceries-list-id+
+                                      :name (getf def-plist :name)
+                                      :description (getf def-plist :description)
+                                      :sections (getf def-plist :sections)
+                                      :device-id (get-device-id)
+                                      :created-at (lt:now))))
+        (db-save-list-definition list-def)))))

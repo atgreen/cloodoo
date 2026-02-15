@@ -62,6 +62,8 @@
    #:list-item-created-at
    #:list-item-device-id
    #:make-list-item
+   #:+groceries-list-id+
+   #:groceries-list-p
 
    ;; Application
    #:+version+
