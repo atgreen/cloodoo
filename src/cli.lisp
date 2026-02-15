@@ -799,6 +799,11 @@
                    :long-name "host"
                    :key :host
                    :description "Hostname or IP for pairing URL (overrides auto-detection)"))
+        (tls-opt (clingon:make-option
+                  :flag
+                  :long-name "tls"
+                  :key :tls
+                  :description "Use HTTPS with Let's Encrypt (requires --host with a domain name)"))
         (no-server-opt (clingon:make-option
                         :flag
                         :long-name "no-server"
@@ -808,12 +813,13 @@
      :name "issue"
      :description "Issue a client certificate for a device"
      :usage "DEVICE_NAME"
-     :options (list days-opt port-opt host-opt no-server-opt)
+     :options (list days-opt port-opt host-opt tls-opt no-server-opt)
      :handler (lambda (cmd)
                 (let ((args (clingon:command-arguments cmd))
                       (days (clingon:getopt cmd :days))
                       (port (clingon:getopt cmd :port))
                       (host (clingon:getopt cmd :host))
+                      (tls (clingon:getopt cmd :tls))
                       (no-server (clingon:getopt cmd :no-server)))
                   (if args
                       (let ((device-name (first args)))
@@ -857,7 +863,13 @@
                                                 (if (and choice (>= choice 1) (<= choice (length ips)))
                                                     (nth (1- choice) ips)
                                                     (first ips))))))
-                                       (url (format nil "http://~A:~A/pair/~A" primary-ip port token)))
+                                       (effective-port (if tls (if (= port 9876) 443 port) port))
+                                       (scheme (if tls "https" "http"))
+                                       (port-str (if (or (and tls (= effective-port 443))
+                                                         (and (not tls) (= effective-port 80)))
+                                                     ""
+                                                     (format nil ":~A" effective-port)))
+                                       (url (format nil "~A://~A~A/pair/~A" scheme primary-ip port-str token)))
                                   (format t "~%~A Certificate created for '~A'~%"
                                           (tui:colored "✓" :fg tui:*fg-green*) device-name)
                                   (format t "~%Scan this QR code in the Cloodoo app, or run on the client:~%")
@@ -870,8 +882,11 @@
                                           (tui:colored "!" :fg tui:*fg-yellow*))
                                   (format t "~%Passphrase: ~A~%~%"
                                           (tui:bold (tui:colored passphrase :fg tui:*fg-green*)))
-                                  ;; Start HTTP server for pairing
-                                  (start-server :port port :address "0.0.0.0")
+                                  ;; Start server for pairing
+                                  (if tls
+                                      (start-server :port effective-port :address "0.0.0.0"
+                                                    :hostname host)
+                                      (start-server :port port :address "0.0.0.0"))
                                   (format t "Waiting for device to connect...~%")
                                   (format t "(Press Ctrl+C when done)~%~%")
                                   ;; Wait until interrupted or token consumed
@@ -2226,6 +2241,11 @@ URL format: http://HOST:PORT/pair/TOKEN"
                    :long-name "host"
                    :key :host
                    :description "Hostname or IP for pairing URL (overrides auto-detection)"))
+        (tls-opt (clingon:make-option
+                  :flag
+                  :long-name "tls"
+                  :key :tls
+                  :description "Use HTTPS with Let's Encrypt (requires --host with a domain name)"))
         (no-server-opt (clingon:make-option
                         :flag
                         :long-name "no-server"
@@ -2235,12 +2255,13 @@ URL format: http://HOST:PORT/pair/TOKEN"
      :name "create"
      :description "Create a new user (issues a client certificate with CN = username)"
      :usage "USERNAME"
-     :options (list days-opt port-opt host-opt no-server-opt)
+     :options (list days-opt port-opt host-opt tls-opt no-server-opt)
      :handler (lambda (cmd)
                 (let ((args (clingon:command-arguments cmd))
                       (days (clingon:getopt cmd :days))
                       (port (clingon:getopt cmd :port))
                       (host (clingon:getopt cmd :host))
+                      (tls (clingon:getopt cmd :tls))
                       (no-server (clingon:getopt cmd :no-server)))
                   (if args
                       (let ((username (first args)))
@@ -2293,7 +2314,13 @@ URL format: http://HOST:PORT/pair/TOKEN"
                                                 (if (and choice (>= choice 1) (<= choice (length ips)))
                                                     (nth (1- choice) ips)
                                                     (first ips))))))
-                                       (url (format nil "http://~A:~A/pair/~A" primary-ip port token)))
+                                       (effective-port (if tls (if (= port 9876) 443 port) port))
+                                       (scheme (if tls "https" "http"))
+                                       (port-str (if (or (and tls (= effective-port 443))
+                                                         (and (not tls) (= effective-port 80)))
+                                                     ""
+                                                     (format nil ":~A" effective-port)))
+                                       (url (format nil "~A://~A~A/pair/~A" scheme primary-ip port-str token)))
                                   (format t "~%~A User '~A' ~A.~%"
                                           (tui:colored "✓" :fg tui:*fg-green*) username
                                           (if cert-exists "ready to pair" "created"))
@@ -2306,7 +2333,10 @@ URL format: http://HOST:PORT/pair/TOKEN"
                                           (tui:colored "!" :fg tui:*fg-yellow*))
                                   (format t "~%Passphrase: ~A~%~%"
                                           (tui:bold (tui:colored passphrase :fg tui:*fg-green*)))
-                                  (start-server :port port :address "0.0.0.0")
+                                  (if tls
+                                      (start-server :port effective-port :address "0.0.0.0"
+                                                    :hostname host)
+                                      (start-server :port port :address "0.0.0.0"))
                                   (format t "Waiting for device to connect...~%")
                                   (format t "(Press Ctrl+C when done)~%~%")
                                   (handler-case

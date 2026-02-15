@@ -62,6 +62,33 @@
   "Encode byte vector as base64 string."
   (cl-base64:usb8-array-to-base64-string bytes))
 
+(defun base64-decode (string)
+  "Decode a base64 string to a byte vector."
+  (cl-base64:base64-string-to-usb8-array string))
+
+(defun decrypt-with-passphrase (encrypted-data passphrase)
+  "Decrypt data encrypted by ENCRYPT-WITH-PASSPHRASE.
+   ENCRYPTED-DATA is a hash table with keys \"encrypted\", \"iv\", \"salt\"
+   (all base64 encoded).  Returns the plaintext string."
+  (let* ((ciphertext-with-tag (base64-decode (gethash "encrypted" encrypted-data)))
+         (iv (base64-decode (gethash "iv" encrypted-data)))
+         (salt (base64-decode (gethash "salt" encrypted-data)))
+         (key (derive-key-from-passphrase passphrase salt))
+         (aad (ironclad:ascii-string-to-byte-array "cloodoo-pairing"))
+         ;; Last 16 bytes are the GCM authentication tag
+         (tag-offset (- (length ciphertext-with-tag) 16))
+         (ciphertext (subseq ciphertext-with-tag 0 tag-offset))
+         (tag (subseq ciphertext-with-tag tag-offset))
+         (cipher (ironclad:make-authenticated-encryption-mode
+                  :gcm :cipher-name 'ironclad:aes :key key :initialization-vector iv)))
+    (let ((plaintext-bytes (ironclad:decrypt-message cipher ciphertext
+                                                     :associated-data aad))
+          (computed-tag (make-array 16 :element-type '(unsigned-byte 8))))
+      (ironclad:produce-tag cipher :tag computed-tag)
+      (unless (ironclad:constant-time-equal computed-tag tag)
+        (error "Decryption failed: authentication tag mismatch"))
+      (flexi-streams:octets-to-string plaintext-bytes :external-format :utf-8))))
+
 ;;── Pairing API Routes ─────────────────────────────────────────────────────────
 
 (easy-routes:defroute api-pair-info ("/pair/:token" :method :get) ()
@@ -145,16 +172,30 @@
 
 ;;── Server Control ─────────────────────────────────────────────────────────────
 
-(defun start-server (&key (port *default-port*) (address *default-address*))
+(defun start-server (&key (port *default-port*) (address *default-address*) hostname email)
   "Start the HTTP server for certificate pairing.
-   Use address \"0.0.0.0\" to listen on all interfaces."
+   Use address \"0.0.0.0\" to listen on all interfaces.
+   When HOSTNAME is provided, start an HTTPS server on PORT (default 443)
+   using Let's Encrypt via pure-tls ACME.  EMAIL is the contact address
+   for Let's Encrypt (defaults to \"admin@HOSTNAME\")."
   (when *server*
     (stop-server))
-  (setf *server* (make-instance 'easy-routes:easy-routes-acceptor
-                                :port port
-                                :address address))
-  (hunchentoot:start *server*)
-  (format t "~&Cloodoo API server running on http://~A:~A~%" address port)
+  (if hostname
+      (let ((acme-port (if (= port *default-port*) 443 port))
+            (contact-email (or email (format nil "admin@~A" hostname))))
+        (setf *server* (pure-tls/acme:make-acme-acceptor
+                         hostname contact-email
+                         :port acme-port
+                         :production t
+                         :acceptor-class 'easy-routes:easy-routes-acceptor))
+        (hunchentoot:start *server*)
+        (format t "~&Cloodoo API server running on https://~A:~A~%" hostname acme-port))
+      (progn
+        (setf *server* (make-instance 'easy-routes:easy-routes-acceptor
+                                      :port port
+                                      :address address))
+        (hunchentoot:start *server*)
+        (format t "~&Cloodoo API server running on http://~A:~A~%" address port)))
   (format t "~&Device ID: ~A~%" (get-device-id))
   *server*)
 

@@ -31,7 +31,8 @@
                :cl-qrencode
                :ironclad
                :cl-base64
-               :flexi-streams)
+               :flexi-streams
+               :pure-tls/acme+hunchentoot)
   :serial t
   :components ((:module "src"
                 :components ((:file "package")
