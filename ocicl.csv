@@ -1,8 +1,8 @@
-ag-grpc, ghcr.io/ocicl/ag-proto-cli@sha256:c7bcd827fbbae24cca2d605d3e4cd88bb1bd788f2f775db0957f994c2d052a47, ag-gRPC-20260214-dd7b561/ag-grpc.asd
-ag-grpc-all, ghcr.io/ocicl/ag-proto-cli@sha256:c7bcd827fbbae24cca2d605d3e4cd88bb1bd788f2f775db0957f994c2d052a47, ag-gRPC-20260214-dd7b561/ag-grpc-all.asd
-ag-http2, ghcr.io/ocicl/ag-proto-cli@sha256:c7bcd827fbbae24cca2d605d3e4cd88bb1bd788f2f775db0957f994c2d052a47, ag-gRPC-20260214-dd7b561/ag-http2.asd
-ag-proto, ghcr.io/ocicl/ag-proto-cli@sha256:c7bcd827fbbae24cca2d605d3e4cd88bb1bd788f2f775db0957f994c2d052a47, ag-gRPC-20260214-dd7b561/ag-proto.asd
-ag-proto-cli, ghcr.io/ocicl/ag-proto-cli@sha256:c7bcd827fbbae24cca2d605d3e4cd88bb1bd788f2f775db0957f994c2d052a47, ag-gRPC-20260214-dd7b561/ag-proto-cli.asd
+ag-grpc, ghcr.io/ocicl/ag-proto-cli@sha256:0345d12081960ba11d358ad322aad090389fd25273670113a52dc91f6490d6a7, ag-gRPC-20260215-6dc5918/ag-grpc.asd
+ag-grpc-all, ghcr.io/ocicl/ag-proto-cli@sha256:0345d12081960ba11d358ad322aad090389fd25273670113a52dc91f6490d6a7, ag-gRPC-20260215-6dc5918/ag-grpc-all.asd
+ag-http2, ghcr.io/ocicl/ag-proto-cli@sha256:0345d12081960ba11d358ad322aad090389fd25273670113a52dc91f6490d6a7, ag-gRPC-20260215-6dc5918/ag-http2.asd
+ag-proto, ghcr.io/ocicl/ag-proto-cli@sha256:0345d12081960ba11d358ad322aad090389fd25273670113a52dc91f6490d6a7, ag-gRPC-20260215-6dc5918/ag-proto.asd
+ag-proto-cli, ghcr.io/ocicl/ag-proto-cli@sha256:0345d12081960ba11d358ad322aad090389fd25273670113a52dc91f6490d6a7, ag-gRPC-20260215-6dc5918/ag-proto-cli.asd
 alexandria, ghcr.io/ocicl/alexandria@sha256:e433c2e076ed3bcf8641b97b00192680db2201d305efac9293539dee88c7fbf7, alexandria-20240503-8514d8e/alexandria.asd
 asn1, ghcr.io/ocicl/asn1@sha256:b9913fbf4fcdacf7a01930d1b05ccfb64ad778263a29418dc0a00c6d7919cd87, asn1-20240503-b0388fa/asn1.asd
 atomics, ghcr.io/ocicl/atomics@sha256:ae5daa72b09318c1b07aca6203411181d8bed4382596b27f64d718968131f3a4, atomics-20250813-bf0e261/atomics.asd
@@ -110,7 +110,7 @@ pem, ghcr.io/ocicl/pem@sha256:ae11c6466ee14841da74b07dda50587df33f07ba4685b0c326
 precise-time, ghcr.io/ocicl/precise-time@sha256:2c84655bfe7b90d8be3f37e39ea3dbccd087f260430406742f1c6b8fe5e011bd, precise-time-20250813-e0bf77d/precise-time.asd
 proc-parse, ghcr.io/ocicl/proc-parse@sha256:0880f9acb35eb9efbe1f77a981e36e84e8f29a22b14f680c7686eb381fa87bd6, proc-parse-20240503-3afe2b7/proc-parse.asd
 proc-parse-test, ghcr.io/ocicl/proc-parse@sha256:0880f9acb35eb9efbe1f77a981e36e84e8f29a22b14f680c7686eb381fa87bd6, proc-parse-20240503-3afe2b7/proc-parse-test.asd
-pure-tls, ghcr.io/ocicl/pure-tls@sha256:8639747c7b382135f0532e3aee8a1933ba8529a93230f54237b64f36762ed968, pure-tls-20260207-e3aa319/pure-tls.asd
+pure-tls, ghcr.io/ocicl/pure-tls@sha256:5dc948409a9f73e8585466f16acc4b60584c363935e1b56758bb1d7b76a422cd, pure-tls-20260215-72730dc/pure-tls.asd
 puri, ghcr.io/ocicl/puri@sha256:f6aa091a4d8eb5bdc91466daddc90dadd5b0fcf247370df237a223dc0588f29d, puri-4bbab9/puri.asd
 quri, ghcr.io/ocicl/quri@sha256:e2559f91600e4895e115b42dde88fcaac3677f051335d73431888dcf7af99f95, quri-0.7.0/quri.asd
 quri-test, ghcr.io/ocicl/quri@sha256:e2559f91600e4895e115b42dde88fcaac3677f051335d73431888dcf7af99f95, quri-0.7.0/quri-test.asd
@@ -156,7 +156,7 @@ trivial-mimes, ghcr.io/ocicl/trivial-mimes@sha256:11c8aa199a3dea490cf8360bfa0c52
 trivial-timeout, ghcr.io/ocicl/trivial-timeout@sha256:18f5f87e1fa3a35e5608cd424d22c2b24f581f810d9f9f8c6229b849c2f239ad, trivial-timeout-20240503-e70d9b4/trivial-timeout.asd
 trivial-timeout-test, ghcr.io/ocicl/trivial-timeout@sha256:18f5f87e1fa3a35e5608cd424d22c2b24f581f810d9f9f8c6229b849c2f239ad, trivial-timeout-20240503-e70d9b4/trivial-timeout-test.asd
 trivial-utf-8, ghcr.io/ocicl/trivial-utf-8@sha256:014e7fa0edd7f351c8b38c3247e0cdda438235bb8a086bb0f2bac08f78ef400d, trivial-utf-8-20240503-ba9b4ff/trivial-utf-8.asd
-tuition, ghcr.io/ocicl/tuition@sha256:e6e352a0dd0e119567cf7755d731b3cb6f02927824cecb7962a2e6dda9622044, cl-tuition-20260124-6e2e980/tuition.asd
+tuition, ghcr.io/ocicl/tuition@sha256:592619433a348f8a5ecea02d652434e631b12d0f3137de2fe3c10180c3e5a0d8, cl-tuition-20260215-f90090e/tuition.asd
 type-i, ghcr.io/ocicl/type-i@sha256:de5c3e7f7b72409c5ec49885eea8c6fe2e02def2846cf97f70c1c21f21a1567c, type-i-20240503-4407a68/type-i.asd
 type-i.test, ghcr.io/ocicl/type-i@sha256:de5c3e7f7b72409c5ec49885eea8c6fe2e02def2846cf97f70c1c21f21a1567c, type-i-20240503-4407a68/type-i.test.asd
 uffi, ghcr.io/ocicl/cffi-grovel@sha256:0854274d437e36f8bd30549103de36d23ac22f481f2746e61785e883f52b25fa, cffi-20250822-dad3520/uffi-compat/uffi.asd
