@@ -1096,11 +1096,17 @@
   (with-db (db)
     (let ((now (or valid-from (now-iso)))
           (committed nil))
-      ;; Skip if data is unchanged
-      (let ((current (sqlite:execute-to-list db
-                       "SELECT name, description, sections
-                        FROM list_definitions WHERE id = ? AND valid_to IS NULL"
-                       (list-def-id list-def))))
+      ;; Skip if data is unchanged (must scope by user_id to avoid
+      ;; matching an unscoped row when creating a user-scoped one)
+      (let ((current (if user-id
+                         (sqlite:execute-to-list db
+                           "SELECT name, description, sections
+                            FROM list_definitions WHERE id = ? AND valid_to IS NULL AND user_id = ?"
+                           (list-def-id list-def) user-id)
+                         (sqlite:execute-to-list db
+                           "SELECT name, description, sections
+                            FROM list_definitions WHERE id = ? AND valid_to IS NULL"
+                           (list-def-id list-def)))))
         (when (and current (= (length current) 1))
           (destructuring-bind (cur-name cur-desc cur-sections) (first current)
             (when (and (equal cur-name (list-def-name list-def))
