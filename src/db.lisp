@@ -1194,16 +1194,24 @@
       (when rows
         (row-to-list-definition (first rows))))))
 
-(defun db-find-list-by-id (list-id)
+(defun db-find-list-by-id (list-id &key user-id)
   "Find a current list definition by ID.
+   USER-ID scopes the query for multi-user sync; NIL matches unscoped rows.
    Returns a list-definition or NIL."
   (with-db (db)
-    (let ((rows (sqlite:execute-to-list db "
+    (let ((rows (if user-id
+                    (sqlite:execute-to-list db "
+      SELECT row_id, id, name, description, sections, created_at,
+             device_id, valid_from, valid_to
+      FROM list_definitions
+      WHERE id = ? AND valid_to IS NULL AND user_id = ?"
+      list-id user-id)
+                    (sqlite:execute-to-list db "
       SELECT row_id, id, name, description, sections, created_at,
              device_id, valid_from, valid_to
       FROM list_definitions
       WHERE id = ? AND valid_to IS NULL"
-      list-id)))
+      list-id))))
       (when rows
         (row-to-list-definition (first rows))))))
 

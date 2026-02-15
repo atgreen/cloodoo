@@ -168,9 +168,10 @@
 
 ;;── Default List Seeding ─────────────────────────────────────────────────────
 
-(defun ensure-default-lists ()
-  "Ensure the built-in Groceries list exists, creating it if missing."
-  (unless (db-find-list-by-id +groceries-list-id+)
+(defun ensure-default-lists (&key user-id)
+  "Ensure the built-in Groceries list exists, creating it if missing.
+   USER-ID scopes the check/create for multi-user sync; NIL for standalone."
+  (unless (db-find-list-by-id +groceries-list-id+ :user-id user-id)
     (let ((*suppress-change-notifications* t))
       (let* ((def-plist (first *default-lists*))
              (list-def (make-instance 'list-definition
@@ -180,4 +181,4 @@
                                       :sections (getf def-plist :sections)
                                       :device-id (get-device-id)
                                       :created-at (lt:now))))
-        (db-save-list-definition list-def)))))
+        (db-save-list-definition list-def :user-id user-id)))))
