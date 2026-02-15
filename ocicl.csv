@@ -110,7 +110,7 @@ pem, ghcr.io/ocicl/pem@sha256:ae11c6466ee14841da74b07dda50587df33f07ba4685b0c326
 precise-time, ghcr.io/ocicl/precise-time@sha256:2c84655bfe7b90d8be3f37e39ea3dbccd087f260430406742f1c6b8fe5e011bd, precise-time-20250813-e0bf77d/precise-time.asd
 proc-parse, ghcr.io/ocicl/proc-parse@sha256:0880f9acb35eb9efbe1f77a981e36e84e8f29a22b14f680c7686eb381fa87bd6, proc-parse-20240503-3afe2b7/proc-parse.asd
 proc-parse-test, ghcr.io/ocicl/proc-parse@sha256:0880f9acb35eb9efbe1f77a981e36e84e8f29a22b14f680c7686eb381fa87bd6, proc-parse-20240503-3afe2b7/proc-parse-test.asd
-pure-tls, ghcr.io/ocicl/pure-tls@sha256:5dc948409a9f73e8585466f16acc4b60584c363935e1b56758bb1d7b76a422cd, pure-tls-20260215-72730dc/pure-tls.asd
+pure-tls, ghcr.io/ocicl/pure-tls@sha256:23e5e7af9526be260d9912762dd4c33a8c1d28df303141578f5af0147e81eeb5, pure-tls-20260215-d78526b/pure-tls.asd
 puri, ghcr.io/ocicl/puri@sha256:f6aa091a4d8eb5bdc91466daddc90dadd5b0fcf247370df237a223dc0588f29d, puri-4bbab9/puri.asd
 quri, ghcr.io/ocicl/quri@sha256:e2559f91600e4895e115b42dde88fcaac3677f051335d73431888dcf7af99f95, quri-0.7.0/quri.asd
 quri-test, ghcr.io/ocicl/quri@sha256:e2559f91600e4895e115b42dde88fcaac3677f051335d73431888dcf7af99f95, quri-0.7.0/quri-test.asd
