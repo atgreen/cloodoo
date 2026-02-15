@@ -250,6 +250,8 @@
                  ;; 2. Avoids missed lists when capability is newly added
                  ;; 3. The client handler is idempotent (supersedes existing rows)
                  (when client-has-lists
+                   ;; Ensure the built-in Groceries list exists for this user
+                   (ensure-default-lists :user-id username)
                    (let ((list-def-rows (db-load-current-list-rows-since "1970-01-01T00:00:00Z" :user-id username)))
                      (when *sync-debug*
                        (format t "~&[SYNC-DEBUG] Sending ~D list definitions~%" (length list-def-rows)))
