@@ -745,6 +745,32 @@
           (llog:warn "Rejecting stale update" :id (todo-id todo)
                      :incoming valid-from :current current-timestamp)
           (return-from db-save-todo nil)))
+      ;; Skip if data is unchanged
+      (let ((current (sqlite:execute-to-list db
+                       "SELECT title, description_hash, priority, status, scheduled_date,
+                               due_date, tags, estimated_minutes, location_info_hash, url,
+                               parent_id, completed_at, repeat_interval, repeat_unit
+                        FROM todos WHERE id = ? AND valid_to IS NULL"
+                       (todo-id todo))))
+        (when (and current (= (length current) 1))
+          (let* ((cur (first current))
+                 (desc-hash (store-blob db (third values)))
+                 (loc-hash (store-blob db (tenth values))))
+            (when (and (equal (nth 0 cur) (second values))      ; title
+                       (equal (nth 1 cur) desc-hash)              ; description
+                       (equal (nth 2 cur) (fourth values))        ; priority
+                       (equal (nth 3 cur) (fifth values))         ; status
+                       (equal (nth 4 cur) (sixth values))         ; scheduled_date
+                       (equal (nth 5 cur) (seventh values))       ; due_date
+                       (equal (nth 6 cur) (eighth values))        ; tags
+                       (eql   (nth 7 cur) (ninth values))         ; estimated_minutes
+                       (equal (nth 8 cur) loc-hash)               ; location_info
+                       (equal (nth 9 cur) (nth 10 values))        ; url
+                       (equal (nth 10 cur) (nth 11 values))       ; parent_id
+                       (equal (nth 11 cur) (nth 13 values))       ; completed_at
+                       (eql   (nth 12 cur) (nth 15 values))       ; repeat_interval
+                       (equal (nth 13 cur) (nth 16 values)))      ; repeat_unit
+              (return-from db-save-todo t)))))
       ;; Store large text fields as blobs
       (let ((desc-hash (store-blob db (third values)))
             (loc-hash (store-blob db (tenth values))))
@@ -1070,6 +1096,19 @@
   (with-db (db)
     (let ((now (or valid-from (now-iso)))
           (committed nil))
+      ;; Skip if data is unchanged
+      (let ((current (sqlite:execute-to-list db
+                       "SELECT name, description, sections
+                        FROM list_definitions WHERE id = ? AND valid_to IS NULL"
+                       (list-def-id list-def))))
+        (when (and current (= (length current) 1))
+          (destructuring-bind (cur-name cur-desc cur-sections) (first current)
+            (when (and (equal cur-name (list-def-name list-def))
+                       (equal cur-desc (list-def-description list-def))
+                       (equal cur-sections
+                              (when (list-def-sections list-def)
+                                (jzon:stringify (coerce (list-def-sections list-def) 'vector)))))
+              (return-from db-save-list-definition t)))))
       (sqlite:execute-non-query db "BEGIN IMMEDIATE")
       (unwind-protect
            (progn
@@ -1244,6 +1283,20 @@
       (unless list-exists
         (llog:warn "Cannot save list item: list not found" :list-id (list-item-list-id item))
         (return-from db-save-list-item nil)))
+    ;; Skip if data is unchanged
+    (let ((current (sqlite:execute-to-list db
+                     "SELECT list_id, title, section, checked, notes
+                      FROM list_items WHERE id = ? AND valid_to IS NULL"
+                     (list-item-id item))))
+      (when (and current (= (length current) 1))
+        (destructuring-bind (cur-list-id cur-title cur-section cur-checked cur-notes)
+            (first current)
+          (when (and (equal cur-list-id (list-item-list-id item))
+                     (equal cur-title (list-item-title item))
+                     (equal cur-section (list-item-section item))
+                     (eql cur-checked (if (list-item-checked item) 1 0))
+                     (equal cur-notes (list-item-notes item)))
+            (return-from db-save-list-item t)))))
     (let ((now (or valid-from (now-iso)))
           (committed nil))
       (sqlite:execute-non-query db "BEGIN IMMEDIATE")
