@@ -11,6 +11,11 @@
 (defvar *server* nil
   "The Hunchentoot acceptor instance.")
 
+(defclass acme-routes-acceptor (pure-tls/acme:acme-acceptor
+                                easy-routes:easy-routes-acceptor)
+  ()
+  (:documentation "ACME acceptor with easy-routes dispatch."))
+
 (defvar *default-port* 9876
   "Default port for the pairing server.")
 
@@ -183,11 +188,11 @@
   (if hostname
       (let ((acme-port (if (= port *default-port*) 443 port))
             (contact-email (or email (format nil "admin@~A" hostname))))
-        (setf *server* (pure-tls/acme:make-acme-acceptor
-                         hostname contact-email
-                         :port acme-port
-                         :production t
-                         :acceptor-class 'easy-routes:easy-routes-acceptor))
+        (setf *server* (make-instance 'acme-routes-acceptor
+                                      :domains (list hostname)
+                                      :email contact-email
+                                      :port acme-port
+                                      :production t))
         (hunchentoot:start *server*)
         (format t "~&Cloodoo API server running on https://~A:~A~%" hostname acme-port))
       (progn
