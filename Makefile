@@ -5,8 +5,9 @@ cloodoo: src/grpc-proto.lisp src/*.lisp *.asd
 	sbcl --eval "(asdf:make :cloodoo)" --quit
 
 # Build ag-protoc tool from ag-gRPC
-ag-protoc: ocicl/ag-gRPC-*/ag-proto-cli/*.lisp ocicl/ag-gRPC-*/ag-proto/*.lisp
+ag-protoc:
 	@echo "Building ag-protoc tool..."
+	@if ! ls ocicl/ag-gRPC-* >/dev/null 2>&1; then ocicl install; fi
 	@sbcl --non-interactive \
 		--eval "(require 'asdf)" \
 		--eval "(asdf:load-system :ag-proto-cli)" \
