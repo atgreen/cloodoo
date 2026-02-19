@@ -1,4 +1,10 @@
+# Disable debug packages and stripping since this is a Lisp binary with dumped image
 %global debug_package %{nil}
+%global _build_id_links none
+%global __strip /bin/true
+%global __brp_strip %{nil}
+%global __brp_strip_comment_note %{nil}
+%global __brp_strip_static_archive %{nil}
 
 Name:           cloodoo
 Version:        %{version}
