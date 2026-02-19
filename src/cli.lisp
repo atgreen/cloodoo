@@ -1035,13 +1035,12 @@
             (when content-type (list :headers `(("content-type" . ,content-type))))))))
 
 (defun parse-pairing-url (url)
-  "Parse a pairing URL into (values host port token).
-URL format: http://HOST:PORT/pair/TOKEN"
-  (let* ((without-scheme (if (str:starts-with-p "http://" url)
-                             (subseq url 7)
-                             (if (str:starts-with-p "https://" url)
-                                 (subseq url 8)
-                                 url)))
+  "Parse a pairing URL into (values host port token tls-p).
+URL format: http[s]://HOST[:PORT]/pair/TOKEN"
+  (let* ((tls-p (str:starts-with-p "https://" url))
+         (without-scheme (cond ((str:starts-with-p "https://" url) (subseq url 8))
+                               ((str:starts-with-p "http://" url) (subseq url 7))
+                               (t url)))
          (path-start (position #\/ without-scheme))
          (host-port (subseq without-scheme 0 path-start))
          (path (when path-start (subseq without-scheme path-start)))
@@ -1049,17 +1048,20 @@ URL format: http://HOST:PORT/pair/TOKEN"
          (host (if colon-pos (subseq host-port 0 colon-pos) host-port))
          (port (if colon-pos
                    (parse-integer (subseq host-port (1+ colon-pos)))
-                   9876))
+                   (if tls-p 443 9876)))
          (token (when (and path (str:starts-with-p "/pair/" path))
                   (subseq path 6))))
     (unless token
-      (error "Invalid pairing URL. Expected format: http://HOST:PORT/pair/TOKEN"))
-    (values host port token)))
+      (error "Invalid pairing URL. Expected format: https://HOST/pair/TOKEN"))
+    (values host port token tls-p)))
 
 (defun pair-with-server (url)
   "Execute the pairing flow: fetch info, download PEM cert/key, store locally."
-  (multiple-value-bind (host port token) (parse-pairing-url url)
-    (let ((base-url (format nil "http://~A:~A" host port)))
+  (multiple-value-bind (host port token tls-p) (parse-pairing-url url)
+    (let ((base-url (format nil "~A://~A~A" (if tls-p "https" "http") host
+                            (if (or (and tls-p (= port 443))
+                                    (and (not tls-p) (= port 9876)))
+                                "" (format nil ":~A" port)))))
 
       ;; Step 1: Get pairing info
       (format t "~%Connecting to ~A...~%" base-url)
@@ -2357,10 +2359,14 @@ URL format: http://HOST:PORT/pair/TOKEN"
                                           (tui:colored "!" :fg tui:*fg-yellow*))
                                   (format t "~%Passphrase: ~A~%~%"
                                           (tui:bold (tui:colored passphrase :fg tui:*fg-green*)))
-                                  (if tls
-                                      (start-server :port effective-port :address "0.0.0.0"
-                                                    :hostname host)
-                                      (start-server :port port :address "0.0.0.0"))
+                                  (handler-case
+                                      (if tls
+                                          (start-server :port effective-port :address "0.0.0.0"
+                                                        :hostname host)
+                                          (start-server :port port :address "0.0.0.0"))
+                                    (error ()
+                                      ;; Server already running (e.g. persistent sync-server)
+                                      nil))
                                   (format t "Waiting for device to connect...~%")
                                   (format t "(Press Ctrl+C when done)~%~%")
                                   (handler-case
@@ -2378,7 +2384,7 @@ URL format: http://HOST:PORT/pair/TOKEN"
                                      #+ccl ccl:interrupt-signal-condition
                                      #-(or sbcl ccl) error ()
                                      (format t "~%")))
-                                  (stop-server)))
+                                  (ignore-errors (stop-server))))
                           (error (e)
                             (format t "~A Error: ~A~%"
                                     (tui:colored "✗" :fg tui:*fg-red*) e)))))

@@ -398,7 +398,8 @@
   device-name
   passphrase
   created-at
-  expires-at)
+  expires-at
+  (completed nil))
 
 (defun generate-pairing-token ()
   "Generate a short, URL-safe pairing token using CSPRNG.
@@ -410,67 +411,69 @@
 
 (defun create-pairing-request (device-name &key (expiry-minutes 10))
   "Create a pairing request for DEVICE-NAME.
-   Issues a new certificate and returns the pairing-request struct."
+   Issues a new certificate and returns the pairing-request struct.
+   Stores in SQLite for cross-process access."
   (let* ((passphrase (issue-client-cert device-name))
          (token (generate-pairing-token))
          (now (get-universal-time))
+         (expires-at (+ now (* expiry-minutes 60)))
          (request (make-pairing-request
                    :token token
                    :device-name device-name
                    :passphrase passphrase
                    :created-at now
-                   :expires-at (+ now (* expiry-minutes 60)))))
-    (bt:with-lock-held (*pairing-lock*)
-      (setf (gethash token *pending-pairings*) request))
+                   :expires-at expires-at)))
+    (db-store-pairing-request token device-name passphrase now expires-at)
     request))
 
 (defun create-pairing-request-existing (device-name &key (expiry-minutes 10))
   "Create a pairing request for an already-issued certificate.
-   Returns the pairing-request struct. The passphrase is for display only."
+   Returns the pairing-request struct. The passphrase is for display only.
+   Stores in SQLite for cross-process access."
   (unless (probe-file (client-cert-file device-name))
     (error "No certificate found for '~A'." device-name))
   (let* ((passphrase (generate-passphrase 4))
          (token (generate-pairing-token))
          (now (get-universal-time))
+         (expires-at (+ now (* expiry-minutes 60)))
          (request (make-pairing-request
                    :token token
                    :device-name device-name
                    :passphrase passphrase
                    :created-at now
-                   :expires-at (+ now (* expiry-minutes 60)))))
-    (bt:with-lock-held (*pairing-lock*)
-      (setf (gethash token *pending-pairings*) request))
+                   :expires-at expires-at)))
+    (db-store-pairing-request token device-name passphrase now expires-at)
     request))
 
 (defun get-pairing-request (token)
-  "Get a pairing request by token, or NIL if not found or expired."
-  (bt:with-lock-held (*pairing-lock*)
-    (let ((request (gethash token *pending-pairings*)))
-      (when request
-        (cond ((> (get-universal-time) (pairing-request-expires-at request))
-              (remhash token *pending-pairings*)
-              nil)
-      (t request))))))
+  "Get a pairing request by token, or NIL if not found or expired.
+   Reads from SQLite. Returns a pairing-request struct."
+  (let ((row (db-get-pairing-request token)))
+    (when row
+      (make-pairing-request
+       :token (getf row :token)
+       :device-name (getf row :device-name)
+       :passphrase (getf row :passphrase)
+       :created-at (getf row :created-at)
+       :expires-at (getf row :expires-at)
+       :completed (getf row :completed)))))
 
 (defun consume-pairing-request (token)
-  "Get and remove a pairing request (single-use).
-   Returns the request or NIL."
-  (bt:with-lock-held (*pairing-lock*)
-    (let ((request (gethash token *pending-pairings*)))
-      (when request
-        (remhash token *pending-pairings*)
-        (if (> (get-universal-time) (pairing-request-expires-at request))
-            nil
-            request)))))
+  "Mark a pairing request as completed (single-use).
+   Returns a pairing-request struct or NIL."
+  (let ((row (db-consume-pairing-request token)))
+    (when row
+      (make-pairing-request
+       :token (getf row :token)
+       :device-name (getf row :device-name)
+       :passphrase (getf row :passphrase)
+       :created-at (getf row :created-at)
+       :expires-at (getf row :expires-at)
+       :completed t))))
 
 (defun cleanup-expired-pairings ()
-  "Remove expired pairing requests."
-  (let ((now (get-universal-time)))
-    (bt:with-lock-held (*pairing-lock*)
-      (maphash (lambda (token request)
-                 (when (> now (pairing-request-expires-at request))
-                   (remhash token *pending-pairings*)))
-               *pending-pairings*))))
+  "Remove expired pairing requests from SQLite."
+  (db-cleanup-expired-pairings))
 
 ;;── Paired Certificate Storage (certs received from remote servers) ───────────
 

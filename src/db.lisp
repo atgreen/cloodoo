@@ -429,7 +429,17 @@
 
     (sqlite:execute-non-query db "
       CREATE INDEX IF NOT EXISTS idx_recovery_unused
-      ON recovery_codes(user_id) WHERE used_at IS NULL"))
+      ON recovery_codes(user_id) WHERE used_at IS NULL")
+
+    (sqlite:execute-non-query db "
+      CREATE TABLE IF NOT EXISTS pairing_requests (
+        token TEXT PRIMARY KEY,
+        device_name TEXT NOT NULL,
+        passphrase TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        expires_at INTEGER NOT NULL,
+        completed INTEGER DEFAULT 0
+      )"))
   t)
 
 ;;── Timestamp Helpers ─────────────────────────────────────────────────────────
@@ -1810,6 +1820,69 @@
   (with-db (db)
     (sqlite:execute-non-query db "
       UPDATE recovery_codes SET used_at = ? WHERE id = ?" (now-iso) id)))
+
+;;── Pairing Requests (SQLite-backed for cross-process sharing) ───────────────
+
+(defun db-store-pairing-request (token device-name passphrase created-at expires-at)
+  "Store a pairing request in the database."
+  (ensure-db-initialized)
+  (with-db (db)
+    (sqlite:execute-non-query db "
+      INSERT OR REPLACE INTO pairing_requests (token, device_name, passphrase, created_at, expires_at, completed)
+      VALUES (?, ?, ?, ?, ?, 0)"
+      token device-name passphrase created-at expires-at)))
+
+(defun db-get-pairing-request (token)
+  "Get a pairing request by token. Returns a plist or NIL if not found/expired."
+  (ensure-db-initialized)
+  (with-db (db)
+    (let ((row (multiple-value-list
+                 (sqlite:execute-one-row-m-v db "
+      SELECT token, device_name, passphrase, created_at, expires_at, completed
+      FROM pairing_requests WHERE token = ?" token))))
+      (when (first row)
+        (destructuring-bind (token device-name passphrase created-at expires-at completed) row
+          (let ((now (get-universal-time)))
+            (cond ((> now expires-at)
+                   (sqlite:execute-non-query db "DELETE FROM pairing_requests WHERE token = ?" token)
+                   nil)
+                  (t (list :token token
+                           :device-name device-name
+                           :passphrase passphrase
+                           :created-at created-at
+                           :expires-at expires-at
+                           :completed (= completed 1))))))))))
+
+(defun db-consume-pairing-request (token)
+  "Mark a pairing request as completed. Returns the plist or NIL."
+  (ensure-db-initialized)
+  (with-db (db)
+    (let ((row (multiple-value-list
+                 (sqlite:execute-one-row-m-v db "
+      SELECT token, device_name, passphrase, created_at, expires_at, completed
+      FROM pairing_requests WHERE token = ?" token))))
+      (when (first row)
+        (destructuring-bind (token device-name passphrase created-at expires-at completed) row
+          (let ((now (get-universal-time)))
+            (cond ((= completed 1) nil)
+                  ((> now expires-at)
+                   (sqlite:execute-non-query db "DELETE FROM pairing_requests WHERE token = ?" token)
+                   nil)
+                  (t (sqlite:execute-non-query db
+                       "UPDATE pairing_requests SET completed = 1 WHERE token = ?" token)
+                     (list :token token
+                           :device-name device-name
+                           :passphrase passphrase
+                           :created-at created-at
+                           :expires-at expires-at
+                           :completed t)))))))))
+
+(defun db-cleanup-expired-pairings ()
+  "Remove expired pairing requests from the database."
+  (ensure-db-initialized)
+  (with-db (db)
+    (sqlite:execute-non-query db "DELETE FROM pairing_requests WHERE expires_at < ?"
+      (get-universal-time))))
 
 ;;── Sync API ─────────────────────────────────────────────────────────────────
 
