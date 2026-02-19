@@ -2368,8 +2368,7 @@ URL format: http://HOST:PORT/pair/TOKEN"
                                         (sleep 2)
                                         (cleanup-expired-pairings)
                                         (let ((req (get-pairing-request token)))
-                                          (when (or (null req)
-                                                    (pairing-request-completed req))
+                                          (when (null req)
                                             (format t "~%~A User '~A' has paired a device.~%"
                                                     (tui:colored "✓" :fg tui:*fg-green*) username)
                                             ;; Give the POST handler time to finish sending the response
