@@ -25,7 +25,7 @@ src/grpc-proto.lisp: ag-protoc android/app/src/main/proto/cloodoo_sync.proto pro
 		-o $@ \
 		android/app/src/main/proto/cloodoo_sync.proto
 	@# Fix ag-protoc bug: it doesn't apply --class-prefix to response types in stub methods
-	@sed -i "s/'CLOODOO::SYNCMESSAGE/'CLOODOO::PROTO-SYNC-MESSAGE/g" $@
+	@sed "s/'CLOODOO::SYNCMESSAGE/'CLOODOO::PROTO-SYNC-MESSAGE/g" $@ > $@.tmp && mv $@.tmp $@
 
 # Build Android app (output: android/app/build/outputs/apk/debug/app-debug.apk)
 android:

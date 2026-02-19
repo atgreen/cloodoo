@@ -14,13 +14,13 @@ BuildRequires:  make
 BuildRequires:  git
 BuildRequires:  sqlite-devel
 BuildRequires:  openssl-devel
-BuildRequires:  zstd-devel
+BuildRequires:  libzstd-devel
 BuildRequires:  libfixposix-devel
 
 Requires:       sqlite-libs
 Requires:       libfixposix
 Requires:       openssl-libs
-Requires:       zstd-libs
+Requires:       libzstd
 
 %description
 Cloodoo is a personal TODO system featuring a retro TUI interface,
