@@ -493,6 +493,10 @@
   "Path to the client key received from a remote server."
   (merge-pathnames "client.key" (paired-server-directory server-id)))
 
+(defun paired-ca-cert-file (server-id)
+  "Path to the CA certificate received from a remote server."
+  (merge-pathnames "ca.crt" (paired-server-directory server-id)))
+
 (defun paired-sync-config-file (server-id)
   "Path to the sync config file for a paired remote server."
   (merge-pathnames "sync.json" (paired-server-directory server-id)))
