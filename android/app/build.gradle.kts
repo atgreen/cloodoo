@@ -146,6 +146,9 @@ dependencies {
     // QR code scanning for pairing
     implementation("com.google.mlkit:barcode-scanning:17.2.0")
 
+    // QR code generation (used by RekeyScreen)
+    implementation("com.google.zxing:core:3.5.3")
+
     // OCR text recognition
     implementation("com.google.mlkit:text-recognition:16.0.0")
 
