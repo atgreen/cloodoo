@@ -394,7 +394,42 @@
 
     (sqlite:execute-non-query db "
       CREATE INDEX IF NOT EXISTS idx_list_items_user_current
-      ON list_items(user_id, valid_to) WHERE valid_to IS NULL"))
+      ON list_items(user_id, valid_to) WHERE valid_to IS NULL")
+
+    ;;── Self-Service Registration Tables ──────────────────────────────────────
+
+    ;; Invite codes — admin-created registration gates
+    (sqlite:execute-non-query db "
+      CREATE TABLE IF NOT EXISTS invite_codes (
+        code TEXT PRIMARY KEY,
+        created_at TEXT NOT NULL,
+        max_uses INTEGER DEFAULT 1,
+        use_count INTEGER DEFAULT 0,
+        expires_at TEXT,
+        note TEXT
+      )")
+
+    ;; Users — explicit user tracking (currently implicit from cert CNs)
+    (sqlite:execute-non-query db "
+      CREATE TABLE IF NOT EXISTS users (
+        user_id TEXT PRIMARY KEY,
+        created_at TEXT NOT NULL,
+        created_via TEXT
+      )")
+
+    ;; Recovery codes — hashed one-time recovery codes
+    (sqlite:execute-non-query db "
+      CREATE TABLE IF NOT EXISTS recovery_codes (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id TEXT NOT NULL,
+        code_hash TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        used_at TEXT
+      )")
+
+    (sqlite:execute-non-query db "
+      CREATE INDEX IF NOT EXISTS idx_recovery_unused
+      ON recovery_codes(user_id) WHERE used_at IS NULL"))
   t)
 
 ;;── Timestamp Helpers ─────────────────────────────────────────────────────────
@@ -1664,6 +1699,117 @@
                    :settings settings-count))
         (unless committed
           (ignore-errors (sqlite:execute-non-query db "ROLLBACK")))))))
+
+;;── Invite Code Management ────────────────────────────────────────────────────
+
+(defun db-create-invite-code (code &key (max-uses 1) expires-at note)
+  "Store a new invite code.  EXPIRES-AT is an ISO 8601 string or NIL."
+  (ensure-db-initialized)
+  (with-db (db)
+    (sqlite:execute-non-query db "
+      INSERT INTO invite_codes (code, created_at, max_uses, use_count, expires_at, note)
+      VALUES (?, ?, ?, 0, ?, ?)"
+      code (now-iso) max-uses expires-at note)))
+
+(defun db-validate-invite-code (code)
+  "Return the invite row as a plist if CODE is valid (uses remaining, not expired), or NIL."
+  (ensure-db-initialized)
+  (with-db (db)
+    (let ((row (multiple-value-list
+                 (sqlite:execute-one-row-m-v db "
+      SELECT code, created_at, max_uses, use_count, expires_at, note
+      FROM invite_codes WHERE code = ?" code))))
+      (when (first row)
+        (destructuring-bind (code created-at max-uses use-count expires-at note) row
+          (when (and (< use-count max-uses)
+                     (or (null expires-at)
+                         (eql expires-at :null)
+                         (string> expires-at (now-iso))))
+            (list :code code
+                  :created-at created-at
+                  :max-uses max-uses
+                  :use-count use-count
+                  :expires-at expires-at
+                  :note note)))))))
+
+(defun db-consume-invite-code (code)
+  "Increment use_count for CODE."
+  (ensure-db-initialized)
+  (with-db (db)
+    (sqlite:execute-non-query db "
+      UPDATE invite_codes SET use_count = use_count + 1 WHERE code = ?" code)))
+
+(defun db-list-invite-codes ()
+  "Return all invite codes as a list of plists."
+  (ensure-db-initialized)
+  (with-db (db)
+    (mapcar (lambda (row)
+              (destructuring-bind (code created-at max-uses use-count expires-at note) row
+                (list :code code
+                      :created-at created-at
+                      :max-uses max-uses
+                      :use-count use-count
+                      :expires-at expires-at
+                      :note note)))
+            (sqlite:execute-to-list db "
+              SELECT code, created_at, max_uses, use_count, expires_at, note
+              FROM invite_codes ORDER BY created_at DESC"))))
+
+;;── User Management ──────────────────────────────────────────────────────────
+
+(defun db-create-user (user-id &key created-via)
+  "Insert a new user row."
+  (ensure-db-initialized)
+  (with-db (db)
+    (sqlite:execute-non-query db "
+      INSERT INTO users (user_id, created_at, created_via)
+      VALUES (?, ?, ?)"
+      user-id (now-iso) created-via)))
+
+(defun db-list-users ()
+  "Return all users as a list of plists."
+  (ensure-db-initialized)
+  (with-db (db)
+    (mapcar (lambda (row)
+              (destructuring-bind (user-id created-at created-via) row
+                (list :user-id user-id
+                      :created-at created-at
+                      :created-via created-via)))
+            (sqlite:execute-to-list db "
+              SELECT user_id, created_at, created_via
+              FROM users ORDER BY created_at DESC"))))
+
+;;── Recovery Code Management ─────────────────────────────────────────────────
+
+(defun db-store-recovery-codes (user-id code-hashes)
+  "Bulk-insert a list of hashed recovery CODE-HASHES for USER-ID."
+  (ensure-db-initialized)
+  (with-db (db)
+    (let ((ts (now-iso)))
+      (dolist (hash code-hashes)
+        (sqlite:execute-non-query db "
+          INSERT INTO recovery_codes (user_id, code_hash, created_at)
+          VALUES (?, ?, ?)"
+          user-id hash ts)))))
+
+(defun db-validate-recovery-code (code-hash)
+  "Return (user-id id) for an unused recovery code matching CODE-HASH, or NIL."
+  (ensure-db-initialized)
+  (with-db (db)
+    (let ((row (multiple-value-list
+                 (sqlite:execute-one-row-m-v db "
+      SELECT user_id, id FROM recovery_codes
+      WHERE code_hash = ? AND used_at IS NULL" code-hash))))
+      (when (first row)
+        (destructuring-bind (user-id id) row
+          (list :user-id user-id :id id))))))
+
+(defun db-consume-recovery-code (id)
+  "Mark recovery code ID as used by setting used_at."
+  (ensure-db-initialized)
+  (with-db (db)
+    (sqlite:execute-non-query db "
+      UPDATE recovery_codes SET used_at = ? WHERE id = ?" (now-iso) id)))
 
 ;;── Sync API ─────────────────────────────────────────────────────────────────
 

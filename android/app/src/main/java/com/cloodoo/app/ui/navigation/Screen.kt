@@ -26,4 +26,5 @@ sealed class Screen(val route: String) {
     object EditList : Screen("edit_list/{listId}") {
         fun createRoute(listId: String) = "edit_list/$listId"
     }
+    object Rekey : Screen("rekey")
 }

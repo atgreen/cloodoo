@@ -136,6 +136,23 @@ service TodoSync {
   rpc SyncStream(stream SyncMessage) returns (stream SyncMessage);
 }
 
+// Device re-pairing (allows authenticated users to pair new devices)
+message RekeyRequest {
+  string device_name = 1;
+}
+
+message RekeyResponse {
+  string pairing_url = 1;
+  string passphrase = 2;
+  string error = 3;
+  int32 expires_in = 4;
+}
+
+// Device management service (requires mTLS authentication)
+service DeviceService {
+  rpc RequestRekey(RekeyRequest) returns (RekeyResponse);
+}
+
 // Attachment metadata
 message AttachmentMeta {
   string hash = 1;        // SHA256 hash (content-addressed storage)

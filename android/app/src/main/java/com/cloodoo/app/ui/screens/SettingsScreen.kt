@@ -27,7 +27,8 @@ import com.cloodoo.app.data.security.CertificateManager
 fun SettingsScreen(
     viewModel: TodoListViewModel,
     certificateManager: CertificateManager,
-    onUnpaired: () -> Unit
+    onUnpaired: () -> Unit,
+    onPairNewDevice: () -> Unit = {}
 ) {
     var serverAddress by remember { mutableStateOf(certificateManager.getServerAddress() ?: "") }
     var serverPort by remember { mutableStateOf(certificateManager.getServerPort().toString()) }
@@ -207,6 +208,13 @@ fun SettingsScreen(
         )
         Card(modifier = Modifier.fillMaxWidth()) {
             Column(modifier = Modifier.padding(16.dp)) {
+                Button(
+                    onClick = onPairNewDevice,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("Pair New Device")
+                }
+                Spacer(modifier = Modifier.height(8.dp))
                 OutlinedButton(
                     onClick = { showUnpairConfirmation = true },
                     colors = ButtonDefaults.outlinedButtonColors(

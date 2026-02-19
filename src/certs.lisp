@@ -91,6 +91,33 @@
                                   *passphrase-words*))))
     (format nil "~{~A~^-~}" words)))
 
+;;── Recovery Code Generation ──────────────────────────────────────────────────
+
+(defvar *recovery-alphabet* "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+  "Confusable-free alphabet for recovery codes (no 0/O, 1/I/L).")
+
+(defun generate-recovery-code ()
+  "Generate a single recovery code like A3B7-K9M2-P4Q8-R1S5.
+   4 groups of 4 characters from a 31-char alphabet ≈ 79 bits entropy."
+  (let ((groups (loop repeat 4
+                      collect (coerce (loop repeat 4
+                                            collect (char *recovery-alphabet*
+                                                         (secure-random (length *recovery-alphabet*))))
+                                      'string))))
+    (format nil "~{~A~^-~}" groups)))
+
+(defun generate-recovery-codes (&optional (count 8))
+  "Generate COUNT plaintext recovery codes."
+  (loop repeat count collect (generate-recovery-code)))
+
+(defun hash-recovery-code (code)
+  "SHA-256 hash of CODE after normalizing (uppercase, strip dashes).
+   Returns hex digest string."
+  (let* ((normalized (remove #\- (string-upcase code)))
+         (bytes (flexi-streams:string-to-octets normalized :external-format :ascii))
+         (digest (ironclad:digest-sequence :sha256 bytes)))
+    (ironclad:byte-array-to-hex-string digest)))
+
 ;;── CA Initialization ─────────────────────────────────────────────────────────
 
 (defun ca-initialized-p ()

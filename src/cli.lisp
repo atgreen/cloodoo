@@ -510,23 +510,43 @@
                      :flag
                      :long-name "no-tls"
                      :key :no-tls
-                     :description "Disable TLS (for testing)")))
+                     :description "Disable TLS (for testing)"))
+        (hostname-opt (clingon:make-option
+                       :string
+                       :long-name "hostname"
+                       :key :hostname
+                       :description "Public hostname for ACME HTTPS and pairing URLs"))
+        (no-http-opt (clingon:make-option
+                      :flag
+                      :long-name "no-http"
+                      :key :no-http
+                      :description "Do not start the HTTP/HTTPS server")))
     (clingon:make-command
      :name "sync-server"
      :description "Start gRPC streaming sync server for real-time sync"
-     :options (list port-opt bind-opt no-tls-opt)
+     :options (list port-opt bind-opt no-tls-opt hostname-opt no-http-opt)
      :handler (lambda (cmd)
                 (let ((port (clingon:getopt cmd :port))
                       (address (clingon:getopt cmd :bind))
-                      (no-tls (clingon:getopt cmd :no-tls)))
+                      (no-tls (clingon:getopt cmd :no-tls))
+                      (hostname (clingon:getopt cmd :hostname))
+                      (no-http (clingon:getopt cmd :no-http)))
                   (start-grpc-sync-server :port port :host address :require-tls (not no-tls))
+                  ;; Start HTTP/HTTPS server unless --no-http
+                  (unless no-http
+                    (when hostname
+                      (setf *server-hostname* hostname))
+                    (if hostname
+                        (start-server :hostname hostname)
+                        (start-server :address "0.0.0.0")))
                   ;; Keep running until interrupted
                   (handler-case
                       (loop (sleep 1))
                     (#+sbcl sb-sys:interactive-interrupt
                      #+ccl ccl:interrupt-signal-condition
                      #-(or sbcl ccl) error ()
-                     (format t "~%Shutting down gRPC sync server...~%")
+                     (format t "~%Shutting down...~%")
+                     (stop-server)
                      (stop-grpc-sync-server))))))))
 
 (defun make-sync-connect-command ()
@@ -2447,6 +2467,32 @@ URL format: http://HOST:PORT/pair/TOKEN"
                     (format t "Usage: cloodoo user migrate-data FROM_USER_ID TO_USERNAME~%~%~
                               Example: cloodoo user migrate-data default alice~%"))))))
 
+;;── User Recovery-Codes Subcommand ────────────────────────────────────────────
+
+(defun make-user-recovery-codes-command ()
+  "Create the 'user recovery-codes' subcommand."
+  (clingon:make-command
+   :name "recovery-codes"
+   :description "Generate new recovery codes for a user"
+   :usage "USER_ID"
+   :handler (lambda (cmd)
+              (let ((args (clingon:command-arguments cmd)))
+                (if args
+                    (let ((user-id (first args)))
+                      (handler-case
+                          (let* ((codes (generate-recovery-codes 8))
+                                 (hashes (mapcar #'hash-recovery-code codes)))
+                            (db-store-recovery-codes user-id hashes)
+                            (format t "~%~A Recovery codes generated for '~A':~%~%"
+                                    (tui:colored "✓" :fg tui:*fg-green*) user-id)
+                            (dolist (code codes)
+                              (format t "  ~A~%" code))
+                            (format t "~%Save these codes somewhere safe!~%~%"))
+                        (error (e)
+                          (format t "~A Error: ~A~%"
+                                  (tui:colored "✗" :fg tui:*fg-red*) e))))
+                    (format t "Usage: cloodoo user recovery-codes USER_ID~%"))))))
+
 (defun make-user-command ()
   "Create the 'user' command group."
   (clingon:make-command
@@ -2458,7 +2504,136 @@ URL format: http://HOST:PORT/pair/TOKEN"
    :sub-commands (list (make-user-create-command)
                        (make-user-list-command)
                        (make-user-delete-command)
-                       (make-user-migrate-data-command))))
+                       (make-user-migrate-data-command)
+                       (make-user-recovery-codes-command))))
+
+;;── Invite Command Group ─────────────────────────────────────────────────────
+
+(defun make-invite-create-command ()
+  "Create the 'invite create' subcommand."
+  (let ((uses-opt (clingon:make-option
+                   :integer
+                   :short-name #\n
+                   :long-name "uses"
+                   :key :uses
+                   :initial-value 1
+                   :description "Maximum number of uses"))
+        (expires-opt (clingon:make-option
+                      :string
+                      :long-name "expires"
+                      :key :expires
+                      :description "Expiry duration (e.g., 24h, 7d)"))
+        (note-opt (clingon:make-option
+                   :string
+                   :long-name "note"
+                   :key :note
+                   :description "Note about this invite")))
+    (clingon:make-command
+     :name "create"
+     :description "Generate a new invite code"
+     :options (list uses-opt expires-opt note-opt)
+     :handler (lambda (cmd)
+                (let ((uses (clingon:getopt cmd :uses))
+                      (expires-str (clingon:getopt cmd :expires))
+                      (note (clingon:getopt cmd :note)))
+                  (handler-case
+                      (let* ((code (generate-pairing-token))
+                             (expires-at (when expires-str
+                                           (parse-duration-to-iso expires-str))))
+                        (db-create-invite-code code :max-uses uses
+                                                     :expires-at expires-at
+                                                     :note note)
+                        (format t "~%~A Invite code created.~%~%"
+                                (tui:colored "✓" :fg tui:*fg-green*))
+                        (if *server-hostname*
+                            (format t "  URL: https://~A/register?invite=~A~%"
+                                    *server-hostname* code)
+                            (format t "  Code: ~A~%" code))
+                        (format t "  Max uses: ~D~%" uses)
+                        (when expires-at
+                          (format t "  Expires: ~A~%" expires-at))
+                        (when note
+                          (format t "  Note: ~A~%" note))
+                        (format t "~%"))
+                    (error (e)
+                      (format t "~A Error: ~A~%"
+                              (tui:colored "✗" :fg tui:*fg-red*) e))))))))
+
+(defun parse-duration-to-iso (duration-str)
+  "Parse a duration string like '24h', '7d', '30m' to an ISO 8601 timestamp from now."
+  (let* ((len (length duration-str))
+         (unit (char duration-str (1- len)))
+         (amount (parse-integer (subseq duration-str 0 (1- len)))))
+    (let ((seconds (case unit
+                     (#\m (* amount 60))
+                     (#\h (* amount 3600))
+                     (#\d (* amount 86400))
+                     (otherwise (error "Unknown duration unit '~C'. Use m, h, or d." unit)))))
+      (lt:format-rfc3339-timestring
+       nil (lt:adjust-timestamp (lt:now) (:offset :sec seconds))))))
+
+(defun make-invite-list-command ()
+  "Create the 'invite list' subcommand."
+  (clingon:make-command
+   :name "list"
+   :description "List all invite codes"
+   :handler (lambda (cmd)
+              (declare (ignore cmd))
+              (let ((invites (db-list-invite-codes)))
+                (if invites
+                    (progn
+                      (format t "~%~A ~D invite code~:P:~%~%"
+                              (tui:colored "●" :fg tui:*fg-blue*) (length invites))
+                      (dolist (inv invites)
+                        (format t "  ~A  uses: ~D/~D  created: ~A~A~A~%"
+                                (getf inv :code)
+                                (getf inv :use-count) (getf inv :max-uses)
+                                (getf inv :created-at)
+                                (let ((exp (getf inv :expires-at)))
+                                  (if (and exp (not (eql exp :null)))
+                                      (format nil "  expires: ~A" exp)
+                                      ""))
+                                (let ((note (getf inv :note)))
+                                  (if (and note (not (eql note :null)))
+                                      (format nil "  (~A)" note)
+                                      ""))))
+                      (format t "~%"))
+                    (format t "~%No invite codes.~%~%"))))))
+
+(defun make-invite-revoke-command ()
+  "Create the 'invite revoke' subcommand."
+  (clingon:make-command
+   :name "revoke"
+   :description "Revoke an invite code (prevent further uses)"
+   :usage "CODE"
+   :handler (lambda (cmd)
+              (let ((args (clingon:command-arguments cmd)))
+                (if args
+                    (let ((code (first args)))
+                      (handler-case
+                          (progn
+                            ;; Set max_uses = use_count to prevent further uses
+                            (with-db (db)
+                              (sqlite:execute-non-query db "
+                                UPDATE invite_codes SET max_uses = use_count WHERE code = ?" code))
+                            (format t "~%~A Invite code '~A' revoked.~%~%"
+                                    (tui:colored "✓" :fg tui:*fg-green*) code))
+                        (error (e)
+                          (format t "~A Error: ~A~%"
+                                  (tui:colored "✗" :fg tui:*fg-red*) e))))
+                    (format t "Usage: cloodoo invite revoke CODE~%"))))))
+
+(defun make-invite-command ()
+  "Create the 'invite' command group."
+  (clingon:make-command
+   :name "invite"
+   :description "Manage invite codes for self-service registration"
+   :usage "[command]"
+   :handler (lambda (cmd)
+              (clingon:print-usage cmd t))
+   :sub-commands (list (make-invite-create-command)
+                       (make-invite-list-command)
+                       (make-invite-revoke-command))))
 
 (defun make-app ()
   "Create and return the command-line application."
@@ -2488,6 +2663,7 @@ URL format: http://HOST:PORT/pair/TOKEN"
                        (make-sync-reset-command)
                        (make-cert-command)
                        (make-user-command)
+                       (make-invite-command)
                        (make-enrich-pending-command)
                        (make-native-host-command)
                        (make-install-native-host-command))))

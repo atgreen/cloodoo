@@ -9,6 +9,7 @@ package com.cloodoo.app.data.remote
 import android.util.Log
 import com.cloodoo.app.data.security.CertificateManager
 import com.cloodoo.app.proto.CloodooSync.*
+import com.cloodoo.app.proto.DeviceServiceGrpc
 import com.cloodoo.app.proto.TodoSyncGrpc
 import io.grpc.ManagedChannel
 import io.grpc.okhttp.OkHttpChannelBuilder
@@ -263,6 +264,25 @@ class GrpcSyncClient(
 
         requestObserver?.onNext(message)
         Log.d(TAG, "Sent settings change: $key")
+    }
+
+    /**
+     * Request a re-pairing token for a new device via the DeviceService RPC.
+     * Uses the existing mTLS channel for authentication.
+     *
+     * @param deviceName Name for the new device
+     * @return RekeyResponse with pairing URL, passphrase, and expiry
+     */
+    suspend fun requestRekey(deviceName: String): RekeyResponse {
+        val channel = managedChannel
+            ?: throw IllegalStateException("Not connected to server")
+
+        val stub = DeviceServiceGrpc.newBlockingStub(channel)
+        val request = RekeyRequest.newBuilder()
+            .setDeviceName(deviceName)
+            .build()
+
+        return stub.requestRekey(request)
     }
 
     /**

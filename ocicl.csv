@@ -56,6 +56,8 @@ dexador, ghcr.io/ocicl/dexador@sha256:defc8d669790e22ac9a9eccf52fe14b10cf986402c
 dexador-test, ghcr.io/ocicl/dexador@sha256:defc8d669790e22ac9a9eccf52fe14b10cf986402c7b32c0049df45f64a039e1, dexador-20250825-4db4b93/dexador-test.asd
 dexador-usocket, ghcr.io/ocicl/dexador@sha256:defc8d669790e22ac9a9eccf52fe14b10cf986402c7b32c0049df45f64a039e1, dexador-20250825-4db4b93/dexador-usocket.asd
 documentation-utils, ghcr.io/ocicl/documentation-utils@sha256:b2a1b3f3bcd1a738af85ae2b0168d408c177661eab6d6bbebb254e394d983f54, documentation-utils-20230511-98630dd/documentation-utils.asd
+drakma, ghcr.io/ocicl/drakma@sha256:2380396d821844cee463626c3b6e9b8c0a41632328f82ce6e2128fecb178e00c, drakma-2.0.10/drakma.asd
+drakma-test, ghcr.io/ocicl/drakma@sha256:2380396d821844cee463626c3b6e9b8c0a41632328f82ce6e2128fecb178e00c, drakma-2.0.10/drakma-test.asd
 dref, ghcr.io/ocicl/mgl-pax-bootstrap@sha256:3097eea0bea078a340bf34b3df4f3c8f5973f5a89369546d6ce031f28305d50e, mgl-pax-20260211-e83846f/dref/dref.asd
 dref-test, ghcr.io/ocicl/mgl-pax-bootstrap@sha256:3097eea0bea078a340bf34b3df4f3c8f5973f5a89369546d6ce031f28305d50e, mgl-pax-20260211-e83846f/dref/dref-test.asd
 dref-test-package-inferred, ghcr.io/ocicl/mgl-pax-bootstrap@sha256:3097eea0bea078a340bf34b3df4f3c8f5973f5a89369546d6ce031f28305d50e, mgl-pax-20260211-e83846f/dref/test/data/dref-test-package-inferred.asd

@@ -36,6 +36,7 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import com.cloodoo.app.data.remote.ConnectionState
+import com.cloodoo.app.data.remote.GrpcSyncClient
 import com.cloodoo.app.data.security.CertificateManager
 import com.cloodoo.app.ui.components.ConfettiOverlay
 import com.cloodoo.app.ui.components.SpeedDialFab
@@ -228,7 +229,10 @@ fun CloodooApp(openQuickAdd: Boolean = false) {
                         SettingsScreen(
                             viewModel = viewModel,
                             certificateManager = certificateManager,
-                            onUnpaired = { isPaired = false }
+                            onUnpaired = { isPaired = false },
+                            onPairNewDevice = {
+                                navController.navigate(Screen.Rekey.route)
+                            }
                         )
                     }
                     composable(Screen.AddTask.route) {
@@ -289,6 +293,13 @@ fun CloodooApp(openQuickAdd: Boolean = false) {
                             viewModel = viewModel,
                             onNavigateBack = { navController.popBackStack() },
                             existingListId = listId
+                        )
+                    }
+                    composable(Screen.Rekey.route) {
+                        val rekeyClient = remember { GrpcSyncClient(certificateManager) }
+                        RekeyScreen(
+                            grpcClient = rekeyClient,
+                            onBack = { navController.popBackStack() }
                         )
                     }
                 }

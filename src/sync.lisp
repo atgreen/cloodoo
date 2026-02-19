@@ -583,6 +583,34 @@
                    :created-at (lt:parse-timestring (gethash "created_at" ht))
                    :completed-at (parse-timestamp (gethash "completed_at" ht)))))
 
+;;── Device Re-Pairing Handler ─────────────────────────────────────────────────
+
+(defun handle-rekey-request (ctx request)
+  "Handle a DeviceService/RequestRekey RPC.
+   Extracts the user identity from mTLS cert and creates a pairing request
+   for the same cert so a new device can be paired."
+  (let ((username (extract-username-from-ctx ctx))
+        (response (make-instance 'proto-rekey-response)))
+    (cond
+      ((null username)
+       (setf (proto-rekey-response-error response) "Authentication required")
+       response)
+      ((cert-revoked-p username)
+       (setf (proto-rekey-response-error response) "Certificate has been revoked")
+       response)
+      (t
+       (handler-case
+           (let ((pairing-req (create-pairing-request-existing username)))
+             (setf (proto-rekey-response-pairing-url response)
+                   (pairing-url-for-token (pairing-request-token pairing-req)))
+             (setf (proto-rekey-response-passphrase response)
+                   (pairing-request-passphrase pairing-req))
+             (setf (proto-rekey-response-expires-in response) 600)
+             response)
+         (error (e)
+           (setf (proto-rekey-response-error response) (princ-to-string e))
+           response))))))
+
 ;;── Server Control ────────────────────────────────────────────────────────────
 
 (defun start-grpc-sync-server (&key (port *grpc-port*) (host "0.0.0.0") (require-tls t))
@@ -626,6 +654,16 @@
      :response-type 'proto-sync-message
      :client-streaming t
      :server-streaming t)
+
+    ;; Register the DeviceService/RequestRekey handler
+    (ag-grpc:server-register-handler
+     *grpc-server*
+     "/cloodoo.DeviceService/RequestRekey"
+     #'handle-rekey-request
+     :request-type 'proto-rekey-request
+     :response-type 'proto-rekey-response
+     :client-streaming nil
+     :server-streaming nil)
 
     ;; Register the AttachmentService handlers
     (register-attachment-service *grpc-server*)
