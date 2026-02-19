@@ -1,0 +1,14 @@
+#!/usr/bin/make -f
+
+%:
+	dh $@
+
+override_dh_auto_build:
+	# ocicl and dependencies are expected to be pre-installed
+	make ag-protoc
+	make src/grpc-proto.lisp
+	make cloodoo
+
+override_dh_auto_install:
+	mkdir -p debian/cloodoo/usr/bin
+	install -m 755 cloodoo debian/cloodoo/usr/bin/cloodoo

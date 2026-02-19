@@ -26,6 +26,17 @@ Lints JavaScript code:
 - **GNOME Extension**: Runs ESLint on gnome-extension/*.js
 - **Browser Extension**: Validates manifest.json and runs npm lint if available
 
+### release.yml - Release Packaging
+Triggered by pushing a version tag (`v*`). Builds release packages for all platforms in parallel:
+- **Linux x86_64**: Tarball with binary, LICENSE, README.md
+- **Fedora RPM**: Built from source in Fedora container using `releng/cloodoo.spec`
+- **Debian/Ubuntu DEB**: Built from source using `releng/debian/` packaging
+- **macOS ARM64**: Tarball for Apple Silicon (macos-latest runner)
+- **macOS x64**: Tarball for Intel Macs (macos-13 runner)
+- **Android APK**: Debug-signed APK
+
+After all builds complete, a GitHub Release is created with all artifacts attached. See `docs/RELEASING.md` for the full release process.
+
 ## Artifacts
 
 Built artifacts are available for download from the Actions tab:
@@ -33,7 +44,7 @@ Built artifacts are available for download from the Actions tab:
 - `cloodoo-debug-apk`: Android debug APK
 - `android-test-results`: Android test reports
 
-All artifacts are retained for 7 days.
+All CI artifacts are retained for 7 days. Release artifacts are permanently attached to their GitHub Release.
 
 ## Local Testing
 

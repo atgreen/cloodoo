@@ -1,0 +1,12 @@
+Package: cloodoo
+Version: @VERSION@-1
+Section: utils
+Priority: optional
+Architecture: amd64
+Depends: libsqlite3-0, libfixposix4 | libfixposix3, libssl3 | libssl1.1, libzstd1
+Maintainer: Anthony Green <green@moxielogic.com>
+Homepage: https://github.com/atgreen/cloodoo
+Description: Personal TODO system with a retro TUI
+ Cloodoo is a personal TODO system featuring a retro TUI interface,
+ multi-device sync via gRPC with mTLS, LLM enrichment, and companion
+ Android and browser extension apps.
