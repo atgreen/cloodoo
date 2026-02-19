@@ -79,7 +79,7 @@ jobs:
     - name: Install build tools
       run: |
         dnf install -y git make gcc gcc-c++ \
-          sbcl sqlite-devel openssl-devel zstd-devel \
+          sbcl sqlite-devel openssl-devel libzstd-devel \
           rpm-build rpmdevtools libfixposix-devel
 
     - name: Checkout code
@@ -90,8 +90,9 @@ jobs:
         cd /tmp
         git clone --depth 1 ${{ env.OCICL_REPO }}.git
         cd ocicl
-        make
-        make install PREFIX=/usr/local
+        sbcl --load setup.lisp
+        echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+        export PATH="$HOME/.local/bin:$PATH"
         cd "$GITHUB_WORKSPACE"
         ocicl setup > ~/.sbclrc
 
@@ -211,8 +212,9 @@ jobs:
         cd /tmp
         git clone --depth 1 ${{ env.OCICL_REPO }}.git
         cd ocicl
-        make
-        sudo make install PREFIX=/usr/local
+        sbcl --load setup.lisp
+        echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+        export PATH="$HOME/.local/bin:$PATH"
         cd "$GITHUB_WORKSPACE"
         ocicl setup > ~/.sbclrc
 
@@ -248,7 +250,7 @@ jobs:
 
   build-macos-x64:
     name: macOS x64
-    runs-on: macos-13
+    runs-on: macos-15-intel
 
     steps:
     - name: Checkout code
@@ -262,8 +264,9 @@ jobs:
         cd /tmp
         git clone --depth 1 ${{ env.OCICL_REPO }}.git
         cd ocicl
-        make
-        sudo make install PREFIX=/usr/local
+        sbcl --load setup.lisp
+        echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+        export PATH="$HOME/.local/bin:$PATH"
         cd "$GITHUB_WORKSPACE"
         ocicl setup > ~/.sbclrc
 
