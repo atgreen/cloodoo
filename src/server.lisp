@@ -364,14 +364,24 @@ If you have few remaining codes, ask an admin for new ones.</p>"
                                       :email contact-email
                                       :port acme-port
                                       :production t))
-        (hunchentoot:start *server*)
-        (format t "~&Cloodoo API server running on https://~A:~A~%" hostname acme-port))
+        (handler-case
+            (progn
+              (hunchentoot:start *server*)
+              (format t "~&Cloodoo API server running on https://~A:~A~%" hostname acme-port))
+          (error (e)
+            (setf *server* nil)
+            (error e))))
       (progn
         (setf *server* (make-instance 'easy-routes:easy-routes-acceptor
                                       :port port
                                       :address address))
-        (hunchentoot:start *server*)
-        (format t "~&Cloodoo API server running on http://~A:~A~%" address port)))
+        (handler-case
+            (progn
+              (hunchentoot:start *server*)
+              (format t "~&Cloodoo API server running on http://~A:~A~%" address port))
+          (error (e)
+            (setf *server* nil)
+            (error e)))))
   (format t "~&Device ID: ~A~%" (get-device-id))
   *server*)
 
