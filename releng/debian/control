@@ -4,6 +4,7 @@ Section: utils
 Priority: optional
 Architecture: amd64
 Depends: libsqlite3-0, libfixposix4 | libfixposix3, libssl3 | libssl1.1, libzstd1
+Suggests: gnome-shell
 Maintainer: Anthony Green <green@moxielogic.com>
 Homepage: https://github.com/atgreen/cloodoo
 Description: Personal TODO system with a retro TUI

@@ -61,6 +61,19 @@ jobs:
         TARDIR="cloodoo-${{ steps.version.outputs.VERSION }}-linux-x86_64"
         mkdir "$TARDIR"
         cp cloodoo LICENSE README.md "$TARDIR/"
+
+        # Include GNOME extension
+        mkdir -p "$TARDIR/gnome-extension/schemas"
+        cp gnome-extension/extension.js gnome-extension/prefs.js \
+           gnome-extension/stylesheet.css gnome-extension/metadata.json \
+           "$TARDIR/gnome-extension/"
+        cp gnome-extension/schemas/org.gnome.shell.extensions.cloodoo.gschema.xml \
+           "$TARDIR/gnome-extension/schemas/"
+
+        # Include browser extension
+        cp -r browser-extension "$TARDIR/browser-extension"
+        rm -f "$TARDIR/browser-extension/.gitignore"
+
         tar czf "${TARDIR}.tar.gz" "$TARDIR"
 
     - name: Upload artifact
@@ -120,6 +133,19 @@ jobs:
         VERSION="${{ steps.version.outputs.VERSION }}"
         mkdir -p /tmp/cloodoo-${VERSION}
         cp cloodoo LICENSE README.md /tmp/cloodoo-${VERSION}/
+
+        # Include GNOME extension
+        mkdir -p /tmp/cloodoo-${VERSION}/gnome-extension/schemas
+        cp gnome-extension/extension.js gnome-extension/prefs.js \
+           gnome-extension/stylesheet.css gnome-extension/metadata.json \
+           /tmp/cloodoo-${VERSION}/gnome-extension/
+        cp gnome-extension/schemas/org.gnome.shell.extensions.cloodoo.gschema.xml \
+           /tmp/cloodoo-${VERSION}/gnome-extension/schemas/
+
+        # Include browser extension
+        cp -r browser-extension /tmp/cloodoo-${VERSION}/browser-extension
+        rm -f /tmp/cloodoo-${VERSION}/browser-extension/.gitignore
+
         tar czf ~/rpmbuild/SOURCES/cloodoo-${VERSION}.tar.gz -C /tmp cloodoo-${VERSION}
 
     - name: Build RPM
@@ -186,6 +212,33 @@ jobs:
 
         sed "s/@VERSION@/${VERSION}/g" releng/debian/control > "${PKG}/DEBIAN/control"
         cp releng/debian/copyright "${PKG}/DEBIAN/copyright"
+        cp releng/debian/postinst "${PKG}/DEBIAN/postinst"
+        cp releng/debian/postrm "${PKG}/DEBIAN/postrm"
+        chmod 755 "${PKG}/DEBIAN/postinst" "${PKG}/DEBIAN/postrm"
+
+        # GNOME Shell extension
+        GNOME_DIR="${PKG}/usr/share/gnome-shell/extensions/cloodoo-screenshot@moxielogic.com"
+        mkdir -p "${GNOME_DIR}/schemas"
+        cp gnome-extension/extension.js gnome-extension/prefs.js \
+           gnome-extension/stylesheet.css gnome-extension/metadata.json \
+           "${GNOME_DIR}/"
+        cp gnome-extension/schemas/org.gnome.shell.extensions.cloodoo.gschema.xml \
+           "${GNOME_DIR}/schemas/"
+
+        # GSettings schema (system-wide)
+        mkdir -p "${PKG}/usr/share/glib-2.0/schemas"
+        cp gnome-extension/schemas/org.gnome.shell.extensions.cloodoo.gschema.xml \
+           "${PKG}/usr/share/glib-2.0/schemas/"
+
+        # Browser extension
+        BROWSER_DIR="${PKG}/usr/share/cloodoo/browser-extension"
+        mkdir -p "${BROWSER_DIR}/icons" "${BROWSER_DIR}/popup" "${BROWSER_DIR}/options"
+        cp browser-extension/manifest.json browser-extension/background.js \
+           browser-extension/content.js browser-extension/content.css \
+           "${BROWSER_DIR}/"
+        cp browser-extension/icons/* "${BROWSER_DIR}/icons/"
+        cp browser-extension/popup/* "${BROWSER_DIR}/popup/"
+        cp browser-extension/options/* "${BROWSER_DIR}/options/"
 
         fakeroot dpkg-deb --build "${PKG}"
 
