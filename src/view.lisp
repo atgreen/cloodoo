@@ -1136,7 +1136,7 @@
                   ("S-↑/↓" . "Priority +/-")
                   ("" . ""))))
          (col2 (render-help-column "ORGANIZE"
-                '(("t" . "Edit tags")
+                '(("t" . "Edit labels")
                   ("/" . "Search")
                   ("f" . "Filter status")
                   ("s" . "Cycle sort")
@@ -1252,8 +1252,8 @@
              (format c "~A~%" (tui:colored title :fg tui:*fg-bright-black*))
              ;; Separator
              (format c "~A~%" (make-string 42 :initial-element #\─))
-             ;; Current tags
-             (format c "Tags: ")
+             ;; Current labels
+             (format c "Labels: ")
              (if edit-tags
                  (format c "~{~A~^ ~}~%"
                          (mapcar (lambda (tag)
@@ -1281,7 +1281,7 @@
              ;; Help line
              (format c "~A"
                      (tui:colored "Enter:add/save  Backspace:remove  Esc:save" :fg tui:*fg-bright-black*))))
-         (modal (render-box-with-title "EDIT TAGS" content)))
+         (modal (render-box-with-title "EDIT LABELS" content)))
     (tui:composite-with-shadow modal background
                                :x-position tui:+center+
                                :y-position tui:+middle+)))
