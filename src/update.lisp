@@ -684,13 +684,15 @@
            :selected-cursor (tui:make-style :reverse t :bold t :foreground tui:*fg-green* :background tui:*bg-black*)
            :today (tui:make-style :bold t :foreground tui:*fg-yellow*))))
     (setf (model-date-picker model)
-          (tui.datepicker:make-datepicker :styles custom-styles))))
+          (tui.datepicker:make-datepicker :styles custom-styles)))
+  ;; Clear any TODOs stuck in enriching state from a previous session
+  (clear-stuck-enriching-todos model))
 
 ;;── Sidebar Key Handling ───────────────────────────────────────────────────────
 
 (defun handle-sidebar-keys (model msg)
   "Handle keyboard input when sidebar is focused."
-  (let* ((key (tui:key-msg-key msg))
+  (let* ((key (tui:key-event-code msg))
          (tags (model-all-tags-cache model))
          (max-cursor (length tags)))  ; 0=All, 1..n=tags
     (cond
@@ -785,8 +787,8 @@
   (when (model-sidebar-focused model)
     (return-from handle-list-keys (handle-sidebar-keys model msg)))
 
-  (let ((key (tui:key-msg-key msg))
-        (ctrl (tui:key-msg-ctrl msg))
+  (let ((key (tui:key-event-code msg))
+        (ctrl (tui:mod-contains (tui:key-event-mod msg) tui:+mod-ctrl+))
         (todos (get-visible-todos model)))
     (llog:debug "List view key received"
                 :key (format nil "~S" key)
@@ -1200,8 +1202,8 @@
 
 (defun handle-add-edit-keys (model msg)
   "Handle keyboard input in add/edit view."
-  (let ((key (tui:key-msg-key msg))
-        (ctrl (tui:key-msg-ctrl msg)))
+  (let ((key (tui:key-event-code msg))
+        (ctrl (tui:mod-contains (tui:key-event-mod msg) tui:+mod-ctrl+)))
     (cond
       ;; Cancel with Escape
       ((eql key :escape)
@@ -1515,7 +1517,7 @@
 
 (defun handle-search-keys (model msg)
   "Handle keyboard input in search view."
-  (let ((key (tui:key-msg-key msg)))
+  (let ((key (tui:key-event-code msg)))
     (cond
       ;; Cancel with Escape
       ((eql key :escape)
@@ -1548,7 +1550,7 @@
 
 (defun handle-inline-tags-keys (model msg)
   "Handle keyboard input in inline tag editor overlay."
-  (let ((key (tui:key-msg-key msg)))
+  (let ((key (tui:key-event-code msg)))
     (cond
       ;; Escape - save tags and close
       ((eql key :escape)
@@ -1627,7 +1629,7 @@
 
 (defun handle-import-keys (model msg)
   "Handle keyboard input in import view."
-  (let ((key (tui:key-msg-key msg)))
+  (let ((key (tui:key-event-code msg)))
     (cond
       ;; Cancel with Escape
       ((eql key :escape)
@@ -1663,7 +1665,7 @@
 (defun handle-delete-confirm-keys (model msg)
   "Handle keyboard input in delete confirmation.
    Deletion is a status change to :deleted, not removal from database."
-  (let ((key (tui:key-msg-key msg))
+  (let ((key (tui:key-event-code msg))
         (todos (get-visible-todos model)))
     (cond
       ;; Confirm delete with y
@@ -1699,7 +1701,7 @@
 (defun handle-delete-done-confirm-keys (model msg)
   "Handle keyboard input in delete-done confirmation.
    Marks all completed items as :deleted instead of removing."
-  (let ((key (tui:key-msg-key msg)))
+  (let ((key (tui:key-event-code msg)))
     (cond
       ;; Confirm delete with y
       ((and (characterp key) (char-equal key #\y))
@@ -1726,7 +1728,7 @@
 (defun handle-delete-tag-confirm-keys (model msg)
   "Handle keyboard input in delete tag confirmation.
    Removes the tag from all TODOs and updates the sidebar."
-  (let ((key (tui:key-msg-key msg))
+  (let ((key (tui:key-event-code msg))
         (tag (model-deleting-tag model)))
     (cond
       ;; Confirm delete with y
@@ -1761,7 +1763,7 @@
 
 (defun handle-detail-keys (model msg)
   "Handle keyboard input in detail view."
-  (let ((key (tui:key-msg-key msg))
+  (let ((key (tui:key-event-code msg))
         (todos (get-visible-todos model)))
     (cond
       ;; Back to list with Escape, q, or Enter
@@ -1861,8 +1863,8 @@
 
 (defun handle-list-date-keys (model msg)
   "Handle keyboard input in list view date modal."
-  (let ((key (tui:key-msg-key msg))
-        (ctrl (tui:key-msg-ctrl msg))
+  (let ((key (tui:key-event-code msg))
+        (ctrl (tui:mod-contains (tui:key-event-mod msg) tui:+mod-ctrl+))
         (todos (get-visible-todos model))
         (picker (model-date-picker model)))
     (cond
@@ -1918,8 +1920,8 @@
 
 (defun handle-date-edit-keys (model msg)
   "Handle keyboard input in date editing view."
-  (let ((key (tui:key-msg-key msg))
-        (ctrl (tui:key-msg-ctrl msg))
+  (let ((key (tui:key-event-code msg))
+        (ctrl (tui:mod-contains (tui:key-event-mod msg) tui:+mod-ctrl+))
         (todos (get-visible-todos model))
         (picker (model-date-picker model)))
     (cond
@@ -1968,8 +1970,8 @@
 
 (defun handle-form-date-edit-keys (model msg)
   "Handle keyboard input in add/edit form date picker view."
-  (let* ((key (tui:key-msg-key msg))
-         (ctrl (tui:key-msg-ctrl msg))
+  (let* ((key (tui:key-event-code msg))
+         (ctrl (tui:mod-contains (tui:key-event-mod msg) tui:+mod-ctrl+))
          (picker (model-date-picker model))
          (return-view (if (model-edit-todo-id model) :edit :add))
          (date-type (model-editing-date-type model)))
@@ -2047,7 +2049,7 @@
 
 (defun handle-lists-overview-keys (model msg)
   "Handle keyboard input in lists overview view."
-  (let ((key (tui:key-msg-key msg))
+  (let ((key (tui:key-event-code msg))
         (lists (model-lists-data model)))
     (cond
       ;; Quit / back to main
@@ -2153,7 +2155,7 @@
 
 (defun handle-list-detail-keys (model msg)
   "Handle keyboard input in list detail view."
-  (let ((key (tui:key-msg-key msg))
+  (let ((key (tui:key-event-code msg))
         (items (model-list-detail-items model))
         (list-def (model-list-detail-def model)))
     (cond
@@ -2225,8 +2227,8 @@
 
 (defun handle-list-form-keys (model msg)
   "Handle keyboard input in list create/edit form."
-  (let ((key (tui:key-msg-key msg))
-        (ctrl (tui:key-msg-ctrl msg)))
+  (let ((key (tui:key-event-code msg))
+        (ctrl (tui:mod-contains (tui:key-event-mod msg) tui:+mod-ctrl+)))
     (cond
       ;; Cancel
       ((or (and ctrl (characterp key) (char= key #\c))
@@ -2303,7 +2305,7 @@
 
 (defun handle-list-item-add-keys (model msg)
   "Handle keyboard input when adding an item to a list."
-  (let ((key (tui:key-msg-key msg))
+  (let ((key (tui:key-event-code msg))
         (list-def (model-list-detail-def model)))
     (cond
       ;; Cancel
@@ -2330,7 +2332,7 @@
 
 (defun handle-list-delete-confirm-keys (model msg)
   "Handle confirmation for deleting a list."
-  (let ((key (tui:key-msg-key msg)))
+  (let ((key (tui:key-event-code msg)))
     (when (and (characterp key) (char= key #\y))
       (let* ((lists (model-lists-data model))
              (list-def (nth (model-lists-cursor model) lists)))
@@ -2344,7 +2346,7 @@
 
 ;;── Main Update Dispatch ───────────────────────────────────────────────────────
 
-(defmethod tui:update-message ((model app-model) (msg tui:key-msg))
+(defmethod tui:update-message ((model app-model) (msg tui:key-press-msg))
   "Handle key messages based on current view state."
   (case (model-view-state model)
     (:list (handle-list-keys model msg))
@@ -2381,15 +2383,16 @@
 (defmethod tui:update-message ((model app-model) (msg sync-reload-msg))
   "Handle sync reload - reload todos and lists from database and trigger redraw."
   (setf (model-todos model) (load-todos))
+  (clear-stuck-enriching-todos model)
   (setf (model-visible-todos-dirty model) t)
   (reload-lists-data model)
   (values model nil))
 
-(defmethod tui:update-message ((model app-model) (msg tui:mouse-scroll-event))
+(defmethod tui:update-message ((model app-model) (msg tui:mouse-wheel-msg))
   "Handle mouse scroll by scrolling the viewport."
   (when (eql (model-view-state model) :list)
-    (let* ((direction (tui:mouse-scroll-direction msg))
-           (count (tui:mouse-scroll-count msg))
+    (let* ((direction (tui:mouse-wheel-direction msg))
+           (count (tui:mouse-wheel-count msg))
            (todos (get-visible-todos model))
            (groups (group-todos-by-date todos))
            (num-lines (max 1 (+ (length todos) (* (length groups) +header-lines+))))
@@ -2422,7 +2425,7 @@
                              (return)))))))
   (values model nil))
 
-(defmethod tui:update-message ((model app-model) (msg tui:mouse-press-event))
+(defmethod tui:update-message ((model app-model) (msg tui:mouse-click-msg))
   "Handle mouse clicks in list and detail views."
   (let ((view-state (model-view-state model))
         (button (tui:mouse-event-button msg)))
@@ -2510,7 +2513,7 @@
                  (open-url (first urls))))))))))
   (values model nil))
 
-(defmethod tui:update-message ((model app-model) (msg tui:mouse-drag-event))
+(defmethod tui:update-message ((model app-model) (msg tui:mouse-motion-msg))
   "Handle mouse drag for scrollbar."
   (when (and (eql (model-view-state model) :list)
              (model-scrollbar-dragging model))
@@ -2522,7 +2525,7 @@
       (scroll-to-y-position model (max 0 (min (1- available-height) list-line)) available-height)))
   (values model nil))
 
-(defmethod tui:update-message ((model app-model) (msg tui:mouse-release-event))
+(defmethod tui:update-message ((model app-model) (msg tui:mouse-release-msg))
   "Handle mouse release to stop scrollbar dragging."
   (setf (model-scrollbar-dragging model) nil)
   (values model nil))
@@ -2614,7 +2617,10 @@
               (apply-enrichment-to-todo todo data))))
       ;; If no data, just clear enriching flag
       (unless data
-        (setf (todo-enriching-p todo) nil))
+        (llog:warn "Enrichment returned no data, clearing enriching-p"
+                   :todo-id todo-id)
+        (setf (todo-enriching-p todo) nil)
+        (save-todo todo))
       ;; Refresh tags cache since enrichment may add tags
       (refresh-tags-cache model))
     (values model nil)))
@@ -2645,6 +2651,15 @@
   (when (and (getf data :url) (not (todo-url todo)))
     (setf (todo-url todo) (getf data :url)))
   (save-todo todo))
+
+(defun clear-stuck-enriching-todos (model)
+  "Clear enriching-p on any TODOs stuck from a previous session and persist to DB."
+  (let ((stuck (remove-if-not #'todo-enriching-p (model-todos model))))
+    (when stuck
+      (llog:info "Clearing stuck enriching TODOs" :count (length stuck))
+      (dolist (todo stuck)
+        (setf (todo-enriching-p todo) nil)
+        (save-todo todo)))))
 
 (defun make-enrichment-cmd (todo-id raw-title raw-notes)
   "Create a command that performs async enrichment and returns completion message.

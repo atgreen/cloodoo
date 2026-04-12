@@ -794,7 +794,8 @@
       (let ((current (sqlite:execute-to-list db
                        "SELECT title, description_hash, priority, status, scheduled_date,
                                due_date, tags, estimated_minutes, location_info_hash, url,
-                               parent_id, completed_at, repeat_interval, repeat_unit
+                               parent_id, completed_at, repeat_interval, repeat_unit,
+                               enriching_p
                         FROM todos WHERE id = ? AND valid_to IS NULL"
                        (todo-id todo))))
         (when (and current (= (length current) 1))
@@ -814,7 +815,8 @@
                        (equal (nth 10 cur) (nth 11 values))       ; parent_id
                        (equal (nth 11 cur) (nth 13 values))       ; completed_at
                        (eql   (nth 12 cur) (nth 15 values))       ; repeat_interval
-                       (equal (nth 13 cur) (nth 16 values)))      ; repeat_unit
+                       (equal (nth 13 cur) (nth 16 values))       ; repeat_unit
+                       (eql   (nth 14 cur) (nth 17 values)))      ; enriching_p
               (return-from db-save-todo t)))))
       ;; Store large text fields as blobs
       (let ((desc-hash (store-blob db (third values)))

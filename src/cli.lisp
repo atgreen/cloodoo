@@ -599,7 +599,7 @@
                                            :client-key client-key)
                         ;; Start TUI
                         (unwind-protect
-                             (let ((program (tui:make-program model :alt-screen t :mouse :cell-motion)))
+                             (let ((program (tui:make-program model)))
                                (tui:run program))
                           ;; Cleanup sync client on exit
                           (stop-sync-client))))
@@ -609,7 +609,7 @@
                                            :client-certificate client-cert
                                            :client-key client-key)
                       (unwind-protect
-                           (let ((program (tui:make-program model :alt-screen t :mouse :cell-motion)))
+                           (let ((program (tui:make-program model)))
                              (tui:run program))
                         (stop-sync-client)))))))))
 

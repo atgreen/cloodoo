@@ -53,7 +53,7 @@
       #+sbcl
       (handler-bind ((warning #'muffle-warning))
         (let* ((model (make-initial-model))
-               (program (tui:make-program model :alt-screen t :mouse :cell-motion)))
+               (program (tui:make-program model)))
           ;; Set global program reference for exec-cmd workaround
           (setf *tui-program-ref* program)
           (if sync-host
@@ -75,7 +75,7 @@
                 (setf *tui-program-ref* nil)))))
       #-sbcl
       (let* ((model (make-initial-model))
-             (program (tui:make-program model :alt-screen t :mouse :cell-motion)))
+             (program (tui:make-program model)))
         ;; Set global program reference for exec-cmd workaround
         (setf *tui-program-ref* program)
         (if sync-host
