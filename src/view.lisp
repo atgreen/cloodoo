@@ -1054,7 +1054,7 @@
 
              ;; Navigation help
              (format c "~%~A"
-                     (tui:colored "hjkl:nav  []:month  {}:year  Home:today  RET:save  DEL:clear  ESC:cancel"
+                     (tui:colored "hjkl/←↑↓→:nav  []:month  {}:year  Home:today  RET:save  DEL:clear  ESC:cancel"
                                  :fg tui:*fg-bright-black*))))
          (modal (render-box-with-title title content :min-width modal-width)))
     (tui:composite-with-shadow modal background
@@ -1338,7 +1338,7 @@
 
              ;; Help line
              (format c "~A"
-                     (tui:colored "hjkl:nav  []:month  {}:year  Home:today  RET:save  DEL:clear  ESC:cancel"
+                     (tui:colored "hjkl/←↑↓→:nav  []:month  {}:year  Home:today  RET:save  DEL:clear  ESC:cancel"
                                  :fg tui:*fg-bright-black*))))
          (modal (render-box-with-title title content :min-width modal-width)))
     (tui:composite-with-shadow modal background
