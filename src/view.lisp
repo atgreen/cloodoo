@@ -661,7 +661,7 @@
 
                        ;; Help line at bottom
                        (format s "~%~%~A"
-                               (tui:colored "RET/q:back  e:edit  n:notes  s:sched  d:deadline  o:url  p:photo"
+                               (tui:colored "q:back  e:edit │ s:sched  d:deadline │ n:notes  o:url  p:photo"
                                            :fg tui:*fg-bright-black*))))
                    (modal (render-box-with-title "ITEM DETAILS" content :min-width modal-width)))
               (tui:composite modal background
