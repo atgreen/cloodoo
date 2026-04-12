@@ -259,7 +259,13 @@
          (todos (loop for (cat . ts) in groups append ts)))
     (with-output-to-string (c)
       (if (null todos)
-          (format c "~A" (fit-visible-to-width "No items. Press 'a' to add one." list-width))
+          (let ((welcome (format nil "~A~%~%~A~%~A~%~A"
+                                    (tui:bold "Welcome to cloodoo!")
+                                    "  Press 'a' to add your first task"
+                                    "  Press '?' for keyboard shortcuts"
+                                    "  Press 'W' for lists (Groceries, etc.)")))
+            (dolist (line (uiop:split-string welcome :separator '(#\Newline)))
+              (format c "~A~%" (fit-visible-to-width line list-width))))
           (let ((current-idx 0)
                 (first-line t))
             (dolist (group groups)
