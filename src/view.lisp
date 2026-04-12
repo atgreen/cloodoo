@@ -219,7 +219,7 @@
            (text (format nil "~A All" checkbox))
            (padded (pad-to-width text w)))
       (push (if is-cursor
-                (tui:colored padded :bg tui:*bg-blue* :fg tui:*fg-white*)
+                (tui:colored padded :bg tui:*bg-cyan* :fg tui:*fg-black*)
                 padded)
             lines))
 
@@ -240,7 +240,7 @@
                     (padded (pad-to-width text w)))
                (push (cond
                        (is-cursor
-                        (tui:colored padded :bg tui:*bg-blue* :fg tui:*fg-white*))
+                        (tui:colored padded :bg tui:*bg-cyan* :fg tui:*fg-black*))
                        (is-selected
                         (tui:colored padded :fg tui:*fg-cyan*))
                        (t padded))
