@@ -328,10 +328,11 @@
                                (is-done (member (todo-status todo) '(:completed :cancelled))))
                           (format c "~A"
                                   (if is-done
-                                      ;; Dimmed selection for done items
+                                      ;; Dimmed selection for done items — use cyan bg
+                                      ;; but with dim foreground to distinguish from active
                                       (tui:colored padded-line
-                                                   :bg tui:*bg-bright-black*
-                                                   :fg tui:*fg-white*)
+                                                   :bg tui:*bg-cyan*
+                                                   :fg tui:*fg-bright-black*)
                                       ;; Normal bright selection
                                       (tui:bold
                                        (tui:colored padded-line
