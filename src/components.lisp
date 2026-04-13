@@ -230,69 +230,6 @@
                groups)
       (sort alist #'< :key (lambda (pair) (date-category-order (first pair)))))))
 
-;;; Todo line rendering
-(defun render-todo-line (todo selected-p width)
-  "Render a single TODO line in retro style."
-  (let* ((status (status-colored (todo-status todo)))
-         (priority (priority-colored (todo-priority todo)))
-         (title (sanitize-title-for-display (todo-title todo)))
-         (due (format-due-date (todo-due-date todo)))
-         (completed-p (eql (todo-status todo) :completed))
-         ;; Calculate widths
-         (prefix-len 8)  ; "  ○ !!! "
-         (due-len (if due (+ 2 (length (format nil "~A" due))) 0))
-         (avail (- width prefix-len due-len 2))
-         (trunc-title (if (> (length title) avail)
-                         (concatenate 'string (subseq title 0 (- avail 2)) "..")
-                         title))
-         (title-disp (if completed-p
-                        (tui:colored trunc-title :fg tui:*fg-bright-black*)
-                        trunc-title))
-         (padding (max 1 (- avail (length trunc-title)))))
-    (if selected-p
-        (format nil "~A ~A ~A ~A~A~@[ ~A~]"
-                (tui:colored "►" :fg tui:*fg-cyan*)
-                status priority
-                (tui:bold title-disp)
-                (make-string padding :initial-element #\Space)
-                due)
-        (format nil "  ~A ~A ~A~A~@[ ~A~]"
-                status priority
-                title-disp
-                (make-string padding :initial-element #\Space)
-                due))))
-
-;;; Status bar
-(defun render-status-bar (width &rest items)
-  "Render a status bar with items."
-  (let* ((content (format nil "~{ ~A ~^│~}" items))
-         (padding (max 0 (- width (length content)))))
-    (tui:colored
-     (format nil "~A~A" content (make-string padding :initial-element #\Space))
-     :fg tui:*fg-black* :bg tui:*bg-cyan*)))
-
-;;; Title bar
-(defun render-title-bar (title width &optional right-text)
-  "Render a title bar."
-  (let* ((right (or right-text ""))
-         (right-len (length right))
-         (title-len (length title))
-         (padding (max 1 (- width title-len right-len 2))))
-    (tui:bold
-     (tui:colored
-      (format nil " ~A~A~A " title (make-string padding :initial-element #\Space) right)
-      :fg tui:*fg-white* :bg tui:*bg-blue*))))
-
-;;; Help bar at bottom
-(defun render-help-bar (&optional width)
-  "Render the bottom help bar."
-  (let* ((help "F1:Help │ ↑↓:Navigate │ Enter:View │ Space:Done │ A:Add │ E:Edit │ U:Context │ DEL:Del │ /:Search │ Q:Quit")
-         (w (or width (length help))))
-    (tui:colored
-     (format nil "~A~A"
-             help
-             (make-string (max 0 (- w (length help))) :initial-element #\Space))
-     :fg tui:*fg-yellow* :bg tui:*bg-blue*)))
 
 ;;── Org-mode style helpers (for compatibility) ────────────────────────────────
 

@@ -150,10 +150,6 @@
              right-str)
      :fg tui:*fg-white* :bg tui:*bg-blue*)))
 
-(defun render-help-bar-line (width)
-  "Render the help bar."
-  (let ((help "F1:Help | jk:Nav | Enter:View | Space:Done | a:Add | e:Edit | DEL:Del | /:Search | q:Quit"))
-    (render-help-line help width :fg tui:*fg-yellow* :bg tui:*bg-blue*)))
 
 (defun fit-to-width (text width)
   "Truncate or pad text to exactly width characters."
