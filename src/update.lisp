@@ -2457,6 +2457,12 @@
                                  (max 0 (min raw-sidebar-width (- term-width min-list-width 2)))
                                  0))
               (sidebar-visible-effective (> sidebar-width 0)))
+         ;; DEBUG: show click coordinates in status message
+         (setf (model-status-message model)
+               (format nil "Y=~D X=~D screen-line=~D list-line=~D offset=~D line-idx=~D"
+                       (tui:mouse-event-y msg) (tui:mouse-event-x msg)
+                       screen-line list-line (model-scroll-offset model)
+                       (+ (model-scroll-offset model) list-line)))
          (cond
            ;; Click in sidebar area
            ((and sidebar-visible-effective (< screen-x sidebar-width)
