@@ -8,9 +8,8 @@
 
 ;;── Constants ─────────────────────────────────────────────────────────────────
 
-(defconstant +header-lines+ 4
-  "Number of lines each date category header takes (top border, content, bottom border,
-   plus trailing blank line from tui:render-border).")
+(defconstant +header-lines+ 3
+  "Number of lines each date category header takes (top border, content, bottom border).")
 (defconstant +list-top-lines+ 2
   "Number of lines above the list viewport (title and date header).")
 
@@ -492,16 +491,11 @@
 ;;── Scroll Management ─────────────────────────────────────────────────────────
 
 (defun list-line-index-for-cursor (groups cursor)
-  "Return 0-based line index for the given cursor in grouped list output.
-   Accounts for 4-line headers and inter-group separator lines."
+  "Return 0-based line index for the given cursor in grouped list output."
   (let ((current 0)
-        (line-idx 0)
-        (first-group t))
+        (line-idx 0))
     (dolist (group groups)
-      ;; Inter-group separator line (the ~% between groups in render-list-content)
-      (unless first-group (incf line-idx))
-      (setf first-group nil)
-      ;; Header takes +header-lines+ lines (pager-style box + trailing blank)
+      ;; Header takes +header-lines+ lines (pager-style box)
       (incf line-idx +header-lines+)
       (dolist (todo (rest group))
         (when (= current cursor)
@@ -511,15 +505,10 @@
     (max 0 (1- line-idx))))
 
 (defun header-start-line-for-cursor (groups cursor)
-  "Return the 0-based line index where the header for the cursor's group starts.
-   Accounts for inter-group separator lines."
+  "Return the 0-based line index where the header for the cursor's group starts."
   (let ((current 0)
-        (line-idx 0)
-        (first-group t))
+        (line-idx 0))
     (dolist (group groups)
-      ;; Inter-group separator line
-      (unless first-group (incf line-idx))
-      (setf first-group nil)
       (let ((header-start line-idx))
         ;; Skip header lines
         (incf line-idx +header-lines+)
@@ -531,19 +520,11 @@
     0))
 
 (defun cursor-index-for-line (groups line-idx)
-  "Return the cursor index for a given 0-based line index, or NIL if none.
-   Accounts for 4-line headers and inter-group separator lines."
+  "Return the cursor index for a given 0-based line index, or NIL if none."
   (let ((current 0)
-        (line 0)
-        (first-group t))
+        (line 0))
     (dolist (group groups)
-      ;; Inter-group separator line
-      (unless first-group
-        (when (= line-idx line)
-          (return-from cursor-index-for-line nil))
-        (incf line))
-      (setf first-group nil)
-      ;; Header lines (including trailing blank from render-border)
+      ;; Header lines
       (when (< line-idx (+ line +header-lines+))
         (return-from cursor-index-for-line nil))
       (incf line +header-lines+)
@@ -560,9 +541,7 @@
          (offset (model-scroll-offset model))
          (todos (get-visible-todos model))
          (groups (group-todos-by-date todos))
-         (num-lines (max 1 (+ (length todos)
-                              (* (length groups) +header-lines+)
-                              (max 0 (1- (length groups))))))
+         (num-lines (max 1 (+ (length todos) (* (length groups) +header-lines+))))
          (cursor-line (list-line-index-for-cursor groups cursor))
          (header-start (header-start-line-for-cursor groups cursor))
          (max-offset (max 0 (- num-lines viewport-height))))
@@ -582,9 +561,7 @@
   "Scroll the list to position based on Y coordinate in the scrollbar area."
   (let* ((todos (get-visible-todos model))
          (groups (group-todos-by-date todos))
-         (num-lines (max 1 (+ (length todos)
-                              (* (length groups) +header-lines+)
-                              (max 0 (1- (length groups))))))
+         (num-lines (max 1 (+ (length todos) (* (length groups) +header-lines+))))
          (max-offset (max 0 (- num-lines viewport-height)))
          (scroll-percent (/ (float y-pos) (max 1 (1- viewport-height))))
          (new-offset (round (* scroll-percent max-offset))))
@@ -2426,9 +2403,7 @@
            (count (tui:mouse-wheel-count msg))
            (todos (get-visible-todos model))
            (groups (group-todos-by-date todos))
-           (num-lines (max 1 (+ (length todos)
-                              (* (length groups) +header-lines+)
-                              (max 0 (1- (length groups))))))
+           (num-lines (max 1 (+ (length todos) (* (length groups) +header-lines+))))
            ;; Account for filter banner height
            (has-filters (has-active-filters-p model))
            (filter-banner-height (if has-filters 1 0))
