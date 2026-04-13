@@ -414,13 +414,13 @@
 
     (when parts
       (let* ((filter-text (format nil "Filtered: ~{~A~^, ~}" (nreverse parts)))
-             (clear-hint " (press 'c' to clear)")
+             (clear-hint " │ c:clear")
              (full-text (concatenate 'string filter-text clear-hint))
              (padding (max 0 (- term-width (length full-text)))))
         (tui:colored
          (format nil "~A~A~A"
                  filter-text
-                 (tui:colored clear-hint :fg tui:*fg-bright-black*)
+                 clear-hint
                  (make-string padding :initial-element #\Space))
          :fg tui:*fg-black* :bg tui:*bg-yellow*)))))
 
