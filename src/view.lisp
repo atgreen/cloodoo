@@ -951,48 +951,35 @@
                                :y-position tui:+middle+)))
 
 (defun render-import-view (model)
-  "Render the org-mode import view."
-  (let* ((term-width (model-term-width model))
+  "Render the org-mode import view as a modal overlay on the list view."
+  (let* ((background (render-list-view model))
+         (term-width (model-term-width model))
          (filename (tui.textinput:textinput-value (model-import-input model)))
-         (file-exists (and (> (length filename) 0) (probe-file filename))))
-    (with-output-to-string (s)
-      ;; Title bar
-      (let* ((title " IMPORT ORG-MODE FILE ")
-             (pad (max 0 (- term-width (length title)))))
-        (format s "~A~%"
-                (tui:bold (tui:colored
-                          (format nil "~A~A" title (make-string pad :initial-element #\─))
-                          :fg tui:*fg-white* :bg tui:*bg-magenta*))))
-
-      ;; Build content
-      (let ((content
-              (with-output-to-string (c)
-                (format c "Enter the path to an org-mode file to import:~%~%")
-                (format c "~A~%~%"
-                        (tui.textinput:textinput-view (model-import-input model)))
-                (cond
-                  ((zerop (length filename))
-                   (format c "~A"
-                           (tui:colored "Enter a file path above" :fg tui:*fg-bright-black*)))
-                  (file-exists
-                   (format c "~A"
-                           (tui:colored "✓ File found - press Enter to import" :fg tui:*fg-green*)))
-                  (t
-                   (format c "~A"
-                           (tui:colored "✗ File not found" :fg tui:*fg-red*))))
-                (format c "~%~%~A"
-                        (tui:colored "Non-DONE items will be imported and enriched." :fg tui:*fg-bright-black*)))))
-
-        ;; Pad to full width
-        (let ((inner-width (- term-width 2)))
-          (format s "~A~%"
-                  (tui:render-border (pad-content-to-width content inner-width)
-                                     tui:*border-double*))))
-
-      ;; Help bar
-      (let ((help " RET:import  ESC:cancel "))
-        (format s "~A"
-                (render-help-line help term-width :fg tui:*fg-yellow* :bg tui:*bg-magenta*))))))
+         (file-exists (and (> (length filename) 0) (probe-file filename)))
+         (modal-width (min 60 (max 45 (- term-width 10))))
+         (content
+           (with-output-to-string (c)
+             (format c "Enter the path to an org-mode file to import:~%~%")
+             (format c "~A~%~%"
+                     (tui.textinput:textinput-view (model-import-input model)))
+             (cond
+               ((zerop (length filename))
+                (format c "~A"
+                        (tui:colored "Enter a file path above" :fg tui:*fg-bright-black*)))
+               (file-exists
+                (format c "~A"
+                        (tui:colored "✓ File found - press Enter to import" :fg tui:*fg-green*)))
+               (t
+                (format c "~A"
+                        (tui:colored "✗ File not found" :fg tui:*fg-red*))))
+             (format c "~%~%~A"
+                     (tui:colored "Non-DONE items will be imported and enriched." :fg tui:*fg-bright-black*))
+             (format c "~%~%~A"
+                     (tui:colored "RET:import  ESC:cancel" :fg tui:*fg-bright-black*))))
+         (modal (render-box-with-title "IMPORT ORG-MODE FILE" content :min-width modal-width)))
+    (tui:composite-with-shadow modal background
+                               :x-position tui:+center+
+                               :y-position tui:+middle+)))
 
 (defun render-date-edit-view (model)
   "Render the date picker view for editing scheduled/deadline dates as an overlay."
@@ -1344,97 +1331,68 @@
 
 ;;── Modal Overlay Helpers ──────────────────────────────────────────────────────
 
-(defun render-date-modal-box (model)
-  "Render just the datepicker modal box content."
-  (let* ((picker (model-date-picker model))
+(defun render-list-date-modal (model)
+  "Render the list view with a datepicker modal overlay."
+  (let* ((background (render-list-view model))
+         (term-width (model-term-width model))
+         (picker (model-date-picker model))
          (date-type (model-editing-date-type model))
          (todos (get-visible-todos model))
          (todo (when (< (model-cursor model) (length todos))
                  (nth (model-cursor model) todos)))
+         (title (if (eql date-type :scheduled) "SET SCHEDULED DATE" "SET DEADLINE"))
          (current-date (when todo
                          (case date-type
                            (:scheduled (todo-scheduled-date todo))
                            (:deadline (todo-due-date todo)))))
-         (cursor-date (tui.datepicker:datepicker-time picker))
-         (modal-width 50)
-         (title (if (eql date-type :scheduled) "SET SCHEDULED DATE" "SET DEADLINE"))
-         (todo-title (if todo
-                        (let ((t-title (sanitize-title-for-display (todo-title todo))))
-                          (subseq t-title 0 (min (length t-title) (- modal-width 6))))
-                        "(no task selected)"))
-         (current-str (if current-date
-                         (lt:format-timestring nil current-date
-                                              :format '(:short-month " " :day ", " :year))
-                         "Not set"))
-         (cursor-str (when cursor-date
-                       (multiple-value-bind (sec min hour day month year)
-                           (decode-universal-time cursor-date)
-                         (declare (ignore sec min hour))
-                         (format nil "~A ~D, ~D"
-                                (aref #("Jan" "Feb" "Mar" "Apr" "May" "Jun"
-                                       "Jul" "Aug" "Sep" "Oct" "Nov" "Dec")
-                                      (1- month))
-                                day year))))
-         (picker-view (tui.datepicker:datepicker-view picker))
-         (picker-lines (uiop:split-string picker-view :separator '(#\Newline)))
-         (inner-width (- modal-width 4)))
-    (with-output-to-string (s)
-      ;; Title bar (magenta background)
-      (format s "~A~%"
-              (tui:colored (format nil " ~A~A "
-                                  title
-                                  (make-string (- inner-width (length title)) :initial-element #\Space))
-                          :bg tui:*bg-magenta* :fg tui:*fg-white*))
+         (selected (tui.datepicker:datepicker-selected picker))
+         (modal-width (min 56 (max 44 (- term-width 8))))
+         (content
+           (with-output-to-string (c)
+             ;; Show todo title context
+             (when todo
+               (let ((todo-title (sanitize-title-for-display (todo-title todo))))
+                 (format c "~A~%~%"
+                         (tui:colored
+                          (if (> (length todo-title) (- modal-width 6))
+                              (concatenate 'string (subseq todo-title 0 (- modal-width 8)) "..")
+                              todo-title)
+                          :fg tui:*fg-bright-black*))))
 
-      ;; Todo title (dimmed)
-      (format s "~A~%"
-              (tui:colored (format nil " ~A~A "
-                                  todo-title
-                                  (make-string (max 0 (- inner-width (length todo-title))) :initial-element #\Space))
-                          :fg tui:*fg-bright-black*))
+             ;; Current date status
+             (format c "~A ~A~%"
+                     (tui:bold "Current:")
+                     (if current-date
+                         (tui:colored
+                          (lt:format-timestring nil current-date
+                                               :format '(:short-month " " :day ", " :year))
+                          :fg tui:*fg-cyan*)
+                         (tui:colored "Not set" :fg tui:*fg-bright-black*)))
 
-      ;; Separator
-      (format s "~A~%" (make-string (+ inner-width 2) :initial-element #\─))
+             ;; Datepicker calendar
+             (format c "~%~A~%" (tui.datepicker:datepicker-view picker))
 
-      ;; Current value
-      (format s " Current: ~A~%"
-              (tui:colored current-str :fg tui:*fg-cyan*))
+             ;; Selected date
+             (format c "~%~A ~A~%"
+                     (tui:bold "New:")
+                     (if selected
+                         (multiple-value-bind (sec min hour day month year)
+                             (decode-universal-time selected)
+                           (declare (ignore sec min hour))
+                           (tui:colored (format nil "~A ~D, ~D"
+                                                (aref #("Jan" "Feb" "Mar" "Apr" "May" "Jun"
+                                                       "Jul" "Aug" "Sep" "Oct" "Nov" "Dec")
+                                                      (1- month))
+                                                day year)
+                                       :fg tui:*fg-green*))
+                         (tui:colored "None" :fg tui:*fg-bright-black*)))
 
-      ;; Blank line
-      (format s "~%")
-
-      ;; Datepicker calendar (center each line - variable rows)
-      (loop for picker-line in picker-lines
-            for content = (string-trim '(#\Space #\Newline) picker-line)
-            when (> (length content) 0)
-            do (let* ((vis-len (tui:visible-length content))
-                      (pad-left (max 0 (floor (- inner-width vis-len) 2))))
-                 (format s "~A~A~%"
-                         (make-string pad-left :initial-element #\Space)
-                         content)))
-
-      ;; Blank line
-      (format s "~%")
-
-      ;; Cursor position (what Enter will save)
-      (format s " New: ~A~%"
-              (tui:colored (or cursor-str "None") :fg tui:*fg-green*))
-
-      ;; Help line
-      (format s "~A~%"
-              (tui:colored " ←↑↓→:nav  Home:today  RET:confirm  DEL:clear  ESC:cancel"
-                          :fg tui:*fg-bright-black*)))))
-
-(defun render-list-date-modal (model)
-  "Render the list view with a datepicker modal overlay."
-  (let* (;; Render the list view as background
-         (background (render-list-view model))
-         ;; Build the modal box with border
-         (modal-content (render-date-modal-box model))
-         (modal-bordered (tui:render-border modal-content tui:*border-double*
-                                            :fg-color tui:*fg-blue*)))
-    ;; Use composite-with-shadow for semi-transparent shadow
-    (tui:composite-with-shadow modal-bordered background
+             ;; Navigation help
+             (format c "~%~A"
+                     (tui:colored "hjkl/←↑↓→:nav  []:month  {}:year  Home:today  RET:save  DEL:clear  ESC:cancel"
+                                 :fg tui:*fg-bright-black*))))
+         (modal (render-box-with-title title content :min-width modal-width)))
+    (tui:composite-with-shadow modal background
                                :x-position tui:+center+
                                :y-position tui:+middle+)))
 
