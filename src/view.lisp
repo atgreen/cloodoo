@@ -519,13 +519,18 @@
 
       (format s "~%")
 
-      ;; Help bar
-      (let* ((base-help "Keys: jk/↑↓ move  SPC toggle  l sidebar  Tab focus")
-             (filter-help (if has-filters "  c clear" ""))
-             (more-help "  a add  e edit  d del  / search  q quit")
-             (help (concatenate 'string base-help filter-help more-help)))
-        (format s "~A"
-                (render-help-line help term-width :fg tui:*fg-bright-black*))))))
+      ;; Help bar — show status message if present, otherwise show keybinding hints
+      (let ((status-msg (model-status-message model)))
+        (if status-msg
+            (format s "~A"
+                    (render-help-line (format nil " ~A" status-msg) term-width
+                                     :fg tui:*fg-yellow*))
+            (let* ((base-help "Keys: jk/↑↓ move  SPC toggle  l sidebar  Tab focus")
+                   (filter-help (if has-filters "  c clear" ""))
+                   (more-help "  a add  e edit  d del  / search  q quit")
+                   (help (concatenate 'string base-help filter-help more-help)))
+              (format s "~A"
+                      (render-help-line help term-width :fg tui:*fg-bright-black*))))))))
 
 (defun render-detail-view (model)
   "Render the detail view for a single TODO as an overlay dialog."

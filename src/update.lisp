@@ -783,6 +783,9 @@
 
 (defun handle-list-keys (model msg)
   "Handle keyboard input in list view."
+  ;; Clear any transient status message on next keypress
+  (setf (model-status-message model) nil)
+
   ;; If sidebar is focused, dispatch to sidebar handler
   (when (model-sidebar-focused model)
     (return-from handle-list-keys (handle-sidebar-keys model msg)))
@@ -931,19 +934,24 @@
                                                        :format '(:short-month " " :day))))))
       (t
                     (setf (todo-status todo) +status-completed+)
-                    (setf (todo-completed-at todo) (lt:now)))))
+                    (setf (todo-completed-at todo) (lt:now))
+                    (setf (model-status-message model) "→ DONE"))))
              (:completed
               (setf (todo-status todo) +status-waiting+)
-              (setf (todo-completed-at todo) nil))
+              (setf (todo-completed-at todo) nil)
+              (setf (model-status-message model) "→ WAIT"))
              (:waiting
               (setf (todo-status todo) +status-cancelled+)
-              (setf (todo-completed-at todo) nil))
+              (setf (todo-completed-at todo) nil)
+              (setf (model-status-message model) "→ CNCL"))
              (:cancelled
               (setf (todo-status todo) +status-pending+)
-              (setf (todo-completed-at todo) nil))
+              (setf (todo-completed-at todo) nil)
+              (setf (model-status-message model) "→ TODO"))
              (otherwise
               (setf (todo-status todo) +status-pending+)
-              (setf (todo-completed-at todo) nil)))
+              (setf (todo-completed-at todo) nil)
+              (setf (model-status-message model) "→ TODO")))
            ;; Save but don't invalidate cache - item stays in place
            (save-todo todo)))
        (values model nil))
