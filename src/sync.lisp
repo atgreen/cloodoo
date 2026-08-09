@@ -816,8 +816,46 @@
   "Client certificate path for the sync connector thread.")
 (defvar *sync-connector-key* nil
   "Client key path for the sync connector thread.")
+(defvar *sync-connector-ca* nil
+  "CA certificate path used to verify the sync server (the paired ca.crt).")
+(defvar *sync-ca-trusted* nil
+  "Namestring of the CA already merged into the default TLS trust store, so we
+   only add it once per process.")
 
-(defun start-sync-client (host port &key model program client-certificate client-key)
+(defun ensure-sync-ca-trusted (ca-file)
+  "Make pure-tls's default client TLS context trust the paired Cloodoo CA in
+   addition to the system roots.
+
+   ag-grpc / ag-http2's client path exposes no way to pass a per-connection CA
+   trust store (only the server side does), so the sync client would otherwise
+   verify the server against the system roots only — which do not contain our
+   private Cloodoo CA — yielding
+   'Certificate chain not anchored in trusted root (UNKNOWN-CA)'.  The client
+   TLS wrap uses pure-tls's default context, so we augment that context's trust
+   store here.  We ADD to it (never replace) so other TLS clients in this image
+   (e.g. LLM enrichment over HTTPS) keep their system roots."
+  (when (and ca-file (probe-file ca-file)
+             (not (equal *sync-ca-trusted* (namestring ca-file))))
+    (handler-case
+        (let* ((ctx (pure-tls::ensure-default-context))
+               (store (or (pure-tls::tls-context-trust-store ctx)
+                          (setf (pure-tls::tls-context-trust-store ctx)
+                                (pure-tls::load-system-trust-store))))
+               (ca-store (pure-tls::make-trust-store-from-sources
+                          (namestring ca-file) nil)))
+          (setf (pure-tls::trust-store-certificates store)
+                (append (pure-tls::trust-store-certificates ca-store)
+                        (pure-tls::trust-store-certificates store)))
+          (setf *sync-ca-trusted* (namestring ca-file))
+          (llog:info "Added sync CA to default TLS trust store"
+                     :ca (namestring ca-file)
+                     :ca-certs (length (pure-tls::trust-store-certificates ca-store))))
+      (error (e)
+        (llog:warn "Failed to add sync CA to trust store"
+                   :ca (namestring ca-file) :error (princ-to-string e))))))
+
+(defun start-sync-client (host port &key model program client-certificate client-key
+                                         ca-certificate)
   "Connect to a remote sync server as a client.
    Returns immediately — all connection logic runs in a background thread
    that handles connect, receive, and reconnect with exponential backoff.
@@ -825,7 +863,10 @@
    MODEL is optional app-model to update with sync status.
    PROGRAM is optional TUI program for triggering redraws.
    CLIENT-CERTIFICATE - Path to client certificate for mTLS.
-   CLIENT-KEY - Path to client private key for mTLS."
+   CLIENT-KEY - Path to client private key for mTLS.
+   CA-CERTIFICATE - Path to the CA that signed the server cert (for verifying
+     the server).  Defaults to the ca.crt sibling of CLIENT-CERTIFICATE, which
+     is where the pairing bundle stores it."
   (when *sync-client-channel*
     (stop-sync-client))
 
@@ -836,6 +877,9 @@
   (setf *sync-connector-port* port)
   (setf *sync-connector-cert* client-certificate)
   (setf *sync-connector-key* client-key)
+  (setf *sync-connector-ca* (or ca-certificate
+                                (when client-certificate
+                                  (merge-pathnames "ca.crt" client-certificate))))
   (update-sync-status :connecting)
 
   (when model
@@ -865,6 +909,10 @@
     (let ((use-tls (and client-certificate client-key
                         (probe-file client-certificate)
                         (probe-file client-key))))
+      ;; Register the paired CA as a trusted root so the client can verify the
+      ;; server's certificate (see ensure-sync-ca-trusted).
+      (when use-tls
+        (ensure-sync-ca-trusted *sync-connector-ca*))
       (loop while *sync-client-running* do
         (handler-case
             (progn
