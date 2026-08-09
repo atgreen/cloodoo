@@ -1123,7 +1123,7 @@
                   ("e" . "Edit item")
                   ("DEL/D" . "Delete item/done")
                   ("S-↑/↓" . "Priority +/-")
-                  ("" . ""))))
+                  ("^L" . "Redraw screen"))))
          (col2 (render-help-column "ORGANIZE"
                 '(("t" . "Edit labels")
                   ("/" . "Search")

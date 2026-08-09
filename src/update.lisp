@@ -20,6 +20,22 @@
    This is a workaround for tuition library issue where exec-cmd callbacks
    don't trigger immediate redraws.")
 
+(defun force-full-redraw ()
+  "Force the renderer to repaint every cell on the next frame.
+
+   tuition's differential renderer only rewrites cells that differ from its
+   in-memory LAST-BUFFER; it never clears-to-EOL or does a full repaint.  If
+   the terminal's real contents ever drift from LAST-BUFFER (tearing on a
+   terminal without synchronized output, a resize, a mouse-mode hiccup), the
+   stale cells persist forever because the diff believes they are already
+   correct.  Resetting LAST-BUFFER to NIL makes the next RENDER-DIFF treat the
+   whole screen as changed and repaint it, discarding any stale glyphs."
+  (when *tui-program-ref*
+    (handler-case
+        (setf (tui::last-buffer (tui::program-renderer *tui-program-ref*)) nil)
+      (error (e)
+        (llog:warn "Failed to force full redraw" :error e)))))
+
 ;;── Application State (Model) ──────────────────────────────────────────────────
 
 (defclass app-model ()
@@ -802,6 +818,12 @@
       ((or (and (characterp key) (char= key #\q))
            (and ctrl (characterp key) (char= key #\c)))
        (values model (tui:quit-cmd)))
+
+      ;; Force full screen redraw (Ctrl+L) — repaints every cell to clear any
+      ;; stale paint artifacts left by the differential renderer.
+      ((and ctrl (characterp key) (char= key #\l))
+       (force-full-redraw)
+       (values model nil))
 
       ;; Toggle sidebar visibility (l)
       ((and (characterp key) (char= key #\l))
@@ -2882,14 +2904,9 @@
       (save-user-context new-text)
       (setf (model-status-message model) "User context saved")
       (llog:info "Updated user context"))
-    ;; WORKAROUND: Clear renderer cache to force redraw after exec-cmd
-    ;; The exec-cmd clears the screen but the renderer thinks nothing changed
-    (when *tui-program-ref*
-      (handler-case
-          (let ((renderer (tui::program-renderer *tui-program-ref*)))
-            (setf (tui::last-output renderer) ""))
-        (error (e)
-          (llog:warn "Failed to clear renderer cache" :error e))))
+    ;; WORKAROUND: Force a full redraw after exec-cmd.
+    ;; The exec-cmd clears the screen but the renderer thinks nothing changed.
+    (force-full-redraw)
     (values model nil)))
 
 (defun make-user-context-editor-cmd ()
