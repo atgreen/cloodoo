@@ -898,17 +898,30 @@ jobs:
     - name: Generate repo config files
       run: |
         PAGES_URL="https://atgreen.github.io/cloodoo"
+        # Emit configs that match the actual signing state: when no GPG key
+        # was published (RPM_GPG_PRIVATE_KEY secret unset), gpg checks must
+        # be off or dnf/apt will refuse the unsigned repos.
         {
           echo "[cloodoo]"
           echo "name=Cloodoo"
           echo "baseurl=${PAGES_URL}/rpm-repo/"
           echo "enabled=1"
-          echo "gpgcheck=1"
-          echo "repo_gpgcheck=1"
-          echo "gpgkey=${PAGES_URL}/rpm-repo/RPM-GPG-KEY-cloodoo"
+          if [ -f docs/rpm-repo/RPM-GPG-KEY-cloodoo ]; then
+            echo "gpgcheck=1"
+            echo "repo_gpgcheck=1"
+            echo "gpgkey=${PAGES_URL}/rpm-repo/RPM-GPG-KEY-cloodoo"
+          else
+            echo "gpgcheck=0"
+            echo "repo_gpgcheck=0"
+          fi
         } > docs/rpm-repo/cloodoo.repo
-        echo "deb [signed-by=/usr/share/keyrings/cloodoo-archive-keyring.gpg] ${PAGES_URL}/deb-repo stable main" \
-          > docs/deb-repo/cloodoo.list
+        if [ -f docs/deb-repo/cloodoo-archive-keyring.gpg ]; then
+          echo "deb [signed-by=/usr/share/keyrings/cloodoo-archive-keyring.gpg] ${PAGES_URL}/deb-repo stable main" \
+            > docs/deb-repo/cloodoo.list
+        else
+          echo "deb [trusted=yes] ${PAGES_URL}/deb-repo stable main" \
+            > docs/deb-repo/cloodoo.list
+        fi
 
     - name: Upload Pages artifact
       uses: actions/upload-pages-artifact@v3
