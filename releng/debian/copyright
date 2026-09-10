@@ -7,6 +7,12 @@ Files: *
 Copyright: 2026 Anthony Green <green@moxielogic.com>
 License: MIT
 
+Comment: The cloodoo binary is a Lisp image that statically embeds third-party
+ Common Lisp libraries vendored via ocicl. Their licenses (MIT, BSD, CC0, and
+ similar permissive licenses) and copyright notices are collected in
+ /usr/share/doc/cloodoo/THIRD-PARTY-LICENSES, generated at build time by
+ "ocicl collect-licenses".
+
 License: MIT
  Permission is hereby granted, free of charge, to any person obtaining a copy
  of this software and associated documentation files (the "Software"), to deal

@@ -64,6 +64,9 @@ jobs:
     - name: Install dependencies
       run: ocicl install
 
+    - name: Collect third-party licenses
+      run: ocicl collect-licenses > THIRD-PARTY-LICENSES
+
     - name: Generate SBOM
       run: |
         ocicl create-sbom cyclonedx cloodoo-sbom.json
@@ -99,7 +102,7 @@ jobs:
       run: |
         TARDIR="cloodoo-${VERSION}-linux-x86_64"
         mkdir "$TARDIR"
-        cp cloodoo LICENSE README.md "$TARDIR/"
+        cp cloodoo LICENSE THIRD-PARTY-LICENSES README.md "$TARDIR/"
 
         # Include GNOME extension
         mkdir -p "$TARDIR/gnome-extension/schemas"
@@ -168,8 +171,9 @@ jobs:
 
     - name: Create source tarball for rpmbuild
       run: |
+        ocicl collect-licenses > THIRD-PARTY-LICENSES
         mkdir -p /tmp/cloodoo-${VERSION}
-        cp cloodoo LICENSE README.md /tmp/cloodoo-${VERSION}/
+        cp cloodoo LICENSE THIRD-PARTY-LICENSES README.md /tmp/cloodoo-${VERSION}/
 
         # Include GNOME extension
         mkdir -p /tmp/cloodoo-${VERSION}/gnome-extension/schemas
@@ -260,6 +264,7 @@ jobs:
 
     - name: Build DEB package
       run: |
+        ocicl collect-licenses > THIRD-PARTY-LICENSES
         PKG="cloodoo_${VERSION}-1_amd64"
         mkdir -p "${PKG}/DEBIAN"
         mkdir -p "${PKG}/usr/bin"
@@ -268,10 +273,15 @@ jobs:
         chmod 755 "${PKG}/usr/bin/cloodoo"
 
         sed "s/@VERSION@/${VERSION}/g" releng/debian/control > "${PKG}/DEBIAN/control"
-        cp releng/debian/copyright "${PKG}/DEBIAN/copyright"
         cp releng/debian/postinst "${PKG}/DEBIAN/postinst"
         cp releng/debian/postrm "${PKG}/DEBIAN/postrm"
         chmod 755 "${PKG}/DEBIAN/postinst" "${PKG}/DEBIAN/postrm"
+
+        # License documentation (Debian policy: /usr/share/doc/<pkg>/copyright)
+        DOC_DIR="${PKG}/usr/share/doc/cloodoo"
+        mkdir -p "${DOC_DIR}"
+        cp releng/debian/copyright "${DOC_DIR}/copyright"
+        cp THIRD-PARTY-LICENSES "${DOC_DIR}/"
 
         # GNOME Shell extension
         GNOME_DIR="${PKG}/usr/share/gnome-shell/extensions/cloodoo-screenshot@moxielogic.com"
@@ -362,9 +372,10 @@ jobs:
 
     - name: Package tarball
       run: |
+        ocicl collect-licenses > THIRD-PARTY-LICENSES
         TARDIR="cloodoo-${VERSION}-macos-arm64"
         mkdir "$TARDIR"
-        cp cloodoo LICENSE README.md "$TARDIR/"
+        cp cloodoo LICENSE THIRD-PARTY-LICENSES README.md "$TARDIR/"
         tar czf "${TARDIR}.tar.gz" "$TARDIR"
 
     - name: Upload artifact
@@ -413,9 +424,10 @@ jobs:
 
     - name: Package tarball
       run: |
+        ocicl collect-licenses > THIRD-PARTY-LICENSES
         TARDIR="cloodoo-${VERSION}-macos-x64"
         mkdir "$TARDIR"
-        cp cloodoo LICENSE README.md "$TARDIR/"
+        cp cloodoo LICENSE THIRD-PARTY-LICENSES README.md "$TARDIR/"
         tar czf "${TARDIR}.tar.gz" "$TARDIR"
 
     - name: Upload artifact

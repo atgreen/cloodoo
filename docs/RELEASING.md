@@ -179,6 +179,17 @@ curl -LO https://github.com/atgreen/cloodoo/releases/download/vX.Y.Z/cloodoo-X.Y
 adb install cloodoo-X.Y.Z-android.apk
 ```
 
+### Third-Party Licenses
+
+The cloodoo binary statically embeds ~97 vendored Common Lisp libraries.
+Each package build runs `ocicl collect-licenses` to generate a
+`THIRD-PARTY-LICENSES` file with every dependency's license text, shipped:
+
+- in all tarballs alongside `LICENSE`
+- in the RPM as a second `%license` file
+- in the DEB at `/usr/share/doc/cloodoo/` (with `copyright` at its
+  Debian-policy location)
+
 ## Package Details
 
 ### RPM Package (`releng/cloodoo.spec`)

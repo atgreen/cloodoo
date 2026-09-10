@@ -73,6 +73,7 @@ glib-compile-schemas %{_datadir}/glib-2.0/schemas/ || true
 
 %files
 %license LICENSE
+%license THIRD-PARTY-LICENSES
 %{_bindir}/cloodoo
 %{_datadir}/gnome-shell/extensions/cloodoo-screenshot@moxielogic.com/
 %{_datadir}/glib-2.0/schemas/org.gnome.shell.extensions.cloodoo.gschema.xml
