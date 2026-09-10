@@ -1774,9 +1774,8 @@
          (remhash tag (model-selected-tags model))
          ;; Invalidate caches
          (invalidate-visible-todos-cache model)
-         (setf (model-all-tags-cache model) nil)
          ;; Adjust sidebar cursor if needed
-         (let ((tags (update-all-tags-cache model)))
+         (let ((tags (refresh-tags-cache model)))
            (when (> (model-sidebar-cursor model) (length tags))
              (setf (model-sidebar-cursor model) (max 0 (length tags))))))
        (setf (model-deleting-tag model) nil)
@@ -1816,6 +1815,11 @@
            (setf (model-edit-due-date model) (todo-due-date todo))
            (setf (model-edit-repeat-interval model) (todo-repeat-interval todo))
            (setf (model-edit-repeat-unit model) (todo-repeat-unit todo))
+           ;; Pre-fill tags fields
+           (setf (model-edit-tags model) (copy-list (todo-tags todo)))
+           (tui.textinput:textinput-set-value (model-tags-input model) "")
+           (setf (model-tag-dropdown-visible model) nil)
+           (setf (model-tag-dropdown-cursor model) 0)
            ;; Pre-fill text inputs
            (tui.textinput:textinput-set-value (model-title-input model) (todo-title todo))
            (tui.textinput:textinput-set-value (model-description-input model) (or (todo-description todo) ""))
@@ -2479,12 +2483,6 @@
                                  (max 0 (min raw-sidebar-width (- term-width min-list-width 2)))
                                  0))
               (sidebar-visible-effective (> sidebar-width 0)))
-         ;; DEBUG: show click coordinates in status message
-         (setf (model-status-message model)
-               (format nil "Y=~D X=~D screen-line=~D list-line=~D offset=~D line-idx=~D"
-                       (tui:mouse-event-y msg) (tui:mouse-event-x msg)
-                       screen-line list-line (model-scroll-offset model)
-                       (+ (model-scroll-offset model) list-line)))
          (cond
            ;; Click in sidebar area
            ((and sidebar-visible-effective (< screen-x sidebar-width)
