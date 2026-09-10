@@ -75,10 +75,11 @@
       (format out ";;;   :model \"gemini-2.0-flash\"~%")
       (format out ";;;   :api-key-env \"GEMINI_API_KEY\"  ; env var name containing API key~%")
       (format out ";;;~%")
-      (format out ";;; For OpenAI:~%")
+      (format out ";;; For OpenAI (or any OpenAI-compatible API):~%")
       (format out ";;;   :provider :openai~%")
       (format out ";;;   :model \"gpt-4o-mini\"~%")
       (format out ";;;   :api-key-env \"OPENAI_API_KEY\"~%")
+      (format out ";;;   :endpoint \"http://localhost:8000/v1\"  ; optional, for compatible APIs (vLLM, llama.cpp, LiteLLM, ...)~%")
       (format out ";;;~%")
       (format out ";;; For Anthropic:~%")
       (format out ";;;   :provider :anthropic~%")
@@ -347,10 +348,19 @@ Respond with ONLY the JSON object, no markdown.")
          completer)))
     (:openai
      (when *llm-api-key*
-       (let ((completer (make-instance 'completions:openai-completer
-                                       :api-key *llm-api-key*
-                                       :model *llm-model*)))
-         (llog:debug "OpenAI completer created successfully")
+       ;; :endpoint supports any OpenAI-compatible API; accept a base URL
+       ;; (e.g. "http://host:8000/v1") and complete the chat path.
+       (let* ((endpoint (when *llm-endpoint*
+                          (if (str:ends-with-p "/chat/completions" *llm-endpoint*)
+                              *llm-endpoint*
+                              (str:concat (string-right-trim "/" *llm-endpoint*)
+                                          "/chat/completions"))))
+              (completer (apply #'make-instance 'completions:openai-completer
+                                :api-key *llm-api-key*
+                                :model *llm-model*
+                                (when endpoint (list :endpoint endpoint)))))
+         (llog:debug "OpenAI completer created successfully"
+                     :endpoint (or endpoint "default"))
          completer)))
     (:anthropic
      (when *llm-api-key*
