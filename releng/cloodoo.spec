@@ -90,6 +90,7 @@ install -m 644 browser-extension/options/* %{buildroot}%{_datadir}/cloodoo/brows
 %files
 %license LICENSE
 %license THIRD-PARTY-LICENSES
+%doc README.md
 %{_bindir}/cloodoo
 %{_bindir}/cloodoo-native-host
 %{_sysconfdir}/opt/chrome/native-messaging-hosts/com.cloodoo.native.json

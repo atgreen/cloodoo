@@ -347,7 +347,7 @@ jobs:
         DOC_DIR="${PKG}/usr/share/doc/cloodoo"
         mkdir -p "${DOC_DIR}"
         cp releng/debian/copyright "${DOC_DIR}/copyright"
-        cp THIRD-PARTY-LICENSES "${DOC_DIR}/"
+        cp THIRD-PARTY-LICENSES README.md "${DOC_DIR}/"
 
         # Native messaging host (system-wide, so no per-user setup-extension)
         install -D -m 755 releng/native-messaging/cloodoo-native-host \
