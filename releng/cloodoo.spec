@@ -50,6 +50,9 @@ install -m 644 gnome-extension/prefs.js %{buildroot}%{_datadir}/gnome-shell/exte
 install -m 644 gnome-extension/stylesheet.css %{buildroot}%{_datadir}/gnome-shell/extensions/cloodoo-screenshot@moxielogic.com/
 install -m 644 gnome-extension/metadata.json %{buildroot}%{_datadir}/gnome-shell/extensions/cloodoo-screenshot@moxielogic.com/
 install -m 644 gnome-extension/schemas/org.gnome.shell.extensions.cloodoo.gschema.xml %{buildroot}%{_datadir}/gnome-shell/extensions/cloodoo-screenshot@moxielogic.com/schemas/
+# The extension loads settings from its own schemas dir, which requires
+# a compiled schema alongside the XML
+glib-compile-schemas %{buildroot}%{_datadir}/gnome-shell/extensions/cloodoo-screenshot@moxielogic.com/schemas/
 
 # GSettings schema (system-wide)
 mkdir -p %{buildroot}%{_datadir}/glib-2.0/schemas

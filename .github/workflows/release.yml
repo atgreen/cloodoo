@@ -178,7 +178,7 @@ jobs:
       run: |
         dnf install -y git make gcc gcc-c++ \
           sbcl sqlite-devel openssl-devel libzstd-devel \
-          rpm-build rpmdevtools rpm-sign gnupg2 libfixposix-devel
+          rpm-build rpmdevtools rpm-sign gnupg2 libfixposix-devel glib2
 
     - name: Checkout code
       uses: actions/checkout@v4
@@ -303,7 +303,7 @@ jobs:
       run: |
         sudo apt-get update
         sudo apt-get install -y sbcl gcc make git \
-          libsqlite3-dev libssl-dev libzstd-dev dpkg-dev fakeroot
+          libsqlite3-dev libssl-dev libzstd-dev dpkg-dev fakeroot libglib2.0-bin
 
     - name: Install ocicl
       run: |
@@ -384,6 +384,9 @@ jobs:
            "${GNOME_DIR}/"
         cp gnome-extension/schemas/org.gnome.shell.extensions.cloodoo.gschema.xml \
            "${GNOME_DIR}/schemas/"
+        # The extension loads settings from its own schemas dir, which
+        # requires a compiled schema alongside the XML
+        glib-compile-schemas "${GNOME_DIR}/schemas/"
 
         # GSettings schema (system-wide)
         mkdir -p "${PKG}/usr/share/glib-2.0/schemas"
