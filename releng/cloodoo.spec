@@ -28,6 +28,8 @@ Requires:       libfixposix
 Requires:       openssl-libs
 Requires:       libzstd
 Suggests:       gnome-shell
+# The GNOME extension's metadata dialog needs zenity
+Recommends:     zenity
 
 %description
 Cloodoo is a personal TODO system featuring a retro TUI interface,
