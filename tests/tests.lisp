@@ -423,6 +423,19 @@
         (is (= 1 (length rows)))
         (is (string= "Legacy task" (gethash "title" (first rows))))))))
 
+(test attachment-only-update-test
+  "A save that only changes attachment-hashes must persist and load back.
+   Regression: the unchanged-check omitted attachment_hashes, silently
+   dropping attachment-only updates (cloodoo-vvl)."
+  (with-test-db
+    (let ((todo (cloodoo:make-todo "With attachment")))
+      (cloodoo::db-save-todo todo)
+      (setf (cloodoo::todo-attachment-hashes todo) (list "abc123"))
+      (is-true (cloodoo::db-save-todo todo))
+      (let ((loaded (find (cloodoo:todo-id todo) (cloodoo::db-load-todos)
+                          :key #'cloodoo:todo-id :test #'string=)))
+        (is (equal '("abc123") (cloodoo::todo-attachment-hashes loaded)))))))
+
 ;;── Run Tests ──────────────────────────────────────────────────────────────────
 
 (defun run-tests ()
