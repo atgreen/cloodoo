@@ -228,15 +228,19 @@
           (is (string= "No-Section" (fourth item-titles))))))))
 
 (test list-name-uniqueness-test
-  "Test that list names are unique (case-insensitive)."
+  "Test that list names are unique (case-insensitive).
+   Saving a same-named list supersedes the existing one (two-device merge
+   semantics) rather than signaling, so only one current row survives."
   (with-test-db
     (let ((list1 (cloodoo:make-list-definition "Grocery")))
       (cloodoo::db-save-list-definition list1)
-      ;; Saving another list with same name (different case) should fail or replace
-      ;; The DB has a unique index on LOWER(name) WHERE valid_to IS NULL
       (let ((list2 (cloodoo:make-list-definition "grocery")))
-        (signals error
-          (cloodoo::db-save-list-definition list2))))))
+        (is-true (cloodoo::db-save-list-definition list2))
+        (let ((current (cloodoo::db-load-list-definitions)))
+          (is (= 1 (length current)))
+          (is (string= "grocery" (cloodoo::list-def-name (first current))))
+          (is (string= (cloodoo::list-def-id list2)
+                       (cloodoo::list-def-id (first current)))))))))
 
 (test todo-to-list-item-atomic-test
   "Test atomic conversion of a TODO to a list item."

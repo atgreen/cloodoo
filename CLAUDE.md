@@ -284,11 +284,12 @@ cd android && ./gradlew clean assembleDebug
 Framework: FiveAM, suite defined in `tests/tests.lisp`
 
 ```sh
-# Run tests
-sbcl --eval "(asdf:load-system :cloodoo)" \
+# Run tests (exits non-zero on failure, same invocation as CI)
+sbcl --non-interactive \
+     --eval "(asdf:load-system :fiveam)" \
+     --eval "(asdf:load-system :cloodoo)" \
      --load tests/tests.lisp \
-     --eval "(cloodoo-tests:run-tests)" \
-     --quit
+     --eval "(uiop:quit (if (cloodoo-tests:run-tests) 0 1))"
 ```
 
 **Conventions**:
