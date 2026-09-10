@@ -10,7 +10,7 @@
 ## Build, Test, and Development Commands
 - `make cloodoo` builds the executable via SBCL/ASDF.
 - `sbcl --eval "(asdf:load-system :cloodoo)" --eval "(cloodoo:main)" --quit` runs the app (CLI/TUI entry point).
-- `sbcl --eval "(asdf:load-system :cloodoo)" --load tests/tests.lisp --eval "(cluedo-tests:run-tests)" --quit` runs the FiveAM suite. Note: tests currently reference the `cluedo` package; update if the system/package is `cloodoo`.
+- `sbcl --non-interactive --eval "(asdf:load-system :fiveam)" --eval "(asdf:load-system :cloodoo)" --load tests/tests.lisp --eval "(uiop:quit (if (cloodoo-tests:run-tests) 0 1))"` runs the FiveAM suite (exits non-zero on failure, same invocation as CI).
 - `make clean` removes the built binary and editor backups.
 
 ## Coding Style & Naming Conventions
