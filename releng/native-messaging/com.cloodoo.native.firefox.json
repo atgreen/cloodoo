@@ -1,0 +1,9 @@
+{
+  "name": "com.cloodoo.native",
+  "description": "Cloodoo TODO manager native messaging host",
+  "path": "/usr/bin/cloodoo-native-host",
+  "type": "stdio",
+  "allowed_extensions": [
+    "cloodoo@moxielogic.com"
+  ]
+}

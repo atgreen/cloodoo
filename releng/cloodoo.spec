@@ -53,6 +53,25 @@ install -m 644 gnome-extension/schemas/org.gnome.shell.extensions.cloodoo.gschem
 mkdir -p %{buildroot}%{_datadir}/glib-2.0/schemas
 install -m 644 gnome-extension/schemas/org.gnome.shell.extensions.cloodoo.gschema.xml %{buildroot}%{_datadir}/glib-2.0/schemas/
 
+# Native messaging host (system-wide, so no per-user setup-extension)
+install -D -m 755 releng/native-messaging/cloodoo-native-host %{buildroot}%{_bindir}/cloodoo-native-host
+install -D -m 644 releng/native-messaging/com.cloodoo.native.chrome.json \
+  %{buildroot}%{_sysconfdir}/opt/chrome/native-messaging-hosts/com.cloodoo.native.json
+install -D -m 644 releng/native-messaging/com.cloodoo.native.chrome.json \
+  %{buildroot}%{_sysconfdir}/chromium/native-messaging-hosts/com.cloodoo.native.json
+install -D -m 644 releng/native-messaging/com.cloodoo.native.firefox.json \
+  %{buildroot}%{_libdir}/mozilla/native-messaging-hosts/com.cloodoo.native.json
+
+%if 0%{?with_crx}
+# Packed extension + external-extension prefs so Chrome/Chromium
+# offer/install it for every user
+install -D -m 644 cloodoo.crx %{buildroot}%{_datadir}/cloodoo/cloodoo.crx
+install -D -m 644 external-extension.json \
+  %{buildroot}%{_datadir}/google-chrome/extensions/lkagblncncheiiddbnpnoodghgjgagde.json
+install -D -m 644 external-extension.json \
+  %{buildroot}%{_datadir}/chromium/extensions/lkagblncncheiiddbnpnoodghgjgagde.json
+%endif
+
 # Browser extension
 mkdir -p %{buildroot}%{_datadir}/cloodoo/browser-extension/icons
 mkdir -p %{buildroot}%{_datadir}/cloodoo/browser-extension/popup
@@ -72,6 +91,15 @@ install -m 644 browser-extension/options/* %{buildroot}%{_datadir}/cloodoo/brows
 %license LICENSE
 %license THIRD-PARTY-LICENSES
 %{_bindir}/cloodoo
+%{_bindir}/cloodoo-native-host
+%{_sysconfdir}/opt/chrome/native-messaging-hosts/com.cloodoo.native.json
+%{_sysconfdir}/chromium/native-messaging-hosts/com.cloodoo.native.json
+%{_libdir}/mozilla/native-messaging-hosts/com.cloodoo.native.json
+%if 0%{?with_crx}
+%{_datadir}/cloodoo/cloodoo.crx
+%{_datadir}/google-chrome/extensions/lkagblncncheiiddbnpnoodghgjgagde.json
+%{_datadir}/chromium/extensions/lkagblncncheiiddbnpnoodghgjgagde.json
+%endif
 %{_datadir}/gnome-shell/extensions/cloodoo-screenshot@moxielogic.com/
 %{_datadir}/glib-2.0/schemas/org.gnome.shell.extensions.cloodoo.gschema.xml
 %{_datadir}/cloodoo/browser-extension/

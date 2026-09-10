@@ -115,6 +115,22 @@ gpg --export-secret-keys --armor KEYID | base64 -w0 | \
   gh secret set RPM_GPG_PRIVATE_KEY --repo atgreen/cloodoo
 ```
 
+### Browser Extension Packing
+
+If the `CRX_SIGNING_KEY` secret is set (base64 of an RSA private key
+PEM), CI packs `browser-extension/` into a signed `cloodoo.crx` whose
+extension id (`lkagblncncheiiddbnpnoodghgjgagde`) is pinned by the
+matching `"key"` field in `manifest.json`. The RPM/DEB then ship the
+`.crx` plus external-extension preference files so Chrome/Chromium
+offer it to every user, alongside system-wide native-messaging host
+manifests (`/etc/opt/chrome/...`, `/etc/chromium/...`,
+`/usr/lib*/mozilla/native-messaging-hosts/`) that make per-user
+`cloodoo setup-extension` unnecessary on packaged installs.
+
+**The CRX key must never rotate casually** — a new key means a new
+extension id. The key lives in `~/.config/cloodoo/crx-signing-key.pem`
+on the release machine; back it up with the GPG key.
+
 ### Dry Run
 
 To validate the whole pipeline without publishing, trigger the workflow

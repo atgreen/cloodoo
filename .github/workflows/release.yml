@@ -125,9 +125,49 @@ jobs:
         path: cloodoo-*-linux-x86_64.tar.gz
         retention-days: 5
 
+  pack-crx:
+    name: Pack Chrome Extension
+    needs: extract-version
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Pack signed .crx
+      env:
+        CRX_SIGNING_KEY: ${{ secrets.CRX_SIGNING_KEY }}
+      if: ${{ env.CRX_SIGNING_KEY != '' }}
+      run: |
+        echo "${CRX_SIGNING_KEY}" | base64 -d > /tmp/crx-key.pem
+        google-chrome --no-sandbox \
+          --pack-extension="$PWD/browser-extension" \
+          --pack-extension-key=/tmp/crx-key.pem
+        mv browser-extension.crx cloodoo.crx
+        rm -f /tmp/crx-key.pem
+        # The extension id is pinned by the "key" in manifest.json; fail
+        # loudly if the signing key ever drifts from it.
+        python3 - <<'EOF'
+        import hashlib, json, base64
+        key = base64.b64decode(json.load(open('browser-extension/manifest.json'))['key'])
+        crx_id = hashlib.sha256(key).digest()[:16]
+        assert crx_id in open('cloodoo.crx','rb').read(), "crx id != manifest key id"
+        print("crx id matches manifest key")
+        EOF
+
+    - name: Upload artifact
+      env:
+        CRX_SIGNING_KEY: ${{ secrets.CRX_SIGNING_KEY }}
+      if: ${{ env.CRX_SIGNING_KEY != '' }}
+      uses: actions/upload-artifact@v4
+      with:
+        name: crx-package
+        path: cloodoo.crx
+        retention-days: 5
+
   build-rpm:
     name: Fedora RPM
-    needs: extract-version
+    needs: [extract-version, pack-crx]
     runs-on: ubuntu-latest
     container: fedora:latest
     env:
@@ -169,11 +209,29 @@ jobs:
     - name: Set up rpmbuild tree
       run: rpmdev-setuptree
 
+    - name: Download packed .crx
+      uses: actions/download-artifact@v4
+      with:
+        name: crx-package
+      continue-on-error: true
+
     - name: Create source tarball for rpmbuild
       run: |
         ocicl collect-licenses > THIRD-PARTY-LICENSES
         mkdir -p /tmp/cloodoo-${VERSION}
         cp cloodoo LICENSE THIRD-PARTY-LICENSES README.md /tmp/cloodoo-${VERSION}/
+
+        # Native messaging host files (installed system-wide by the spec)
+        mkdir -p /tmp/cloodoo-${VERSION}/releng
+        cp -r releng/native-messaging /tmp/cloodoo-${VERSION}/releng/
+
+        # Packed extension + external-extension prefs (when signing key set)
+        if [ -f cloodoo.crx ]; then
+          cp cloodoo.crx /tmp/cloodoo-${VERSION}/
+          EXT_VERSION=$(python3 -c "import json;print(json.load(open('browser-extension/manifest.json'))['version'])")
+          printf '{"external_crx":"/usr/share/cloodoo/cloodoo.crx","external_version":"%s"}\n' "$EXT_VERSION" \
+            > /tmp/cloodoo-${VERSION}/external-extension.json
+        fi
 
         # Include GNOME extension
         mkdir -p /tmp/cloodoo-${VERSION}/gnome-extension/schemas
@@ -191,8 +249,11 @@ jobs:
 
     - name: Build RPM
       run: |
+        WITH_CRX=0
+        [ -f cloodoo.crx ] && WITH_CRX=1
         rpmbuild -bb \
           --define "version ${VERSION}" \
+          --define "with_crx ${WITH_CRX}" \
           --define "_binary_payload w6.zstdio" \
           releng/cloodoo.spec
 
@@ -228,7 +289,7 @@ jobs:
 
   build-deb:
     name: Debian/Ubuntu DEB
-    needs: extract-version
+    needs: [extract-version, pack-crx]
     runs-on: ubuntu-latest
     env:
       VERSION: ${{ needs.extract-version.outputs.version }}
@@ -262,6 +323,12 @@ jobs:
     - name: Build executable
       run: make cloodoo
 
+    - name: Download packed .crx
+      uses: actions/download-artifact@v4
+      with:
+        name: crx-package
+      continue-on-error: true
+
     - name: Build DEB package
       run: |
         ocicl collect-licenses > THIRD-PARTY-LICENSES
@@ -281,6 +348,28 @@ jobs:
         mkdir -p "${DOC_DIR}"
         cp releng/debian/copyright "${DOC_DIR}/copyright"
         cp THIRD-PARTY-LICENSES "${DOC_DIR}/"
+
+        # Native messaging host (system-wide, so no per-user setup-extension)
+        install -D -m 755 releng/native-messaging/cloodoo-native-host \
+          "${PKG}/usr/bin/cloodoo-native-host"
+        install -D -m 644 releng/native-messaging/com.cloodoo.native.chrome.json \
+          "${PKG}/etc/opt/chrome/native-messaging-hosts/com.cloodoo.native.json"
+        install -D -m 644 releng/native-messaging/com.cloodoo.native.chrome.json \
+          "${PKG}/etc/chromium/native-messaging-hosts/com.cloodoo.native.json"
+        install -D -m 644 releng/native-messaging/com.cloodoo.native.firefox.json \
+          "${PKG}/usr/lib/mozilla/native-messaging-hosts/com.cloodoo.native.json"
+
+        # Packed extension + external-extension prefs (when signing key set)
+        if [ -f cloodoo.crx ]; then
+          install -D -m 644 cloodoo.crx "${PKG}/usr/share/cloodoo/cloodoo.crx"
+          EXT_VERSION=$(python3 -c "import json;print(json.load(open('browser-extension/manifest.json'))['version'])")
+          printf '{"external_crx":"/usr/share/cloodoo/cloodoo.crx","external_version":"%s"}\n' "$EXT_VERSION" \
+            > /tmp/external-extension.json
+          install -D -m 644 /tmp/external-extension.json \
+            "${PKG}/usr/share/google-chrome/extensions/lkagblncncheiiddbnpnoodghgjgagde.json"
+          install -D -m 644 /tmp/external-extension.json \
+            "${PKG}/usr/share/chromium/extensions/lkagblncncheiiddbnpnoodghgjgagde.json"
+        fi
 
         # GNOME Shell extension
         GNOME_DIR="${PKG}/usr/share/gnome-shell/extensions/cloodoo-screenshot@moxielogic.com"
@@ -552,7 +641,7 @@ jobs:
       id: hash
       run: |
         cd artifacts
-        find . -type f \( -name '*.rpm' -o -name '*.deb' -o -name '*.tar.gz' -o -name '*.apk' \) \
+        find . -type f \( -name '*.rpm' -o -name '*.deb' -o -name '*.tar.gz' -o -name '*.apk' -o -name '*.crx' \) \
           -exec sha256sum {} \; | sed 's|  \./[^/]*/|  |' > checksums.txt
         cat checksums.txt
         echo "hashes=$(base64 -w0 < checksums.txt)" >> "$GITHUB_OUTPUT"
@@ -607,7 +696,7 @@ jobs:
       run: |
         mkdir release-files
         find artifacts -type f \( -name '*.tar.gz' -o -name '*.rpm' -o -name '*.deb' \
-          -o -name '*.apk' -o -name '*.bundle' -o -name 'cloodoo-sbom*.json' \
+          -o -name '*.apk' -o -name '*.crx' -o -name '*.bundle' -o -name 'cloodoo-sbom*.json' \
           -o -name '*.intoto.jsonl' \) \
           -exec cp {} release-files/ \;
         ls -la release-files/

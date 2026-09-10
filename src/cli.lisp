@@ -1723,8 +1723,8 @@ URL format: http[s]://HOST[:PORT]/pair/TOKEN"
                            :short-name #\e
                            :long-name "extension-id"
                            :key :extension-id
-                           :description "Chrome extension ID (find at chrome://extensions with Developer mode on)"
-                           :required t)))
+                           :description "Chrome extension ID (default: the id pinned by the key in manifest.json)"
+                           :initial-value "lkagblncncheiiddbnpnoodghgjgagde")))
     (clingon:make-command
      :name "setup-extension"
      :aliases '("install-native-host")

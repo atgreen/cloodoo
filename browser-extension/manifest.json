@@ -30,7 +30,9 @@
   },
   "background": {
     "service_worker": "background.js",
-    "scripts": ["background.js"]
+    "scripts": [
+      "background.js"
+    ]
   },
   "browser_specific_settings": {
     "gecko": {
@@ -49,8 +51,12 @@
         "https://mail.proton.me/*",
         "https://mail.zoho.com/*"
       ],
-      "js": ["content.js"],
-      "css": ["content.css"],
+      "js": [
+        "content.js"
+      ],
+      "css": [
+        "content.css"
+      ],
       "run_at": "document_end"
     }
   ],
@@ -58,5 +64,6 @@
     "16": "icons/icon16.png",
     "48": "icons/icon48.png",
     "128": "icons/icon128.png"
-  }
+  },
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAvN6WYPF5vmgEku1Ht6OF//RoJhDUktJNiZ/wWy3stu+QLPppekS5M702CoGN/dOJclFqf3+qyXUOqb6sEAQSSv/BPmzwPFPIT2kcM873ZspSWaQRmq+CSrUDnRhCZUU752n9fV0T+Hm7UTwYx8ADeCk36NnrT1Bva8BBjZjheSGZ7AkfnlMkLj+SxoWsTT18l/OC3UMHWE7TzG3UMamSwT1cALI0ZWvtC6VK9e4ihahm6B2eWZnn7lvi7q5YuW2YdC8Lqwa5qG14R4P4KBCGhDks6X0JlgoLBEXTHfkyTBeCKMsQOfBesrZIlNNU902v0leduGhaGKL1lPotvmQfIwIDAQAB"
 }

@@ -1,0 +1,4 @@
+#!/bin/sh
+# Native messaging host wrapper: browsers launch the manifest's "path"
+# without arguments, but cloodoo needs the native-host subcommand.
+exec /usr/bin/cloodoo native-host
