@@ -8,7 +8,7 @@
   :description "Personal TODO system with a retro TUI"
   :author      "Anthony Green <green@moxielogic.com>"
   :license     "MIT"
-  :version     "0.2.1"
+  :version     "0.2.2"
   :depends-on (:tuition
                :com.inuoe.jzon
                :local-time
