@@ -6,14 +6,14 @@
   margin-left: 8px;
 }
 
+/* Inherit Gmail's own toolbar-button color so the icon tracks the
+   active Gmail theme (light or dark) — never force a fixed color. */
 .cloodoo-quick-add .T-I {
-  color: #5f6368;
-  transition: color 0.2s ease;
+  transition: background-color 0.2s ease;
 }
 
 .cloodoo-quick-add .T-I:hover {
-  color: #1a73e8;
-  background-color: rgba(26, 115, 232, 0.04);
+  background-color: rgba(128, 128, 128, 0.15);
 }
 
 .cloodoo-quick-add svg {
