@@ -273,9 +273,8 @@ jobs:
         chmod 755 "${PKG}/usr/bin/cloodoo"
 
         sed "s/@VERSION@/${VERSION}/g" releng/debian/control > "${PKG}/DEBIAN/control"
-        cp releng/debian/postinst "${PKG}/DEBIAN/postinst"
-        cp releng/debian/postrm "${PKG}/DEBIAN/postrm"
-        chmod 755 "${PKG}/DEBIAN/postinst" "${PKG}/DEBIAN/postrm"
+        # No postinst/postrm: libglib2.0-0's dpkg trigger compiles
+        # /usr/share/glib-2.0/schemas automatically.
 
         # License documentation (Debian policy: /usr/share/doc/<pkg>/copyright)
         DOC_DIR="${PKG}/usr/share/doc/cloodoo"

@@ -65,11 +65,8 @@ install -m 644 browser-extension/icons/* %{buildroot}%{_datadir}/cloodoo/browser
 install -m 644 browser-extension/popup/* %{buildroot}%{_datadir}/cloodoo/browser-extension/popup/
 install -m 644 browser-extension/options/* %{buildroot}%{_datadir}/cloodoo/browser-extension/options/
 
-%post
-glib-compile-schemas %{_datadir}/glib-2.0/schemas/ || true
-
-%postun
-glib-compile-schemas %{_datadir}/glib-2.0/schemas/ || true
+# No %post/%postun schema compilation: the glib2 package's RPM file
+# triggers compile /usr/share/glib-2.0/schemas automatically.
 
 %files
 %license LICENSE
