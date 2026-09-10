@@ -53,6 +53,9 @@ install -m 644 gnome-extension/schemas/org.gnome.shell.extensions.cloodoo.gschem
 mkdir -p %{buildroot}%{_datadir}/glib-2.0/schemas
 install -m 644 gnome-extension/schemas/org.gnome.shell.extensions.cloodoo.gschema.xml %{buildroot}%{_datadir}/glib-2.0/schemas/
 
+# Man page
+install -D -m 644 releng/cloodoo.1 %{buildroot}%{_mandir}/man1/cloodoo.1
+
 # Native messaging host (system-wide, so no per-user setup-extension)
 install -D -m 755 releng/native-messaging/cloodoo-native-host %{buildroot}%{_bindir}/cloodoo-native-host
 install -D -m 644 releng/native-messaging/com.cloodoo.native.chrome.json \
@@ -91,6 +94,7 @@ install -m 644 browser-extension/options/* %{buildroot}%{_datadir}/cloodoo/brows
 %license LICENSE
 %license THIRD-PARTY-LICENSES
 %doc README.md
+%{_mandir}/man1/cloodoo.1*
 %{_bindir}/cloodoo
 %{_bindir}/cloodoo-native-host
 %{_sysconfdir}/opt/chrome/native-messaging-hosts/com.cloodoo.native.json

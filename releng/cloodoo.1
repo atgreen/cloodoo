@@ -1,0 +1,173 @@
+.TH CLOODOO 1 "2026" "cloodoo" "User Commands"
+.SH NAME
+cloodoo \- personal TODO system with a retro TUI and multi-device sync
+.SH SYNOPSIS
+.B cloodoo
+.RI [ command ]
+.RI [ options ]
+.SH DESCRIPTION
+.B cloodoo
+is a personal TODO system featuring a retro terminal user interface,
+real-time multi-device sync over gRPC with mutual TLS, LLM-powered
+enrichment of tasks, and companion Android, GNOME Shell, and browser
+extension apps.
+.PP
+Run without a command,
+.B cloodoo
+starts the interactive TUI. Press
+.B ?
+inside the TUI for the key bindings.
+.SH COMMANDS
+.TP
+.B add \fITITLE\fR
+Add a new TODO. Options:
+.B \-p
+priority (high, medium, low),
+.B \-s
+scheduled date and
+.B \-d
+due date (YYYY\-MM\-DD, \fItoday\fR, \fItomorrow\fR, or a day name),
+.B \-t
+tag (repeatable),
+.B \-n
+note,
+.B \-a
+attach a file (screenshot, document, etc.).
+.TP
+.B list
+List TODOs.
+.B \-a
+includes completed items;
+.B \-p
+and
+.B \-s
+filter by priority and status.
+.TP
+.B done \fIID\fR
+Mark a TODO as completed.
+.TP
+.B stats
+Show TODO statistics.
+.TP
+.B export
+Export TODOs in org-agenda format.
+.B \-\-pdf
+produces PDF (requires pandoc, wkhtmltopdf, or enscript),
+.B \-o
+sets the output path,
+.B \-t
+groups by tag instead of date,
+.B \-a
+includes completed items.
+.TP
+.B lists
+Manage user-defined lists (grocery, movies, etc.).
+.TP
+.B context
+Manage the user context supplied to the LLM for enrichment.
+.TP
+.B dump
+Dump the SQLite database as SQL statements.
+.TP
+.B compact
+Remove superseded historical versions from the temporal database to
+reclaim space.
+.TP
+.B sync-server
+Start the gRPC streaming sync server.
+.B \-b
+bind address,
+.B \-p
+gRPC port (default 50051),
+.B \-\-hostname
+public hostname for ACME HTTPS and pairing URLs,
+.B \-\-no\-tls
+disables TLS for testing.
+.TP
+.B sync-connect
+Start the TUI connected to a remote sync server
+.RB ( \-h
+host,
+.B \-p
+port,
+.B \-\-client\-cert
+and
+.B \-\-client\-key
+for mTLS).
+.TP
+.B sync-upload-attachments
+Upload all local attachments to the sync server.
+.TP
+.B sync-reset
+Force a full resync by resetting the last-sync timestamp.
+.TP
+.B cert
+Manage mTLS certificates:
+.B cert issue \fINAME\fR
+creates a client certificate and shows a QR code for pairing the
+Android app.
+.TP
+.B user
+Manage users for multi-user sync.
+.TP
+.B invite
+Manage invite codes for self-service registration.
+.TP
+.B setup-extension
+Register the browser extension's native messaging host for Chrome,
+Chromium, and Firefox in the current user's profile. Not needed when
+cloodoo was installed from the RPM or DEB package, which register the
+host system-wide.
+.TP
+.B native-host
+Native messaging host for the browser extension (started by the
+browser; internal use).
+.TP
+.B enrich-pending
+Enrich TODOs that are pending enrichment (internal use).
+.SH FILES
+.TP
+.I ~/.local/share/cloodoo/cloodoo.db
+Main SQLite database (temporal, append-only, WAL mode).
+.TP
+.I ~/.local/share/cloodoo/certs/
+Certificate authority and client certificates for sync.
+.TP
+.I ~/.config/cloodoo/config.lisp
+LLM provider configuration: \fB:provider\fR (:gemini, :openai,
+:anthropic, :ollama), \fB:model\fR, \fB:api\-key\-env\fR, and optional
+\fB:endpoint\fR for OpenAI-compatible or Ollama servers.
+.TP
+.I ~/.config/cloodoo/user-context.md
+Personal context supplied to the LLM for better tag and priority
+inference.
+.TP
+.I ~/.config/cloodoo/sync-config.lisp
+Server hostname and port for automatic sync connection.
+.SH ENVIRONMENT
+The LLM API key is read from the environment variable named by
+.B :api\-key\-env
+in the configuration file (for example
+.BR GEMINI_API_KEY ,
+.BR OPENAI_API_KEY ,
+or
+.BR ANTHROPIC_API_KEY ).
+.SH EXAMPLES
+.TP
+Add a task due tomorrow:
+.B cloodoo add \(dqRenew passport\(dq \-p high \-d tomorrow \-t errands
+.TP
+Start a sync server:
+.B cloodoo sync-server \-\-hostname todo.example.com
+.TP
+Pair a device:
+.B cloodoo cert issue phone
+.TP
+Export this week's agenda to PDF:
+.B cloodoo export \-\-pdf \-o agenda.pdf
+.SH SEE ALSO
+Project page and documentation:
+.UR https://github.com/atgreen/cloodoo
+.UE
+.SH AUTHOR
+Anthony Green <green@moxielogic.com>

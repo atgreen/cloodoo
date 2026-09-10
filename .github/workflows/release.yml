@@ -224,6 +224,7 @@ jobs:
         # Native messaging host files (installed system-wide by the spec)
         mkdir -p /tmp/cloodoo-${VERSION}/releng
         cp -r releng/native-messaging /tmp/cloodoo-${VERSION}/releng/
+        cp releng/cloodoo.1 /tmp/cloodoo-${VERSION}/releng/
 
         # Packed extension + external-extension prefs (when signing key set)
         if [ -f cloodoo.crx ]; then
@@ -348,6 +349,10 @@ jobs:
         mkdir -p "${DOC_DIR}"
         cp releng/debian/copyright "${DOC_DIR}/copyright"
         cp THIRD-PARTY-LICENSES README.md "${DOC_DIR}/"
+
+        # Man page (gzip -n for reproducibility, per Debian policy)
+        mkdir -p "${PKG}/usr/share/man/man1"
+        gzip -9n < releng/cloodoo.1 > "${PKG}/usr/share/man/man1/cloodoo.1.gz"
 
         # Native messaging host (system-wide, so no per-user setup-extension)
         install -D -m 755 releng/native-messaging/cloodoo-native-host \
