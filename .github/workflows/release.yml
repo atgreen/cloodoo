@@ -54,10 +54,13 @@ jobs:
         sudo apt-get install -y sbcl
 
     - name: Install ocicl
+      env:
+        GH_TOKEN: ${{ github.token }}
       run: |
-        OCICL_VERSION=$(curl -s https://api.github.com/repos/ocicl/ocicl/releases/latest | grep '"tag_name"' | sed -E 's/.*"v([^"]+)".*/\1/')
-        curl -sLO https://github.com/ocicl/ocicl/releases/latest/download/ocicl_${OCICL_VERSION}-1_amd64.deb
-        sudo dpkg -i ocicl_${OCICL_VERSION}-1_amd64.deb
+        # Authenticated download: the anonymous releases API is rate-limited
+        # and returns empty on 403, which broke tag builds (v0.2.2).
+        gh release download --repo ocicl/ocicl --pattern '*_amd64.deb' --dir /tmp
+        sudo dpkg -i /tmp/ocicl_*_amd64.deb
         ocicl setup > ~/.sbclrc
         ocicl version
 
@@ -306,10 +309,13 @@ jobs:
           libsqlite3-dev libssl-dev libzstd-dev dpkg-dev fakeroot libglib2.0-bin
 
     - name: Install ocicl
+      env:
+        GH_TOKEN: ${{ github.token }}
       run: |
-        OCICL_VERSION=$(curl -s https://api.github.com/repos/ocicl/ocicl/releases/latest | grep '"tag_name"' | sed -E 's/.*"v([^"]+)".*/\1/')
-        curl -sLO https://github.com/ocicl/ocicl/releases/latest/download/ocicl_${OCICL_VERSION}-1_amd64.deb
-        sudo dpkg -i ocicl_${OCICL_VERSION}-1_amd64.deb
+        # Authenticated download: the anonymous releases API is rate-limited
+        # and returns empty on 403, which broke tag builds (v0.2.2).
+        gh release download --repo ocicl/ocicl --pattern '*_amd64.deb' --dir /tmp
+        sudo dpkg -i /tmp/ocicl_*_amd64.deb
         ocicl setup > ~/.sbclrc
 
     - name: Install dependencies
