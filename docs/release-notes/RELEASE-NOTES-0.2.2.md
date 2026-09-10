@@ -16,5 +16,9 @@
   theme, and the Gmail button inherits Gmail's own toolbar color
   instead of forcing light-theme grey
 - RPM and DEB now install `README.md` under `/usr/share/doc/cloodoo/`
+- **GNOME extension from packages actually loads now**: the packaged
+  extension was missing `gschemas.compiled` and failed on startup; it
+  is now compiled at package build time. Packages also recommend
+  `zenity`, which the capture dialog requires.
 
 **Full Changelog**: https://github.com/atgreen/cloodoo/compare/v0.2.1...v0.2.2
