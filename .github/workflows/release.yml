@@ -3,6 +3,15 @@ name: Release
 on:
   push:
     tags: ['v*']
+  # Manual dry-run: builds and signs all packages to validate the workflow
+  # without publishing (create-release and the repo/Pages jobs are gated to
+  # tag pushes).
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to build (dry-run, e.g. 0.1.3)'
+        required: true
+        default: '0.0.0'
 
 permissions:
   contents: write
@@ -11,9 +20,29 @@ env:
   OCICL_REPO: https://github.com/ocicl/ocicl
 
 jobs:
+  extract-version:
+    name: Extract Version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+    - name: Extract version from tag
+      id: version
+      run: |
+        # Tag push: strip the leading 'v'. Manual dry-run: use the input.
+        if [ -n "${{ github.event.inputs.version }}" ]; then
+          VERSION="${{ github.event.inputs.version }}"
+        else
+          VERSION="${GITHUB_REF_NAME#v}"
+        fi
+        echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
   build-linux:
     name: Linux x86_64 Binary
+    needs: extract-version
     runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ needs.extract-version.outputs.version }}
 
     steps:
     - name: Checkout code
@@ -35,6 +64,20 @@ jobs:
     - name: Install dependencies
       run: ocicl install
 
+    - name: Generate SBOM
+      run: |
+        ocicl create-sbom cyclonedx cloodoo-sbom.json
+        ocicl create-sbom spdx cloodoo-sbom.spdx.json
+
+    - name: Upload SBOM
+      uses: actions/upload-artifact@v4
+      with:
+        name: sbom
+        path: |
+          cloodoo-sbom.json
+          cloodoo-sbom.spdx.json
+        retention-days: 5
+
     - name: Build ag-protoc
       run: make ag-protoc
 
@@ -52,13 +95,9 @@ jobs:
     - name: Build executable
       run: make cloodoo
 
-    - name: Extract version from tag
-      id: version
-      run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
-
     - name: Package tarball
       run: |
-        TARDIR="cloodoo-${{ steps.version.outputs.VERSION }}-linux-x86_64"
+        TARDIR="cloodoo-${VERSION}-linux-x86_64"
         mkdir "$TARDIR"
         cp cloodoo LICENSE README.md "$TARDIR/"
 
@@ -85,15 +124,18 @@ jobs:
 
   build-rpm:
     name: Fedora RPM
+    needs: extract-version
     runs-on: ubuntu-latest
     container: fedora:latest
+    env:
+      VERSION: ${{ needs.extract-version.outputs.version }}
 
     steps:
     - name: Install build tools
       run: |
         dnf install -y git make gcc gcc-c++ \
           sbcl sqlite-devel openssl-devel libzstd-devel \
-          rpm-build rpmdevtools libfixposix-devel
+          rpm-build rpmdevtools rpm-sign gnupg2 libfixposix-devel
 
     - name: Checkout code
       uses: actions/checkout@v4
@@ -121,16 +163,11 @@ jobs:
     - name: Build executable
       run: make cloodoo
 
-    - name: Extract version from tag
-      id: version
-      run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
-
     - name: Set up rpmbuild tree
       run: rpmdev-setuptree
 
     - name: Create source tarball for rpmbuild
       run: |
-        VERSION="${{ steps.version.outputs.VERSION }}"
         mkdir -p /tmp/cloodoo-${VERSION}
         cp cloodoo LICENSE README.md /tmp/cloodoo-${VERSION}/
 
@@ -150,11 +187,33 @@ jobs:
 
     - name: Build RPM
       run: |
-        VERSION="${{ steps.version.outputs.VERSION }}"
         rpmbuild -bb \
           --define "version ${VERSION}" \
           --define "_binary_payload w6.zstdio" \
           releng/cloodoo.spec
+
+    - name: Sign RPMs
+      env:
+        RPM_GPG_PRIVATE_KEY: ${{ secrets.RPM_GPG_PRIVATE_KEY }}
+      if: ${{ env.RPM_GPG_PRIVATE_KEY != '' }}
+      run: |
+        # Configure gpg for non-interactive use BEFORE first gpg invocation
+        mkdir -p ~/.gnupg
+        chmod 700 ~/.gnupg
+        echo "allow-loopback-pinentry" > ~/.gnupg/gpg-agent.conf
+        echo "pinentry-mode loopback" > ~/.gnupg/gpg.conf
+        # Import signing key
+        echo "${RPM_GPG_PRIVATE_KEY}" | base64 -d | gpg --batch --import
+        GPG_NAME=$(gpg --list-secret-keys --with-colons | awk -F: '/^uid/{print $10; exit}')
+        echo "Signing as: ${GPG_NAME}"
+        # Configure rpm macros — only set key name, use default sign command
+        echo "%_signature gpg" > ~/.rpmmacros
+        echo "%_gpg_name ${GPG_NAME}" >> ~/.rpmmacros
+        # Sign packages
+        rpmsign --addsign ~/rpmbuild/RPMS/*/*.rpm
+        # Import public key into rpm db and verify
+        gpg --export --armor "${GPG_NAME}" | rpm --import -
+        rpm --checksig ~/rpmbuild/RPMS/*/*.rpm
 
     - name: Upload artifact
       uses: actions/upload-artifact@v4
@@ -165,7 +224,10 @@ jobs:
 
   build-deb:
     name: Debian/Ubuntu DEB
+    needs: extract-version
     runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ needs.extract-version.outputs.version }}
 
     steps:
     - name: Checkout code
@@ -196,13 +258,8 @@ jobs:
     - name: Build executable
       run: make cloodoo
 
-    - name: Extract version from tag
-      id: version
-      run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
-
     - name: Build DEB package
       run: |
-        VERSION="${{ steps.version.outputs.VERSION }}"
         PKG="cloodoo_${VERSION}-1_amd64"
         mkdir -p "${PKG}/DEBIAN"
         mkdir -p "${PKG}/usr/bin"
@@ -242,6 +299,23 @@ jobs:
 
         fakeroot dpkg-deb --build "${PKG}"
 
+    - name: Sign DEB package
+      env:
+        DEB_GPG_PRIVATE_KEY: ${{ secrets.RPM_GPG_PRIVATE_KEY }}
+      if: ${{ env.DEB_GPG_PRIVATE_KEY != '' }}
+      run: |
+        sudo apt-get install -y debsigs gpg
+        # Configure gpg for non-interactive use
+        mkdir -p ~/.gnupg
+        chmod 700 ~/.gnupg
+        echo "allow-loopback-pinentry" > ~/.gnupg/gpg-agent.conf
+        echo "pinentry-mode loopback" > ~/.gnupg/gpg.conf
+        # Import signing key
+        echo "${DEB_GPG_PRIVATE_KEY}" | base64 -d | gpg --batch --import
+        GPG_KEYID=$(gpg --list-secret-keys --with-colons | awk -F: '/^fpr/{print $10; exit}')
+        echo "Signing with key: ${GPG_KEYID}"
+        debsigs --sign=origin -k "${GPG_KEYID}" cloodoo_*_amd64.deb
+
     - name: Upload artifact
       uses: actions/upload-artifact@v4
       with:
@@ -251,7 +325,10 @@ jobs:
 
   build-macos-arm64:
     name: macOS ARM64
+    needs: extract-version
     runs-on: macos-latest
+    env:
+      VERSION: ${{ needs.extract-version.outputs.version }}
 
     steps:
     - name: Checkout code
@@ -283,13 +360,9 @@ jobs:
     - name: Build executable
       run: make cloodoo
 
-    - name: Extract version from tag
-      id: version
-      run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
-
     - name: Package tarball
       run: |
-        TARDIR="cloodoo-${{ steps.version.outputs.VERSION }}-macos-arm64"
+        TARDIR="cloodoo-${VERSION}-macos-arm64"
         mkdir "$TARDIR"
         cp cloodoo LICENSE README.md "$TARDIR/"
         tar czf "${TARDIR}.tar.gz" "$TARDIR"
@@ -303,7 +376,10 @@ jobs:
 
   build-macos-x64:
     name: macOS x64
+    needs: extract-version
     runs-on: macos-15-intel
+    env:
+      VERSION: ${{ needs.extract-version.outputs.version }}
 
     steps:
     - name: Checkout code
@@ -335,13 +411,9 @@ jobs:
     - name: Build executable
       run: make cloodoo
 
-    - name: Extract version from tag
-      id: version
-      run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
-
     - name: Package tarball
       run: |
-        TARDIR="cloodoo-${{ steps.version.outputs.VERSION }}-macos-x64"
+        TARDIR="cloodoo-${VERSION}-macos-x64"
         mkdir "$TARDIR"
         cp cloodoo LICENSE README.md "$TARDIR/"
         tar czf "${TARDIR}.tar.gz" "$TARDIR"
@@ -355,7 +427,10 @@ jobs:
 
   build-android:
     name: Android APK
+    needs: extract-version
     runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ needs.extract-version.outputs.version }}
 
     steps:
     - name: Checkout code
@@ -393,14 +468,10 @@ jobs:
         cd android
         ./gradlew test --no-daemon --stacktrace
 
-    - name: Extract version from tag
-      id: version
-      run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
-
     - name: Rename APK
       run: |
         cp android/app/build/outputs/apk/debug/app-debug.apk \
-           cloodoo-${{ steps.version.outputs.VERSION }}-android.apk
+           cloodoo-${VERSION}-android.apk
 
     - name: Upload artifact
       uses: actions/upload-artifact@v4
@@ -409,24 +480,109 @@ jobs:
         path: cloodoo-*-android.apk
         retention-days: 5
 
+  sign-artifacts:
+    name: Cosign Tarballs
+    needs: [build-linux, build-macos-arm64, build-macos-x64]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+    - name: Download Linux tarball
+      uses: actions/download-artifact@v4
+      with:
+        name: linux-x86_64-tarball
+        path: ./artifacts
+
+    - name: Download macOS ARM64 tarball
+      uses: actions/download-artifact@v4
+      with:
+        name: macos-arm64-tarball
+        path: ./artifacts
+
+    - name: Download macOS x64 tarball
+      uses: actions/download-artifact@v4
+      with:
+        name: macos-x64-tarball
+        path: ./artifacts
+
+    - name: Install Cosign
+      uses: sigstore/cosign-installer@v3
+
+    - name: Sign tarballs with Cosign
+      run: |
+        cd artifacts
+        for f in *.tar.gz; do
+          cosign sign-blob --yes --bundle "${f}.bundle" "$f"
+        done
+
+    - name: Upload signed artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: cosign-bundles
+        path: artifacts/*.bundle
+        retention-days: 5
+
+  generate-provenance-subjects:
+    name: Provenance Subjects
+    needs: [build-linux, build-rpm, build-deb, build-macos-arm64, build-macos-x64, build-android]
+    runs-on: ubuntu-latest
+    outputs:
+      hashes: ${{ steps.hash.outputs.hashes }}
+
+    steps:
+    - name: Download all build artifacts
+      uses: actions/download-artifact@v4
+      with:
+        path: artifacts
+
+    - name: Generate hashes for SLSA provenance
+      id: hash
+      run: |
+        cd artifacts
+        find . -type f \( -name '*.rpm' -o -name '*.deb' -o -name '*.tar.gz' -o -name '*.apk' \) \
+          -exec sha256sum {} \; | sed 's|  \./[^/]*/|  |' > checksums.txt
+        cat checksums.txt
+        echo "hashes=$(base64 -w0 < checksums.txt)" >> "$GITHUB_OUTPUT"
+
+  slsa-provenance:
+    needs: [generate-provenance-subjects]
+    permissions:
+      actions: read
+      id-token: write
+      contents: write
+    # NOTE: the SLSA generator must be referenced by tag, not a commit SHA —
+    # it validates the builder binary against its release tag.
+    uses: slsa-framework/slsa-github-generator/.github/workflows/generator_generic_slsa3.yml@v2.1.0
+    with:
+      base64-subjects: "${{ needs.generate-provenance-subjects.outputs.hashes }}"
+      # The provenance is picked up from the workflow artifact by
+      # create-release; don't let the generator touch the release itself.
+      upload-assets: false
+      provenance-name: cloodoo-provenance.intoto.jsonl
+
   create-release:
     name: Create GitHub Release
+    # Publish only for real tag pushes; manual dry-runs build but don't release.
+    if: ${{ github.event_name == 'push' }}
     runs-on: ubuntu-latest
     needs:
+      - extract-version
       - build-linux
       - build-rpm
       - build-deb
       - build-macos-arm64
       - build-macos-x64
       - build-android
+      - sign-artifacts
+      - slsa-provenance
+    env:
+      VERSION: ${{ needs.extract-version.outputs.version }}
 
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
-
-    - name: Extract version from tag
-      id: version
-      run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
 
     - name: Download all artifacts
       uses: actions/download-artifact@v4
@@ -439,14 +595,22 @@ jobs:
     - name: Gather release files
       run: |
         mkdir release-files
-        find artifacts -type f \( -name '*.tar.gz' -o -name '*.rpm' -o -name '*.deb' -o -name '*.apk' \) \
+        find artifacts -type f \( -name '*.tar.gz' -o -name '*.rpm' -o -name '*.deb' \
+          -o -name '*.apk' -o -name '*.bundle' -o -name 'cloodoo-sbom*.json' \
+          -o -name '*.intoto.jsonl' \) \
           -exec cp {} release-files/ \;
         ls -la release-files/
+
+    - name: Generate unified checksums
+      run: |
+        cd release-files
+        sha256sum * > ../checksums.sha256
+        mv ../checksums.sha256 .
+        cat checksums.sha256
 
     - name: Load release notes (if available)
       id: notes
       run: |
-        VERSION="${{ steps.version.outputs.VERSION }}"
         NOTES_FILE="docs/release-notes/RELEASE-NOTES-${VERSION}.md"
         if [ -f "$NOTES_FILE" ]; then
           echo "NOTES_FILE=$NOTES_FILE" >> "$GITHUB_OUTPUT"
@@ -458,7 +622,6 @@ jobs:
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: |
-        VERSION="${{ steps.version.outputs.VERSION }}"
         NOTES_FILE="${{ steps.notes.outputs.NOTES_FILE }}"
         NOTES_FLAG=""
         if [ -n "$NOTES_FILE" ]; then
@@ -471,3 +634,275 @@ jobs:
           --title "Cloodoo v${VERSION}" \
           $NOTES_FLAG \
           release-files/*
+
+  build-rpm-repo:
+    name: Build RPM Repository
+    needs: [create-release, extract-version]
+    runs-on: ubuntu-latest
+    env:
+      TAG: v${{ needs.extract-version.outputs.version }}
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Install createrepo_c
+      run: sudo apt-get update && sudo apt-get install -y createrepo-c
+
+    - name: Download RPM assets from release
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        mkdir -p /tmp/rpms
+        gh release download "${TAG}" --pattern '*.rpm' --dir /tmp/rpms --skip-existing
+        echo "Downloaded RPMs:"
+        ls -lh /tmp/rpms/
+
+    - name: Build repodata
+      run: createrepo_c /tmp/rpms
+
+    - name: Rewrite package locations to release asset URLs
+      run: |
+        REPO="${{ github.repository }}"
+        BASE="https://github.com/${REPO}/releases/download/${TAG}"
+
+        cd /tmp/rpms/repodata
+
+        # Decompress primary.xml
+        gunzip -f *-primary.xml.gz
+        PRIMARY=$(ls *-primary.xml)
+
+        # Replace relative hrefs with absolute GitHub URLs
+        sed -i "s|<location href=\"\([^\"]*\.rpm\)\"|<location href=\"${BASE}/\1\"|g" "${PRIMARY}"
+
+        # Recompress
+        gzip -9 "${PRIMARY}"
+
+        # Rebuild repomd.xml with correct checksums
+        cd /tmp/rpms
+        REPODATA=repodata
+
+        cat > "${REPODATA}/repomd.xml" <<'XMLHEADER'
+        <?xml version="1.0" encoding="UTF-8"?>
+        <repomd xmlns="http://linux.duke.edu/metadata/repo">
+        XMLHEADER
+
+        for gz in "${REPODATA}"/*.xml.gz; do
+          fname="$(basename "${gz}")"
+          # Type is e.g. "primary" from "abc123-primary.xml.gz"
+          type="$(echo "${fname}" | sed 's/.*-\([a-z_]*\)\.xml\.gz/\1/')"
+
+          checksum="$(sha256sum "${gz}" | awk '{print $1}')"
+          size="$(stat -c%s "${gz}")"
+
+          open_file="${gz%.gz}"
+          gunzip -k -f "${gz}"
+          open_checksum="$(sha256sum "${open_file}" | awk '{print $1}')"
+          open_size="$(stat -c%s "${open_file}")"
+          rm -f "${open_file}"
+
+          cat >> "${REPODATA}/repomd.xml" <<XMLDATA
+          <data type="${type}">
+            <checksum type="sha256">${checksum}</checksum>
+            <open-checksum type="sha256">${open_checksum}</open-checksum>
+            <location href="repodata/${fname}"/>
+            <size>${size}</size>
+            <open-size>${open_size}</open-size>
+          </data>
+        XMLDATA
+        done
+
+        echo "</repomd>" >> "${REPODATA}/repomd.xml"
+
+        # Clean up indentation from heredoc
+        sed -i 's/^        //' "${REPODATA}/repomd.xml"
+
+    - name: Sign repomd.xml and export public key
+      env:
+        RPM_GPG_PRIVATE_KEY: ${{ secrets.RPM_GPG_PRIVATE_KEY }}
+      if: ${{ env.RPM_GPG_PRIVATE_KEY != '' }}
+      run: |
+        echo "${RPM_GPG_PRIVATE_KEY}" | base64 -d | gpg --batch --import
+        gpg --batch --detach-sign --armor /tmp/rpms/repodata/repomd.xml
+        gpg --batch --export --armor > /tmp/rpms/RPM-GPG-KEY-cloodoo
+
+    - name: Upload RPM repo artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: rpm-repo
+        path: /tmp/rpms/repodata/
+        include-hidden-files: false
+
+    - name: Upload RPM GPG key
+      env:
+        RPM_GPG_PRIVATE_KEY: ${{ secrets.RPM_GPG_PRIVATE_KEY }}
+      if: ${{ env.RPM_GPG_PRIVATE_KEY != '' }}
+      uses: actions/upload-artifact@v4
+      with:
+        name: rpm-repo-key
+        path: /tmp/rpms/RPM-GPG-KEY-cloodoo
+
+  build-deb-repo:
+    name: Build APT Repository
+    needs: [create-release, extract-version]
+    runs-on: ubuntu-latest
+    env:
+      TAG: v${{ needs.extract-version.outputs.version }}
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Install APT repo tools
+      run: sudo apt-get update && sudo apt-get install -y dpkg-dev gpg
+
+    - name: Download DEB assets from release
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        mkdir -p /tmp/debs
+        gh release download "${TAG}" --pattern '*.deb' --dir /tmp/debs --skip-existing
+        echo "Downloaded DEBs:"
+        ls -lh /tmp/debs/
+
+    - name: Import GPG key
+      env:
+        DEB_GPG_PRIVATE_KEY: ${{ secrets.RPM_GPG_PRIVATE_KEY }}
+      if: ${{ env.DEB_GPG_PRIVATE_KEY != '' }}
+      run: |
+        echo "${DEB_GPG_PRIVATE_KEY}" | base64 -d | gpg --batch --import
+        GPG_KEY_ID=$(gpg --list-secret-keys --with-colons | awk -F: '/^fpr/{print $10; exit}')
+        echo "GPG_KEY_ID=${GPG_KEY_ID}" >> "$GITHUB_ENV"
+        # Export public key for the repo
+        gpg --batch --export --armor > /tmp/debs/cloodoo-archive-keyring.gpg
+
+    - name: Build APT repository
+      run: |
+        REPO_DIR=/tmp/apt-repo
+        mkdir -p "${REPO_DIR}/pool/main"
+        mkdir -p "${REPO_DIR}/dists/stable/main/binary-amd64"
+
+        # Copy new .deb files to pool
+        cp /tmp/debs/*.deb "${REPO_DIR}/pool/main/"
+
+        # Keep only the latest .deb for each package name (avoid repo bloat)
+        cd "${REPO_DIR}/pool/main"
+        for pkg in $(ls *.deb | sed 's/_[0-9].*//' | sort -u); do
+          # Keep only the newest version of each package
+          ls -t ${pkg}_*.deb | tail -n +2 | xargs rm -f 2>/dev/null || true
+        done
+        cd "${REPO_DIR}"
+
+        # Generate Packages file
+        dpkg-scanpackages pool/main > dists/stable/main/binary-amd64/Packages
+        gzip -9c dists/stable/main/binary-amd64/Packages > dists/stable/main/binary-amd64/Packages.gz
+
+        # Generate Release file
+        cd dists/stable
+        cat > Release <<EOF
+        Origin: cloodoo
+        Label: cloodoo
+        Suite: stable
+        Codename: stable
+        Date: $(date -Ru)
+        Architectures: amd64
+        Components: main
+        Description: Cloodoo APT repository
+        EOF
+        sed -i 's/^        //' Release
+
+        # Add checksums to Release file
+        {
+          echo "MD5Sum:"
+          for f in main/binary-amd64/Packages main/binary-amd64/Packages.gz; do
+            SIZE=$(stat -c%s "$f")
+            MD5=$(md5sum "$f" | awk '{print $1}')
+            printf " %s %16d %s\n" "$MD5" "$SIZE" "$f"
+          done
+          echo "SHA256:"
+          for f in main/binary-amd64/Packages main/binary-amd64/Packages.gz; do
+            SIZE=$(stat -c%s "$f")
+            SHA=$(sha256sum "$f" | awk '{print $1}')
+            printf " %s %16d %s\n" "$SHA" "$SIZE" "$f"
+          done
+        } >> Release
+
+    - name: Sign Release file
+      env:
+        DEB_GPG_PRIVATE_KEY: ${{ secrets.RPM_GPG_PRIVATE_KEY }}
+      if: ${{ env.DEB_GPG_PRIVATE_KEY != '' }}
+      run: |
+        cd /tmp/apt-repo/dists/stable
+        gpg --batch --yes --armor --detach-sign -o Release.gpg Release
+        gpg --batch --yes --armor --clearsign -o InRelease Release
+
+    - name: Copy keyring into repo
+      run: |
+        if [ -f /tmp/debs/cloodoo-archive-keyring.gpg ]; then
+          cp /tmp/debs/cloodoo-archive-keyring.gpg /tmp/apt-repo/
+        fi
+
+    - name: Upload DEB repo artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: deb-repo
+        path: /tmp/apt-repo/
+
+  deploy-pages:
+    name: Deploy Package Repos to Pages
+    needs: [build-rpm-repo, build-deb-repo]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Download RPM repo artifact
+      uses: actions/download-artifact@v4
+      with:
+        name: rpm-repo
+        path: docs/rpm-repo/repodata
+
+    - name: Download RPM GPG key
+      uses: actions/download-artifact@v4
+      with:
+        name: rpm-repo-key
+        path: docs/rpm-repo
+      continue-on-error: true
+
+    - name: Download DEB repo artifact
+      uses: actions/download-artifact@v4
+      with:
+        name: deb-repo
+        path: docs/deb-repo
+
+    - name: Generate repo config files
+      run: |
+        PAGES_URL="https://atgreen.github.io/cloodoo"
+        {
+          echo "[cloodoo]"
+          echo "name=Cloodoo"
+          echo "baseurl=${PAGES_URL}/rpm-repo/"
+          echo "enabled=1"
+          echo "gpgcheck=1"
+          echo "repo_gpgcheck=1"
+          echo "gpgkey=${PAGES_URL}/rpm-repo/RPM-GPG-KEY-cloodoo"
+        } > docs/rpm-repo/cloodoo.repo
+        echo "deb [signed-by=/usr/share/keyrings/cloodoo-archive-keyring.gpg] ${PAGES_URL}/deb-repo stable main" \
+          > docs/deb-repo/cloodoo.list
+
+    - name: Upload Pages artifact
+      uses: actions/upload-pages-artifact@v3
+      with:
+        path: docs/
+
+    - name: Deploy to GitHub Pages
+      id: deployment
+      uses: actions/deploy-pages@v4

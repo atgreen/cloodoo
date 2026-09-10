@@ -80,8 +80,47 @@ Once you push the tag, GitHub Actions will automatically build packages for all 
 #### GitHub Release
 
 7. **Create GitHub Release**
-   - Attaches all artifacts to the release
+   - Attaches all artifacts to the release, plus supply-chain extras:
+     SHA-256 checksums (`checksums.sha256`), Cosign signature bundles
+     (`*.bundle`), SLSA provenance (`cloodoo-provenance.intoto.jsonl`),
+     and SBOMs (`cloodoo-sbom.json` CycloneDX, `cloodoo-sbom.spdx.json` SPDX)
    - Release can be found at: `https://github.com/atgreen/cloodoo/releases/tag/vX.Y.Z`
+
+#### Package Repositories (GitHub Pages)
+
+8. **dnf and apt repositories**
+   - After the release is published, repo metadata is built (RPM `repodata/`
+     via createrepo_c, APT `dists/` + `pool/` via dpkg-scanpackages) and
+     deployed to GitHub Pages at `https://atgreen.github.io/cloodoo/`
+   - Package payloads are not copied to Pages; metadata points at the
+     GitHub release assets
+   - Install instructions are on the Pages landing page (`docs/index.html`)
+
+### Package Signing (optional)
+
+If the `RPM_GPG_PRIVATE_KEY` repository secret is set (a base64-encoded
+ASCII-armored GPG private key, no passphrase), CI signs:
+
+- RPM packages (`rpmsign --addsign`) and the repo's `repomd.xml`
+- DEB packages (`debsigs --sign=origin`) and the APT `Release` file
+  (`Release.gpg` + `InRelease`)
+- The public key is published on Pages as `rpm-repo/RPM-GPG-KEY-cloodoo`
+  and `deb-repo/cloodoo-archive-keyring.gpg`
+
+Without the secret, all signing steps are skipped and the release is
+still produced (unsigned). To create the secret:
+
+```bash
+gpg --export-secret-keys --armor KEYID | base64 -w0 | \
+  gh secret set RPM_GPG_PRIVATE_KEY --repo atgreen/cloodoo
+```
+
+### Dry Run
+
+To validate the whole pipeline without publishing, trigger the workflow
+manually (Actions → Release → Run workflow) with a version number. All
+packages are built and signed, but the release, package repos, and Pages
+deploy are skipped.
 
 ### 6. Verify Release
 
@@ -194,5 +233,8 @@ releng/
 - [ ] Add Linux ARM64 builds
 - [ ] Release-signed Android APK
 - [ ] Automate Homebrew formula updates
-- [ ] Sign RPM packages with GPG
-- [ ] Sign DEB packages with GPG
+- [x] Sign RPM packages with GPG (needs `RPM_GPG_PRIVATE_KEY` secret)
+- [x] Sign DEB packages with GPG (needs `RPM_GPG_PRIVATE_KEY` secret)
+- [x] SBOM, SLSA provenance, Cosign bundles
+- [x] dnf/apt repositories on GitHub Pages
+- [x] Manual dry-run of the release pipeline

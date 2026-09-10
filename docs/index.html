@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Cloodoo Package Repositories</title>
+<style>
+  body { font-family: system-ui, sans-serif; max-width: 46rem; margin: 2rem auto; padding: 0 1rem; line-height: 1.5; color: #222; background: #fff; }
+  @media (prefers-color-scheme: dark) { body { color: #ddd; background: #1a1a1a; } pre { background: #2a2a2a; } }
+  pre { background: #f4f4f4; padding: 0.75rem 1rem; border-radius: 6px; overflow-x: auto; }
+  h1 { font-size: 1.6rem; }
+  h2 { font-size: 1.2rem; margin-top: 2rem; }
+  a { color: #3574d4; }
+</style>
+</head>
+<body>
+<h1>Cloodoo Package Repositories</h1>
+<p>Cloodoo is a multi-device TODO manager with real-time sync.
+See the <a href="https://github.com/atgreen/cloodoo">project on GitHub</a>
+for sources, documentation, and other downloads (macOS, Android, tarballs).</p>
+
+<h2>Fedora / RHEL (dnf)</h2>
+<pre>sudo curl -o /etc/yum.repos.d/cloodoo.repo \
+  https://atgreen.github.io/cloodoo/rpm-repo/cloodoo.repo
+sudo dnf install cloodoo</pre>
+
+<h2>Debian / Ubuntu (apt)</h2>
+<pre>curl -fsSL https://atgreen.github.io/cloodoo/deb-repo/cloodoo-archive-keyring.gpg | \
+  sudo gpg --dearmor -o /usr/share/keyrings/cloodoo-archive-keyring.gpg
+sudo curl -o /etc/apt/sources.list.d/cloodoo.list \
+  https://atgreen.github.io/cloodoo/deb-repo/cloodoo.list
+sudo apt update &amp;&amp; sudo apt install cloodoo</pre>
+
+<h2>Verifying releases</h2>
+<p>Release artifacts ship with SHA-256 checksums, Cosign signature bundles,
+SLSA provenance, and an SBOM — all attached to each
+<a href="https://github.com/atgreen/cloodoo/releases">GitHub release</a>.</p>
+</body>
+</html>
