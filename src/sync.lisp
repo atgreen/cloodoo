@@ -1464,6 +1464,7 @@
 (defun refresh-model-todos (model)
   "Refresh the model's todo list from the database."
   (setf (model-todos model) (load-todos))
+  (drop-all-redo-entries model)
   (setf (model-visible-todos-dirty model) t)
   (notify-tui-refresh))
 

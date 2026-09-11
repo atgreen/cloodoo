@@ -143,10 +143,8 @@
         scheduled_date TEXT,
         due_date TEXT,
         tags TEXT,
-        estimated_minutes INTEGER,
         location_info TEXT,
         url TEXT,
-        parent_id TEXT,
         created_at TEXT NOT NULL,
         completed_at TEXT,
         valid_from TEXT NOT NULL,
@@ -643,15 +641,15 @@
 (defun row-to-todo (row)
   "Convert a database row to a TODO object.
    ROW is a list: (row_id id title description priority status scheduled_date
-                  due_date tags estimated_minutes location_info url parent_id
+                  due_date tags location_info url
                   created_at completed_at valid_from valid_to device_id
                   repeat_interval repeat_unit enriching_p attachment_hashes)"
   (destructuring-bind (row-id id title description priority status
-                       scheduled-date due-date tags estimated-minutes
-                       location-info url parent-id created-at completed-at
+                       scheduled-date due-date tags
+                       location-info url created-at completed-at
                        valid-from valid-to device-id
                        &optional repeat-interval repeat-unit enriching-p attachment-hashes) row
-    (declare (ignore row-id valid-from valid-to parent-id estimated-minutes))
+    (declare (ignore row-id valid-from valid-to))
     (make-instance 'todo
                    :id id
                    :title title
@@ -691,9 +689,9 @@
       SELECT t.row_id, t.id, t.title,
              COALESCE(b1.content, t.description) as description,
              t.priority, t.status,
-             t.scheduled_date, t.due_date, t.tags, t.estimated_minutes,
+             t.scheduled_date, t.due_date, t.tags,
              COALESCE(b2.content, t.location_info) as location_info,
-             t.url, t.parent_id, t.created_at, t.completed_at,
+             t.url, t.created_at, t.completed_at,
              t.valid_from, t.valid_to, t.device_id, t.repeat_interval,
              t.repeat_unit, t.enriching_p, t.attachment_hashes
       FROM todos t
@@ -702,6 +700,36 @@
       WHERE t.valid_to IS NULL
       ORDER BY t.created_at DESC")))
       (mapcar #'row-to-todo rows))))
+
+(defun db-current-valid-from (todo-id)
+  "Return the valid_from of TODO-ID's current version, or NIL if none."
+  (with-db (db)
+    (let ((vf (sqlite:execute-single db
+                "SELECT valid_from FROM todos WHERE id = ? AND valid_to IS NULL"
+                todo-id)))
+      (unless (eql vf :null) vf))))
+
+(defun db-load-todo-version (todo-id valid-from)
+  "Load the version of TODO-ID whose valid_from is VALID-FROM, or NIL.
+   Used by undo/redo to restore historical versions as new current rows."
+  (with-db (db)
+    (let ((rows (sqlite:execute-to-list db "
+      SELECT t.row_id, t.id, t.title,
+             COALESCE(b1.content, t.description) as description,
+             t.priority, t.status,
+             t.scheduled_date, t.due_date, t.tags,
+             COALESCE(b2.content, t.location_info) as location_info,
+             t.url, t.created_at, t.completed_at,
+             t.valid_from, t.valid_to, t.device_id, t.repeat_interval,
+             t.repeat_unit, t.enriching_p, t.attachment_hashes
+      FROM todos t
+      LEFT JOIN blobs b1 ON t.description_hash = b1.hash
+      LEFT JOIN blobs b2 ON t.location_info_hash = b2.hash
+      WHERE t.id = ? AND t.valid_from = ?
+      LIMIT 1"
+      todo-id valid-from)))
+      (when rows
+        (row-to-todo (first rows))))))
 
 (defun db-load-todos-at (timestamp)
   "Load TODOs as they existed at TIMESTAMP (time-travel query).
@@ -714,9 +742,9 @@
         SELECT t.row_id, t.id, t.title,
                COALESCE(b1.content, t.description) as description,
                t.priority, t.status,
-               t.scheduled_date, t.due_date, t.tags, t.estimated_minutes,
+               t.scheduled_date, t.due_date, t.tags,
                COALESCE(b2.content, t.location_info) as location_info,
-               t.url, t.parent_id, t.created_at, t.completed_at,
+               t.url, t.created_at, t.completed_at,
                t.valid_from, t.valid_to, t.device_id, t.repeat_interval,
                t.repeat_unit, t.enriching_p, t.attachment_hashes
         FROM todos t
@@ -742,7 +770,6 @@
           (lt:format-rfc3339-timestring nil (todo-due-date todo)))
         (when (todo-tags todo)
           (jzon:stringify (coerce (todo-tags todo) 'vector)))
-        nil  ; estimated_minutes removed
         (when (todo-location-info todo)
           (let ((loc (todo-location-info todo)))
             (jzon:stringify
@@ -754,7 +781,6 @@
                     "website" (getf loc :website))
               :test #'equal))))
         (todo-url todo)
-        nil  ; parent-id removed - nested TODOs no longer supported
         (lt:format-rfc3339-timestring nil (todo-created-at todo))
         (when (todo-completed-at todo)
           (lt:format-rfc3339-timestring nil (todo-completed-at todo)))
@@ -793,15 +819,15 @@
       ;; Skip if data is unchanged
       (let ((current (sqlite:execute-to-list db
                        "SELECT title, description_hash, priority, status, scheduled_date,
-                               due_date, tags, estimated_minutes, location_info_hash, url,
-                               parent_id, completed_at, repeat_interval, repeat_unit,
+                               due_date, tags, location_info_hash, url,
+                               completed_at, repeat_interval, repeat_unit,
                                enriching_p, attachment_hashes
                         FROM todos WHERE id = ? AND valid_to IS NULL"
                        (todo-id todo))))
         (when (and current (= (length current) 1))
           (let* ((cur (first current))
                  (desc-hash (store-blob db (third values)))
-                 (loc-hash (store-blob db (tenth values))))
+                 (loc-hash (store-blob db (ninth values))))
             (when (and (equal (nth 0 cur) (second values))      ; title
                        (equal (nth 1 cur) desc-hash)              ; description
                        (equal (nth 2 cur) (fourth values))        ; priority
@@ -809,19 +835,17 @@
                        (equal (nth 4 cur) (sixth values))         ; scheduled_date
                        (equal (nth 5 cur) (seventh values))       ; due_date
                        (equal (nth 6 cur) (eighth values))        ; tags
-                       (eql   (nth 7 cur) (ninth values))         ; estimated_minutes
-                       (equal (nth 8 cur) loc-hash)               ; location_info
-                       (equal (nth 9 cur) (nth 10 values))        ; url
-                       (equal (nth 10 cur) (nth 11 values))       ; parent_id
-                       (equal (nth 11 cur) (nth 13 values))       ; completed_at
-                       (eql   (nth 12 cur) (nth 15 values))       ; repeat_interval
-                       (equal (nth 13 cur) (nth 16 values))       ; repeat_unit
-                       (eql   (nth 14 cur) (nth 17 values))       ; enriching_p
-                       (equal (nth 15 cur) (nth 18 values)))      ; attachment_hashes
+                       (equal (nth 7 cur) loc-hash)               ; location_info
+                       (equal (nth 8 cur) (nth 9 values))         ; url
+                       (equal (nth 9 cur) (nth 11 values))        ; completed_at
+                       (eql   (nth 10 cur) (nth 13 values))       ; repeat_interval
+                       (equal (nth 11 cur) (nth 14 values))       ; repeat_unit
+                       (eql   (nth 12 cur) (nth 15 values))       ; enriching_p
+                       (equal (nth 13 cur) (nth 16 values)))      ; attachment_hashes
               (return-from db-save-todo t)))))
       ;; Store large text fields as blobs
       (let ((desc-hash (store-blob db (third values)))
-            (loc-hash (store-blob db (tenth values))))
+            (loc-hash (store-blob db (ninth values))))
         ;; Start a transaction for atomicity
         (sqlite:execute-non-query db "BEGIN IMMEDIATE")
         (unwind-protect
@@ -835,22 +859,22 @@
                (apply #'sqlite:execute-non-query db
                  (if user-id
                      "INSERT INTO todos (id, title, description_hash, priority, status,
-                                        scheduled_date, due_date, tags, estimated_minutes,
-                                        location_info_hash, url, parent_id, created_at,
+                                        scheduled_date, due_date, tags,
+                                        location_info_hash, url, created_at,
                                         completed_at, valid_from, valid_to, device_id,
                                         repeat_interval, repeat_unit, enriching_p, attachment_hashes, user_id)
-                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?)"
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?)"
                      "INSERT INTO todos (id, title, description_hash, priority, status,
-                                        scheduled_date, due_date, tags, estimated_minutes,
-                                        location_info_hash, url, parent_id, created_at,
+                                        scheduled_date, due_date, tags,
+                                        location_info_hash, url, created_at,
                                         completed_at, valid_from, valid_to, device_id,
                                         repeat_interval, repeat_unit, enriching_p, attachment_hashes)
-                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?)")
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?)")
                  (append (list (first values) (second values) desc-hash (fourth values)
                                (fifth values) (sixth values) (seventh values) (eighth values)
-                               (ninth values) loc-hash (nth 10 values) (nth 11 values)
-                               (nth 12 values) (nth 13 values) now (nth 14 values)
-                               (nth 15 values) (nth 16 values) (nth 17 values) (nth 18 values))
+                               loc-hash (nth 9 values) (nth 10 values)
+                               (nth 11 values) now (nth 12 values)
+                               (nth 13 values) (nth 14 values) (nth 15 values) (nth 16 values))
                          (when user-id (list user-id))))
                (sqlite:execute-non-query db "COMMIT")
                (setf committed t)
@@ -886,19 +910,19 @@
              (dolist (todo unique-todos)
                (let* ((values (todo-to-db-values todo))
                       (desc-hash (store-blob db (third values)))
-                      (loc-hash (store-blob db (tenth values))))
+                      (loc-hash (store-blob db (ninth values))))
                  (sqlite:execute-non-query db "
                    INSERT INTO todos (id, title, description_hash, priority, status,
-                                      scheduled_date, due_date, tags, estimated_minutes,
-                                      location_info_hash, url, parent_id, created_at,
+                                      scheduled_date, due_date, tags,
+                                      location_info_hash, url, created_at,
                                       completed_at, valid_from, valid_to, device_id,
                                       repeat_interval, repeat_unit, enriching_p, attachment_hashes)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?)"
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?)"
                    (first values) (second values) desc-hash (fourth values)
                    (fifth values) (sixth values) (seventh values) (eighth values)
-                   (ninth values) loc-hash (nth 10 values) (nth 11 values)
-                   (nth 12 values) (nth 13 values) now (nth 14 values)
-                   (nth 15 values) (nth 16 values) (nth 17 values) (nth 18 values))))
+                   loc-hash (nth 9 values) (nth 10 values)
+                   (nth 11 values) now (nth 12 values)
+                   (nth 13 values) (nth 14 values) (nth 15 values) (nth 16 values))))
              (sqlite:execute-non-query db "COMMIT")
              (setf committed t))
         (unless committed
@@ -979,19 +1003,19 @@
                    (dolist (todo todos)
                      (let* ((values (todo-to-db-values todo))
                             (desc-hash (store-blob db (third values)))
-                            (loc-hash (store-blob db (tenth values))))
+                            (loc-hash (store-blob db (ninth values))))
                        (sqlite:execute-non-query db "
                          INSERT INTO todos (id, title, description_hash, priority, status,
-                                            scheduled_date, due_date, tags, estimated_minutes,
-                                            location_info_hash, url, parent_id, created_at,
+                                            scheduled_date, due_date, tags,
+                                            location_info_hash, url, created_at,
                                             completed_at, valid_from, valid_to, device_id,
                                             repeat_interval, repeat_unit, enriching_p, attachment_hashes)
-                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?)"
+                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?)"
                          (first values) (second values) desc-hash (fourth values)
                          (fifth values) (sixth values) (seventh values) (eighth values)
-                         (ninth values) loc-hash (nth 10 values) (nth 11 values)
-                         (nth 12 values) (nth 13 values) now (nth 14 values)
-                         (nth 15 values) (nth 16 values) (nth 17 values) (nth 18 values))))
+                         loc-hash (nth 9 values) (nth 10 values)
+                         (nth 11 values) now (nth 12 values)
+                         (nth 13 values) (nth 14 values) (nth 15 values) (nth 16 values))))
                    (sqlite:execute-non-query db "COMMIT")
                    (setf committed t))
               (unless committed
@@ -1899,11 +1923,10 @@
   "Convert a database row to a hash table for JSON sync response.
    Includes all fields including row_id, valid_from, valid_to for sync purposes."
   (destructuring-bind (row-id id title description priority status
-                       scheduled-date due-date tags estimated-minutes
-                       location-info url parent-id created-at completed-at
+                       scheduled-date due-date tags
+                       location-info url created-at completed-at
                        valid-from valid-to device-id
                        &optional repeat-interval repeat-unit enriching-p attachment-hashes) row
-    (declare (ignore estimated-minutes))
     (let ((ht (make-hash-table :test #'equal)))
       (setf (gethash "row_id" ht) row-id)
       (setf (gethash "id" ht) id)
@@ -1944,9 +1967,9 @@
         SELECT t.row_id, t.id, t.title,
                COALESCE(b1.content, t.description) as description,
                t.priority, t.status,
-               t.scheduled_date, t.due_date, t.tags, t.estimated_minutes,
+               t.scheduled_date, t.due_date, t.tags,
                COALESCE(b2.content, t.location_info) as location_info,
-               t.url, t.parent_id, t.created_at, t.completed_at,
+               t.url, t.created_at, t.completed_at,
                t.valid_from, t.valid_to, t.device_id, t.repeat_interval,
                t.repeat_unit, t.enriching_p, t.attachment_hashes
         FROM todos t
@@ -1958,9 +1981,9 @@
         SELECT t.row_id, t.id, t.title,
                COALESCE(b1.content, t.description) as description,
                t.priority, t.status,
-               t.scheduled_date, t.due_date, t.tags, t.estimated_minutes,
+               t.scheduled_date, t.due_date, t.tags,
                COALESCE(b2.content, t.location_info) as location_info,
-               t.url, t.parent_id, t.created_at, t.completed_at,
+               t.url, t.created_at, t.completed_at,
                t.valid_from, t.valid_to, t.device_id, t.repeat_interval,
                t.repeat_unit, t.enriching_p, t.attachment_hashes
         FROM todos t

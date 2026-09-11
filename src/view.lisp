@@ -1045,7 +1045,7 @@
                   ("S/L" . "Set sched/due")
                   ("&" . "Re-enrich")
                   ("T" . "Cycle theme")
-                  ("" . "")
+                  ("z/Z" . "Undo/redo")
                   ("" . ""))))
          (col3 (render-help-column "SIDEBAR"
                 '(("l" . "Toggle sidebar")

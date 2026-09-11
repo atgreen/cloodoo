@@ -486,6 +486,72 @@
                    (cloodoo::color-theme-name cloodoo::*current-theme*))))
     (cloodoo::activate-theme "terminal")))
 
+;;── Undo/Redo Tests ───────────────────────────────────────────────────────────
+
+(test db-todo-version-roundtrip-test
+  "Historical versions are loadable by (id, valid_from)."
+  (with-test-db
+    (let ((todo (cloodoo:make-todo "Version one")))
+      (cloodoo::save-todo todo)
+      (let ((vf1 (cloodoo::db-current-valid-from (cloodoo:todo-id todo))))
+        (is (stringp vf1))
+        (setf (cloodoo:todo-title todo) "Version two")
+        (cloodoo::save-todo todo)
+        (let ((vf2 (cloodoo::db-current-valid-from (cloodoo:todo-id todo))))
+          (is (not (equal vf1 vf2)))
+          (let ((old (cloodoo::db-load-todo-version (cloodoo:todo-id todo) vf1)))
+            (is (not (null old)))
+            (is (string= "Version one" (cloodoo:todo-title old)))))))))
+
+(test undo-redo-roundtrip-test
+  "Undo restores the prior version; redo restores the undone one."
+  (with-test-db
+    (let ((model (make-instance 'cloodoo::app-model))
+          (todo (cloodoo:make-todo "Original title")))
+      (cloodoo::save-todo todo)
+      (push todo (cloodoo::model-todos model))
+      (setf (cloodoo:todo-status todo) :completed)
+      (cloodoo::save-todo-recording-undo model todo)
+      (is (= 1 (length (cloodoo::model-undo-stack model))))
+      (let ((restored (cloodoo::undo-last-change model)))
+        (is (not (null restored)))
+        (is (eq :pending (cloodoo:todo-status restored))))
+      (is (= 0 (cloodoo::model-undo-cursor model)))
+      (let ((redone (cloodoo::redo-last-undo model)))
+        (is (not (null redone)))
+        (is (eq :completed (cloodoo:todo-status redone))))
+      (is (= 1 (cloodoo::model-undo-cursor model))))))
+
+(test undo-new-edit-drops-redo-test
+  "A new edit after undo truncates the redo tail."
+  (with-test-db
+    (let ((model (make-instance 'cloodoo::app-model))
+          (todo (cloodoo:make-todo "Task")))
+      (cloodoo::save-todo todo)
+      (push todo (cloodoo::model-todos model))
+      (setf (cloodoo:todo-priority todo) :high)
+      (cloodoo::save-todo-recording-undo model todo)
+      (cloodoo::undo-last-change model)
+      (let ((current (first (cloodoo::model-todos model))))
+        (setf (cloodoo:todo-priority current) :low)
+        (cloodoo::save-todo-recording-undo model current))
+      (is (= (cloodoo::model-undo-cursor model)
+             (length (cloodoo::model-undo-stack model))))
+      (is (null (cloodoo::redo-last-undo model))))))
+
+(test undo-restores-deleted-test
+  "Undo brings a soft-deleted todo back to its prior status."
+  (with-test-db
+    (let ((model (make-instance 'cloodoo::app-model))
+          (todo (cloodoo:make-todo "Doomed")))
+      (cloodoo::save-todo todo)
+      (push todo (cloodoo::model-todos model))
+      (setf (cloodoo:todo-status todo) :deleted)
+      (cloodoo::save-todo-recording-undo model todo)
+      (let ((restored (cloodoo::undo-last-change model)))
+        (is (not (null restored)))
+        (is (eq :pending (cloodoo:todo-status restored)))))))
+
 ;;── Run Tests ──────────────────────────────────────────────────────────────────
 
 (defun run-tests ()

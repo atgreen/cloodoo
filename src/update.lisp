@@ -34,6 +34,13 @@
       (error (e)
         (llog:warn "Failed to force full redraw" :error e)))))
 
+;;── Undo Entry ─────────────────────────────────────────────────────────────────
+
+(defstruct undo-entry
+  todo-id     ; id of the mutated todo
+  before-vf   ; valid_from of the version current before the edit
+  redo-vf)    ; valid_from of the version undone (set at undo time)
+
 ;;── Application State (Model) ──────────────────────────────────────────────────
 
 (defclass app-model ()
@@ -47,6 +54,14 @@
     :initform 0
     :accessor model-cursor
     :documentation "Currently selected item index.")
+   (undo-stack
+    :initform nil
+    :accessor model-undo-stack
+    :documentation "Session-local list of undo-entry structs, oldest first.")
+   (undo-cursor
+    :initform 0
+    :accessor model-undo-cursor
+    :documentation "Number of undo-stack entries currently applied (not undone).")
    (view-state
     :initarg :view-state
    :initform :list
@@ -797,6 +812,73 @@
 
       (t (values model nil)))))
 
+;;── Undo / Redo ────────────────────────────────────────────────────────────────
+;;; Undo is a compensating change, never a rollback: it appends a new current
+;;; row copied from an older version (git revert, not reset).  Redo is the same
+;;; primitive aimed at the version that was current before the undo.
+
+(defun record-undo (model todo)
+  "Record TODO's current DB version so the pending edit can be undone.
+   Must run BEFORE the edit is saved.  A new edit drops the redo tail."
+  (let ((vf (db-current-valid-from (todo-id todo))))
+    (when vf
+      (setf (model-undo-stack model)
+            (append (subseq (model-undo-stack model) 0 (model-undo-cursor model))
+                    (list (make-undo-entry :todo-id (todo-id todo) :before-vf vf))))
+      (setf (model-undo-cursor model) (length (model-undo-stack model))))))
+
+(defun save-todo-recording-undo (model todo)
+  "Record undo state for TODO, then save it."
+  (record-undo model todo)
+  (save-todo todo))
+
+(defun apply-restored-version (model todo)
+  "Install a historical TODO version as the new current version, updating
+   the database (which notifies sync as a normal change) and the model."
+  (save-todo todo)
+  (let ((pos (position (todo-id todo) (model-todos model)
+                       :key #'todo-id :test #'string=)))
+    (if pos
+        (setf (nth pos (model-todos model)) todo)
+        (push todo (model-todos model))))
+  (invalidate-visible-todos-cache model)
+  (refresh-tags-cache model)
+  (setf (model-cursor model)
+        (min (model-cursor model)
+             (max 0 (1- (length (get-visible-todos model)))))))
+
+(defun undo-last-change (model)
+  "Undo the most recent recorded change.  Returns the restored todo or NIL."
+  (when (plusp (model-undo-cursor model))
+    (let* ((entry (nth (1- (model-undo-cursor model)) (model-undo-stack model)))
+           (before (db-load-todo-version (undo-entry-todo-id entry)
+                                         (undo-entry-before-vf entry))))
+      ;; Remember what we're undoing so redo can bring it back
+      (setf (undo-entry-redo-vf entry)
+            (db-current-valid-from (undo-entry-todo-id entry)))
+      (decf (model-undo-cursor model))
+      (when before
+        (apply-restored-version model before)
+        before))))
+
+(defun redo-last-undo (model)
+  "Redo the most recently undone change.  Returns the restored todo or NIL."
+  (when (< (model-undo-cursor model) (length (model-undo-stack model)))
+    (let* ((entry (nth (model-undo-cursor model) (model-undo-stack model)))
+           (target (and (undo-entry-redo-vf entry)
+                        (db-load-todo-version (undo-entry-todo-id entry)
+                                              (undo-entry-redo-vf entry)))))
+      (incf (model-undo-cursor model))
+      (when target
+        (apply-restored-version model target)
+        target))))
+
+(defun drop-all-redo-entries (model)
+  "Drop undone entries after remote changes arrive so redo can never
+   silently clobber an unseen remote edit."
+  (setf (model-undo-stack model)
+        (subseq (model-undo-stack model) 0 (model-undo-cursor model))))
+
 ;;── List View Key Handling ─────────────────────────────────────────────────────
 
 (defun handle-list-keys (model msg)
@@ -902,7 +984,8 @@
                    (:low :medium)
                    (:medium :high)
                    (:high :high)))  ; Already at max
-           (save-todo todo)))
+           (invalidate-visible-todos-cache model)
+           (save-todo-recording-undo model todo)))
        (values model nil))
 
       ;; Decrease priority (Shift+Down)
@@ -914,7 +997,8 @@
                    (:high :medium)
                    (:medium :low)
                    (:low :low)))  ; Already at min
-           (save-todo todo)))
+           (invalidate-visible-todos-cache model)
+           (save-todo-recording-undo model todo)))
        (values model nil))
 
       ;; Go to top
@@ -977,7 +1061,7 @@
               (setf (todo-completed-at todo) nil)
               (setf (model-status-message model) "→ TODO")))
            ;; Save but don't invalidate cache - item stays in place
-           (save-todo todo)))
+           (save-todo-recording-undo model todo)))
        (values model nil))
 
       ;; View details (Enter)
@@ -1180,6 +1264,26 @@
            (setf (model-tag-dropdown-visible model) nil)
            (setf (model-tag-dropdown-cursor model) 0)
            (setf (model-view-state model) :inline-tags)))
+       (values model nil))
+
+      ;; Undo last change (z)
+      ((and (characterp key) (char= key #\z))
+       (let ((restored (undo-last-change model)))
+         (setf (model-status-message model)
+               (if restored
+                   (format nil "Undid: ~A" (sanitize-title-for-display
+                                            (todo-title restored)))
+                   "Nothing to undo")))
+       (values model nil))
+
+      ;; Redo last undo (Z)
+      ((and (characterp key) (char= key #\Z))
+       (let ((restored (redo-last-undo model)))
+         (setf (model-status-message model)
+               (if restored
+                   (format nil "Redid: ~A" (sanitize-title-for-display
+                                            (todo-title restored)))
+                   "Nothing to redo")))
        (values model nil))
 
       ;; Cycle colour theme (T)
@@ -1486,7 +1590,8 @@
                    (setf (todo-repeat-unit todo) (model-edit-repeat-unit model))
                    ;; Save tags
                    (setf (todo-tags todo) (reverse (model-edit-tags model)))
-                   (save-todo todo)
+                   (invalidate-visible-todos-cache model)
+                   (save-todo-recording-undo model todo)
                    ;; Refresh tags cache since tags may have changed
                    (refresh-tags-cache model))
                  (setf (model-view-state model) :list)
@@ -1597,7 +1702,8 @@
                         :key #'todo-id :test #'string=)))
          (when todo
            (setf (todo-tags todo) (reverse (model-edit-tags model)))
-           (save-todo todo)
+           (invalidate-visible-todos-cache model)
+           (save-todo-recording-undo model todo)
            (refresh-tags-cache model)))
        (setf (model-view-state model) :list)
        (setf (model-edit-todo-id model) nil)
@@ -1637,7 +1743,8 @@
                              :key #'todo-id :test #'string=)))
               (when todo
                 (setf (todo-tags todo) (reverse (model-edit-tags model)))
-                (save-todo todo)
+                (invalidate-visible-todos-cache model)
+                (save-todo-recording-undo model todo)
                 (refresh-tags-cache model)))
             (setf (model-view-state model) :list)
             (setf (model-edit-todo-id model) nil)
@@ -1710,19 +1817,11 @@
       ;; Confirm delete with y
       ((and (characterp key) (char-equal key #\y))
        (when (< (model-cursor model) (length todos))
-         (let* ((todo-to-delete (nth (model-cursor model) todos))
-                (all-todos (model-todos model))
-                ;; Get all descendants to delete as well
-                (descendants (get-descendants all-todos (todo-id todo-to-delete)))
-                (ids-to-delete (cons (todo-id todo-to-delete)
-                                     (mapcar #'todo-id descendants)))
-                (now (lt:now)))
-           ;; Mark items as deleted instead of removing
-           (dolist (todo all-todos)
-             (when (member (todo-id todo) ids-to-delete :test #'string=)
-               (setf (todo-status todo) :deleted)
-               (setf (todo-completed-at todo) now)
-               (save-todo todo)))
+         (let ((todo (nth (model-cursor model) todos)))
+           ;; Mark item as deleted instead of removing
+           (setf (todo-status todo) :deleted)
+           (setf (todo-completed-at todo) (lt:now))
+           (save-todo-recording-undo model todo)
            ;; Invalidate cache so deleted items disappear
            (invalidate-visible-todos-cache model)
            (setf (model-cursor model)
@@ -1749,7 +1848,7 @@
            (when (eq (todo-status todo) +status-completed+)
              (setf (todo-status todo) :deleted)
              (setf (todo-completed-at todo) now)
-             (save-todo todo))))
+             (save-todo-recording-undo model todo))))
        ;; Invalidate cache so deleted items disappear
        (invalidate-visible-todos-cache model)
        (setf (model-cursor model)
@@ -1778,7 +1877,7 @@
            (when (member tag (todo-tags todo) :test #'string=)
              (setf (todo-tags todo)
                    (remove tag (todo-tags todo) :test #'string=))
-             (save-todo todo)))
+             (save-todo-recording-undo model todo)))
          ;; Remove from selected-tags filter if present
          (remhash tag (model-selected-tags model))
          ;; Invalidate caches
@@ -1931,7 +2030,7 @@
               (setf (todo-scheduled-date todo) timestamp))
              (:deadline
               (setf (todo-due-date todo) timestamp)))
-           (save-todo todo)
+           (save-todo-recording-undo model todo)
            ;; Invalidate cache since dates affect grouping
            (invalidate-visible-todos-cache model)))
        (setf (model-view-state model) :list)
@@ -1946,7 +2045,7 @@
               (setf (todo-scheduled-date todo) nil))
              (:deadline
               (setf (todo-due-date todo) nil)))
-           (save-todo todo)
+           (save-todo-recording-undo model todo)
            ;; Invalidate cache since dates affect grouping
            (invalidate-visible-todos-cache model)))
        (setf (model-view-state model) :list)
@@ -1987,7 +2086,8 @@
               (setf (todo-scheduled-date todo) timestamp))
              (:deadline
               (setf (todo-due-date todo) timestamp)))
-           (save-todo todo)))
+           (invalidate-visible-todos-cache model)
+           (save-todo-recording-undo model todo)))
        (setf (model-view-state model) :detail)
        (values model nil))
 
@@ -2000,7 +2100,8 @@
               (setf (todo-scheduled-date todo) nil))
              (:deadline
               (setf (todo-due-date todo) nil)))
-           (save-todo todo)))
+           (invalidate-visible-todos-cache model)
+           (save-todo-recording-undo model todo)))
        (setf (model-view-state model) :detail)
        (values model nil))
 
@@ -2431,6 +2532,7 @@
 (defmethod tui:update-message ((model app-model) (msg sync-reload-msg))
   "Handle sync reload - reload todos and lists from database and trigger redraw."
   (setf (model-todos model) (load-todos))
+  (drop-all-redo-entries model)
   (clear-stuck-enriching-todos model)
   (setf (model-visible-todos-dirty model) t)
   (reload-lists-data model)
@@ -2898,7 +3000,8 @@
       (let ((todo (find todo-id (model-todos model) :key #'todo-id :test #'string=)))
         (when todo
           (setf (todo-description todo) (if (string= new-text "") nil new-text))
-          (save-todo todo)
+          (invalidate-visible-todos-cache model)
+          (save-todo-recording-undo model todo)
           (llog:info "Updated todo notes" :todo-id todo-id))))
     (values model nil)))
 

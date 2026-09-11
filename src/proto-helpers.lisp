@@ -55,11 +55,9 @@
                                    :scheduled-date (timestamp-to-string (todo-scheduled-date todo))
                                    :due-date (timestamp-to-string (todo-due-date todo))
                                    :tags (or (todo-tags todo) '())
-                                   :estimated-minutes 0
                                    :url (or (todo-url todo) "")
                                    :created-at (timestamp-to-string (todo-created-at todo))
                                    :completed-at (timestamp-to-string (todo-completed-at todo))
-                                   :parent-id ""
                                    :repeat-interval (or (todo-repeat-interval todo) 0)
                                    :repeat-unit (let ((ru (todo-repeat-unit todo)))
                                                      (if ru (string-downcase (symbol-name ru)) ""))

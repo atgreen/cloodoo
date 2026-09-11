@@ -418,10 +418,8 @@
   scheduled_date TEXT,
   due_date TEXT,
   tags TEXT,
-  estimated_minutes INTEGER,
   location_info TEXT,
   url TEXT,
-  parent_id TEXT,
   created_at TEXT NOT NULL,
   completed_at TEXT,
   valid_from TEXT NOT NULL,
@@ -443,9 +441,9 @@
                   SELECT t.id, t.title,
                          COALESCE(b1.content, t.description) as description,
                          t.priority, t.status,
-                         t.scheduled_date, t.due_date, t.tags, t.estimated_minutes,
+                         t.scheduled_date, t.due_date, t.tags,
                          COALESCE(b2.content, t.location_info) as location_info,
-                         t.url, t.parent_id, t.created_at, t.completed_at,
+                         t.url, t.created_at, t.completed_at,
                          t.valid_from, t.valid_to, t.device_id, t.repeat_interval,
                          t.repeat_unit, t.enriching_p
                   FROM todos t
@@ -455,10 +453,10 @@
                   ORDER BY t.created_at")))
                   (dolist (row rows)
                     (destructuring-bind (id title description priority status
-                                         scheduled-date due-date tags estimated-minutes
-                                         location-info url parent-id created-at completed-at
+                                         scheduled-date due-date tags
+                                         location-info url created-at completed-at
                                          valid-from valid-to device-id repeat-interval repeat-unit enriching-p) row
-                      (format t "INSERT INTO todos (id, title, description, priority, status, scheduled_date, due_date, tags, estimated_minutes, location_info, url, parent_id, created_at, completed_at, valid_from, valid_to, device_id, repeat_interval, repeat_unit, enriching_p) VALUES (~A, ~A, ~A, ~A, ~A, ~A, ~A, ~A, ~A, ~A, ~A, ~A, ~A, ~A, ~A, ~A, ~A, ~A, ~A, ~A);~%" ; lint:suppress max-line-length
+                      (format t "INSERT INTO todos (id, title, description, priority, status, scheduled_date, due_date, tags, location_info, url, created_at, completed_at, valid_from, valid_to, device_id, repeat_interval, repeat_unit, enriching_p) VALUES (~A, ~A, ~A, ~A, ~A, ~A, ~A, ~A, ~A, ~A, ~A, ~A, ~A, ~A, ~A, ~A, ~A, ~A);~%" ; lint:suppress max-line-length
                               (sql-escape-string id)
                               (sql-escape-string title)
                               (sql-escape-string description)
@@ -467,10 +465,8 @@
                               (sql-escape-string scheduled-date)
                               (sql-escape-string due-date)
                               (sql-escape-string tags)
-                              "NULL"  ; estimated_minutes removed
                               (sql-escape-string location-info)
                               (sql-escape-string url)
-                              "NULL"  ; parent-id no longer used
                               (sql-escape-string created-at)
                               (sql-escape-string completed-at)
                               (sql-escape-string valid-from)
