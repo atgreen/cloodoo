@@ -8,10 +8,8 @@
 
 ;;── Constants ─────────────────────────────────────────────────────────────────
 
-(defconstant +header-lines+ 3
-  "Number of lines each date category header takes (top border, content, bottom border).")
-(defconstant +list-top-lines+ 2
-  "Number of lines above the list viewport (title and date header).")
+(defconstant +header-lines+ 1
+  "Number of lines each date category header takes (a single ─┤ LABEL ├─ rule).")
 
 ;;── Global TUI Program Reference ──────────────────────────────────────────────
 
@@ -246,6 +244,10 @@
     :initform nil
     :accessor model-lists-data
     :documentation "Loaded list definitions for lists overview.")
+   (lists-item-counts
+    :initform (make-hash-table :test 'equal)
+    :accessor model-lists-item-counts
+    :documentation "Cached item count per list id; refreshed by reload-lists-data so views never query the DB.")
    (lists-cursor
     :initform 0
     :accessor model-lists-cursor
@@ -511,7 +513,7 @@
   (let ((current 0)
         (line-idx 0))
     (dolist (group groups)
-      ;; Header takes +header-lines+ lines (pager-style box)
+      ;; Header takes +header-lines+ lines (single rule line)
       (incf line-idx +header-lines+)
       (dolist (todo (rest group))
         (when (= current cursor)
@@ -695,10 +697,10 @@
   ;; Initialize datepicker with custom styles for better visibility
   (let ((custom-styles
           (tui.datepicker:make-datepicker-styles
-           :cursor (tui:make-style :reverse t :foreground tui:*fg-cyan* :background tui:*bg-black*)
-           :selected (tui:make-style :reverse t :foreground tui:*fg-green*)
-           :selected-cursor (tui:make-style :reverse t :bold t :foreground tui:*fg-green* :background tui:*bg-black*)
-           :today (tui:make-style :bold t :foreground tui:*fg-yellow*))))
+           :cursor (tui:make-style :reverse t :foreground (theme-fg :cyan) :background (theme-bg :black))
+           :selected (tui:make-style :reverse t :foreground (theme-fg :green))
+           :selected-cursor (tui:make-style :reverse t :bold t :foreground (theme-fg :green) :background (theme-bg :black))
+           :today (tui:make-style :bold t :foreground (theme-fg :yellow)))))
     (setf (model-date-picker model)
           (tui.datepicker:make-datepicker :styles custom-styles)))
   ;; Clear any TODOs stuck in enriching state from a previous session
@@ -1157,7 +1159,7 @@
 
       ;; Lists management (W)
       ((and (characterp key) (char= key #\W))
-       (setf (model-lists-data model) (db-load-list-definitions))
+       (reload-lists-data model)
        (setf (model-lists-cursor model) 0)
        (setf (model-view-state model) :lists-overview)
        (values model nil))
@@ -1178,6 +1180,13 @@
            (setf (model-tag-dropdown-visible model) nil)
            (setf (model-tag-dropdown-cursor model) 0)
            (setf (model-view-state model) :inline-tags)))
+       (values model nil))
+
+      ;; Cycle colour theme (T)
+      ((and (characterp key) (char= key #\T))
+       (let ((theme (cycle-theme)))
+         (setf (model-status-message model)
+               (format nil "Theme: ~A" (color-theme-label theme))))
        (values model nil))
 
       ;; Edit user context (u)
@@ -2075,8 +2084,13 @@
 ;;── Lists Overview Key Handling ────────────────────────────────────────────────
 
 (defun reload-lists-data (model)
-  "Reload list definitions from DB into model."
+  "Reload list definitions and cached item counts from DB into model."
   (setf (model-lists-data model) (db-load-list-definitions))
+  (let ((counts (model-lists-item-counts model)))
+    (clrhash counts)
+    (dolist (list-def (model-lists-data model))
+      (setf (gethash (list-def-id list-def) counts)
+            (length (db-load-list-items (list-def-id list-def))))))
   (setf (model-lists-cursor model)
         (min (model-lists-cursor model)
              (max 0 (1- (length (model-lists-data model)))))))
@@ -2635,7 +2649,7 @@
                             (remove todo-id (model-todos model) :key #'todo-id :test #'string=))
                       (db-delete-todo todo-id)
                       ;; Refresh list data
-                      (setf (model-lists-data model) (db-load-list-definitions))
+                      (reload-lists-data model)
                       (notify-sync-todo-deleted todo-id)
                       (invalidate-visible-todos-cache model)
                       (llog:info "Redirected TODO to list"
@@ -2781,7 +2795,7 @@
                 (push new-todo (model-todos model))
                 (save-todo new-todo)))))
       ;; Refresh data
-      (setf (model-lists-data model) (db-load-list-definitions))
+      (reload-lists-data model)
       (invalidate-visible-todos-cache model)
       (refresh-tags-cache model)
       (llog:info "Imported todos saved" :count (length todos-data)))

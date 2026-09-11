@@ -36,10 +36,10 @@
               (pad2 (max 0 (floor (- term-width (length msg2)) 2))))
           (format s "~A~A~%"
                   (make-string pad1 :initial-element #\Space)
-                  (tui:bold (tui:colored msg1 :fg tui:*fg-red*)))
+                  (tui:bold (tui:colored msg1 :fg (theme-fg :red))))
           (format s "~A~A"
                   (make-string pad2 :initial-element #\Space)
-                  (tui:colored msg2 :fg tui:*fg-bright-black*)))))))
+                  (tui:colored msg2 :fg (theme-fg :bright-black))))))))
 
 (defun calculate-dialog-width (term-width)
   "Calculate the dialog width based on terminal width."
@@ -49,61 +49,17 @@
 
 ;;── View Functions ─────────────────────────────────────────────────────────────
 
-(defun overlay-modal (background modal term-width term-height modal-width modal-height)
-  "Overlay a modal dialog centered on a background view.
-   Returns the composited result."
-  (let* ((bg-lines (uiop:split-string background :separator '(#\Newline)))
-         (modal-lines (uiop:split-string modal :separator '(#\Newline)))
-         ;; Center the modal vertically and horizontally
-         (start-row (max 0 (floor (- term-height modal-height) 2)))
-         (start-col (max 0 (floor (- term-width modal-width) 2))))
-    (with-output-to-string (s)
-      (loop for row from 0 below (length bg-lines)
-            for bg-line = (nth row bg-lines)
-            do (when (> row 0) (format s "~%"))
-               (if (and (>= row start-row)
-                        (< row (+ start-row modal-height))
-                        (< (- row start-row) (length modal-lines)))
-                   ;; This row has modal content
-                   (let* ((modal-row (- row start-row))
-                          (modal-line (nth modal-row modal-lines)))
-                     ;; Build: prefix from bg + modal, then pad to full width.
-                     (if (> start-col 0)
-                         ;; Need to extract prefix from background
-                         (let ((prefix (subseq bg-line 0 (min start-col (length bg-line)))))
-                           (let* ((line (format nil "~A~A" prefix modal-line))
-                                  (pad (max 0 (- term-width (tui:visible-length line)))))
-                             (format s "~A~A" line (make-string pad :initial-element #\Space))))
-                         (let ((pad (max 0 (- term-width (tui:visible-length modal-line)))))
-                           (format s "~A~A" modal-line (make-string pad :initial-element #\Space)))))
-                   ;; Just use background line
-                   (format s "~A" bg-line))))))
-
-(defun pad-content-to-width (content target-width)
-  "Pad each line of content to target-width (accounting for border chars).
-   The target-width should be the inner width (term-width - 2 for borders)."
-  (when (null content)
-    (return-from pad-content-to-width (make-string target-width :initial-element #\Space)))
-  (let ((lines (uiop:split-string content :separator '(#\Newline))))
-    (with-output-to-string (s)
-      (loop for line in lines
-            for i from 0
-            do (when (> i 0) (format s "~%"))
-               (let* ((visible-len (tui:visible-length (or line "")))
-                      (padding (max 0 (- target-width visible-len))))
-                 (format s "~A~A" (or line "") (make-string padding :initial-element #\Space)))))))
-
 (defun format-sync-status (model)
   "Format the sync status for display in the header."
   (let ((status (model-sync-status model)))
     (case status
       (:disconnected "")
       (:connecting
-       (tui:colored "⟳ Connecting" :fg tui:*fg-yellow*))
+       (tui:colored "⟳ Connecting" :fg (theme-fg :yellow)))
       (:connected
-       (tui:colored "● Synced" :fg tui:*fg-green*))
+       (tui:colored "● Synced" :fg (theme-fg :green)))
       (:error
-       (tui:colored "✗ Sync Error" :fg tui:*fg-red*))
+       (tui:colored "✗ Sync Error" :fg (theme-fg :red)))
       (otherwise ""))))
 
 (defun count-active-todos (model)
@@ -148,7 +104,7 @@
              date-str
              (make-string gap2 :initial-element #\Space)
              right-str)
-     :fg tui:*fg-white* :bg tui:*bg-blue*)))
+     :fg (theme-fg :white) :bg (theme-bg :blue))))
 
 
 (defun fit-to-width (text width)
@@ -167,7 +123,7 @@
          (pad (max 0 (- safe-width (tui:visible-length trimmed)))))
     (format nil "~A~A" trimmed (make-string pad :initial-element #\Space))))
 
-(defun render-help-line (text width &key (fg tui:*fg-yellow*) bg)
+(defun render-help-line (text width &key (fg (theme-fg :yellow)) bg)
   "Render a help bar line with truncation and padding."
   (tui:colored (fit-to-width text width) :fg fg :bg bg))
 
@@ -215,7 +171,7 @@
            (text (format nil "~A All" checkbox))
            (padded (pad-to-width text w)))
       (push (if is-cursor
-                (tui:colored padded :bg tui:*bg-cyan* :fg tui:*fg-black*)
+                (tui:colored padded :bg (theme-bg :cyan) :fg (theme-fg :black))
                 padded)
             lines))
 
@@ -226,19 +182,14 @@
                     (is-cursor (and focused (= cursor idx)))
                     (checkbox (if is-selected "[x]" "[ ]"))
                     ;; Truncate tag name if too long
-                    (max-tag-len (- w 5))
-                    (display-tag (if (> (length tag) max-tag-len)
-                                     (concatenate 'string
-                                                  (subseq tag 0 (max 0 (- max-tag-len 2)))
-                                                  "..")
-                                     tag))
+                    (display-tag (tui:truncate-text tag (max 0 (- w 5)) :ellipsis ".."))
                     (text (format nil "~A ~A" checkbox display-tag))
                     (padded (pad-to-width text w)))
                (push (cond
                        (is-cursor
-                        (tui:colored padded :bg tui:*bg-cyan* :fg tui:*fg-black*))
+                        (tui:colored padded :bg (theme-bg :cyan) :fg (theme-fg :black)))
                        (is-selected
-                        (tui:colored padded :fg tui:*fg-cyan*))
+                        (tui:colored padded :fg (theme-fg :cyan)))
                        (t padded))
                      lines)))
 
@@ -306,11 +257,7 @@
                                (avail (max 0 (- list-width prefix-len
                                                 (if (> suffix-len 0) (1+ suffix-len) 0))))
                                (title-text (sanitize-title-for-display (todo-title todo)))
-                               (trunc-title (if (> (tui:visible-length title-text) avail)
-                                                (concatenate 'string
-                                                             (subseq title-text 0 (max 0 (- avail 2)))
-                                                             "..")
-                                                title-text))
+                               (trunc-title (tui:truncate-text title-text avail :ellipsis ".."))
                                (base (format nil "~A~A" prefix trunc-title))
                                (base-len (tui:visible-length base))
                                (suffix (if (> tags-len 0) tags-str ""))
@@ -331,26 +278,26 @@
                                       ;; Dimmed selection for done items — use cyan bg
                                       ;; but with dim foreground to distinguish from active
                                       (tui:colored padded-line
-                                                   :bg tui:*bg-cyan*
-                                                   :fg tui:*fg-bright-black*)
+                                                   :bg (theme-bg :cyan)
+                                                   :fg (theme-fg :bright-black))
                                       ;; Normal bright selection
                                       (tui:bold
                                        (tui:colored padded-line
-                                                    :bg tui:*bg-cyan*
-                                                    :fg tui:*fg-black*)))))
+                                                    :bg (theme-bg :cyan)
+                                                    :fg (theme-fg :black))))))
                         ;; NOT SELECTED: Normal colored rendering
                         (let* ((status-indicator (if (todo-enriching-p todo)
                                                      (tui:colored
                                                       (tui.spinner:spinner-view
                                                        (model-enrichment-spinner model))
-                                                      :fg tui:*fg-yellow*)
+                                                      :fg (theme-fg :yellow))
                                                      (org-status-colored (todo-status todo))))
                                (schedule-info (format-schedule-info
                                                (todo-scheduled-date todo)
                                                (todo-due-date todo)))
                                (priority-str (org-priority-colored (todo-priority todo)))
                                (tags-colored (if (> (length tags-str) 0)
-                                                 (tui:colored tags-str :fg tui:*fg-yellow*)
+                                                 (tui:colored tags-str :fg (theme-fg :yellow))
                                                  ""))
                                (prefix (format nil "~A~A~A ~A "
                                                indent schedule-info status-indicator priority-str))
@@ -360,16 +307,12 @@
                                (avail (max 0 (- list-width prefix-len
                                                 (if (> suffix-len 0) (1+ suffix-len) 0))))
                                (title-text (sanitize-title-for-display (todo-title todo)))
-                               (trunc-title (if (> (length title-text) avail)
-                                                (concatenate 'string
-                                                             (subseq title-text 0 (max 0 (- avail 2)))
-                                                             "..")
-                                                title-text))
+                               (trunc-title (tui:truncate-text title-text avail :ellipsis ".."))
                                ;; Dim and strikethrough title for completed/cancelled items
                                (styled-title (if (member (todo-status todo) '(:completed :cancelled))
                                                  (tui:render-styled
                                                   (tui:make-style :strikethrough t
-                                                                  :foreground tui:*fg-bright-black*)
+                                                                  :foreground (theme-fg :bright-black))
                                                   trunc-title)
                                                  trunc-title))
                                (base (format nil "~A~A" prefix styled-title))
@@ -422,7 +365,7 @@
                  filter-text
                  clear-hint
                  (make-string padding :initial-element #\Space))
-         :fg tui:*fg-black* :bg tui:*bg-yellow*)))))
+         :fg (theme-fg :black) :bg (theme-bg :yellow))))))
 
 (defun render-list-view (model)
   "Render the main agenda view."
@@ -451,71 +394,37 @@
       (when has-filters
         (format s "~A~%" (render-filter-banner model term-width)))
 
-      ;; Main content area with optional sidebar
-      (if sidebar-visible-effective
-          ;; Render sidebar and list side by side
-          (let* ((sidebar-lines (render-sidebar model sidebar-width available-height))
-                 (list-content (render-list-content model list-width))
-                 (viewport (tui.viewport:make-viewport
-                            :width list-width
-                            :height available-height
-                            :content list-content))
-                 (scrollbar-visible (> (tui.viewport:viewport-total-lines viewport) available-height))
-                 (final-list-width (if scrollbar-visible (max 0 (1- list-width)) list-width))
-                 (final-content (if scrollbar-visible
-                                    (render-list-content model final-list-width)
-                                    list-content))
-                 (final-viewport (tui.viewport:make-viewport
-                                  :width final-list-width
-                                  :height available-height
-                                  :content final-content))
-                 (max-offset (max 0 (- (tui.viewport:viewport-total-lines final-viewport)
-                                       available-height)))
-                 (offset (min (model-scroll-offset model) max-offset))
-                 (list-view (progn
-                              (setf (model-scroll-offset model) offset)
-                              (setf (tui.viewport:viewport-y-offset final-viewport) offset)
-                              (tui.viewport:viewport-view final-viewport)))
-                 (list-lines (uiop:split-string list-view :separator '(#\Newline)))
-                 (scrollbar-lines (if scrollbar-visible
-                                      (render-scrollbar-lines final-viewport available-height)
-                                      (make-list available-height :initial-element ""))))
-            ;; Combine lines horizontally
-            (loop for sidebar-line in sidebar-lines
-                  for list-line in list-lines
-                  for bar-line in scrollbar-lines
-                  for i from 0
-                  do (when (> i 0) (format s "~%"))
-                     (format s "~A│~A~A" sidebar-line list-line bar-line)))
-          ;; No sidebar - just render list content
-          (let* ((list-content (render-list-content model list-width))
-                 (viewport (tui.viewport:make-viewport
-                            :width list-width
-                            :height available-height
-                            :content list-content))
-                 (scrollbar-visible (> (tui.viewport:viewport-total-lines viewport) available-height))
-                 (final-list-width (if scrollbar-visible (max 0 (1- list-width)) list-width))
-                 (final-content (if scrollbar-visible
-                                    (render-list-content model final-list-width)
-                                    list-content))
-                 (final-viewport (tui.viewport:make-viewport
-                                  :width final-list-width
-                                  :height available-height
-                                  :content final-content))
-                 (max-offset (max 0 (- (tui.viewport:viewport-total-lines final-viewport)
-                                       available-height)))
-                 (offset (min (model-scroll-offset model) max-offset)))
-            (setf (model-scroll-offset model) offset)
-            (setf (tui.viewport:viewport-y-offset final-viewport) offset)
-            (let* ((list-view (tui.viewport:viewport-view final-viewport))
-                   (list-lines (uiop:split-string list-view :separator '(#\Newline)))
-                   (scrollbar-lines (if scrollbar-visible
-                                        (render-scrollbar-lines final-viewport available-height)
-                                        (make-list available-height :initial-element ""))))
-              (format s "~{~A~^~%~}"
-                      (loop for list-line in list-lines
-                            for bar-line in scrollbar-lines
-                            collect (format nil "~A~A" list-line bar-line))))))
+      ;; Main content area with optional sidebar.
+      ;; The rightmost column is always reserved for the scrollbar so the
+      ;; layout doesn't shift (and content isn't re-rendered) when it appears.
+      (let* ((content-width (max 1 (1- list-width)))
+             (list-content (render-list-content model content-width))
+             (viewport (tui.viewport:make-viewport
+                        :width content-width
+                        :height available-height
+                        :content list-content))
+             (scrollbar-visible (> (tui.viewport:viewport-total-lines viewport) available-height))
+             (max-offset (max 0 (- (tui.viewport:viewport-total-lines viewport)
+                                   available-height)))
+             (offset (min (model-scroll-offset model) max-offset)))
+        (setf (model-scroll-offset model) offset)
+        (setf (tui.viewport:viewport-y-offset viewport) offset)
+        (let* ((list-lines (uiop:split-string (tui.viewport:viewport-view viewport)
+                                              :separator '(#\Newline)))
+               (scrollbar-lines (if scrollbar-visible
+                                    (render-scrollbar-lines viewport available-height)
+                                    (make-list available-height :initial-element " ")))
+               (sidebar-lines (if sidebar-visible-effective
+                                  (render-sidebar model sidebar-width available-height)
+                                  (make-list available-height :initial-element nil))))
+          (loop for sidebar-line in sidebar-lines
+                for list-line in list-lines
+                for bar-line in scrollbar-lines
+                for i from 0
+                do (when (> i 0) (format s "~%"))
+                   (if sidebar-line
+                       (format s "~A│~A~A" sidebar-line list-line bar-line)
+                       (format s "~A~A" list-line bar-line)))))
 
       (format s "~%")
 
@@ -524,13 +433,15 @@
         (if status-msg
             (format s "~A"
                     (render-help-line (format nil " ~A" status-msg) term-width
-                                     :fg tui:*fg-yellow*))
-            (let* ((base-help "Keys: jk/↑↓ move  SPC toggle  l sidebar  Tab focus")
-                   (filter-help (if has-filters "  c clear" ""))
-                   (more-help "  a add  e edit  d del  / search  q quit")
-                   (help (concatenate 'string base-help filter-help more-help)))
+                                     :fg (theme-fg :yellow)))
+            (let ((help (if (model-sidebar-focused model)
+                            "Labels: jk move  SPC toggle  a all  d delete  Tab/Esc back"
+                            (concatenate 'string
+                                         "jk move  SPC status  a add  e edit  DEL del  / search"
+                                         (if has-filters "  c clear" "")
+                                         "  l labels  ? help  q quit"))))
               (format s "~A"
-                      (render-help-line help term-width :fg tui:*fg-bright-black*))))))))
+                      (render-help-line help term-width :fg (theme-fg :bright-black)))))))))
 
 (defun render-detail-view (model)
   "Render the detail view for a single TODO as an overlay dialog."
@@ -565,7 +476,7 @@
                        (let ((title-text (if (member (todo-status todo) '(:completed :cancelled))
                                              (tui:render-styled
                                               (tui:make-style :strikethrough t
-                                                              :foreground tui:*fg-bright-black*)
+                                                              :foreground (theme-fg :bright-black))
                                               (sanitize-title-for-display (todo-title todo)))
                                              (tui:bold (sanitize-title-for-display (todo-title todo))))))
                          (format s "~A" (tui:wrap-text title-text content-width)))
@@ -577,25 +488,25 @@
                                  (tui:colored
                                   (lt:format-timestring nil (todo-scheduled-date todo)
                                                        :format '(:long-weekday " " :short-month " " :day " " :year))
-                                  :fg tui:*fg-cyan*)))
+                                  :fg (theme-fg :cyan))))
 
                        ;; Deadline
                        (when (todo-due-date todo)
                          (format s "~%~A <~A>"
-                                 (tui:bold (tui:colored "DEADLINE:" :fg tui:*fg-red*))
+                                 (tui:bold (tui:colored "DEADLINE:" :fg (theme-fg :red)))
                                  (tui:colored
                                   (lt:format-timestring nil (todo-due-date todo)
                                                        :format '(:long-weekday " " :short-month " " :day " " :year))
-                                  :fg tui:*fg-red*)))
+                                  :fg (theme-fg :red))))
 
                        ;; Repeat info
                        (when (and (todo-repeat-interval todo) (todo-repeat-unit todo))
                          (format s "~%~A ~A"
-                                 (tui:bold (tui:colored "REPEAT:" :fg tui:*fg-magenta*))
+                                 (tui:bold (tui:colored "REPEAT:" :fg (theme-fg :magenta)))
                                  (tui:colored
                                   (format-repeat-preset (todo-repeat-interval todo)
                                                         (todo-repeat-unit todo))
-                                  :fg tui:*fg-magenta*)))
+                                  :fg (theme-fg :magenta))))
 
                        ;; Description (wrapped)
                        (when (todo-description todo)
@@ -605,45 +516,45 @@
                        ;; Tags
                        (when (todo-tags todo)
                          (format s "~%~%~A"
-                                 (tui:colored (org-tags-string (todo-tags todo)) :fg tui:*fg-magenta*)))
+                                 (tui:colored (org-tags-string (todo-tags todo)) :fg (theme-fg :magenta))))
 
                        ;; Location info
                        (when (todo-location-info todo)
                          (let ((loc (todo-location-info todo)))
                            (format s "~%~%~A"
-                                   (tui:bold (tui:colored "Location" :fg tui:*fg-cyan*)))
+                                   (tui:bold (tui:colored "Location" :fg (theme-fg :cyan))))
                            (when (getf loc :name)
                              (format s "~%  ~A" (getf loc :name)))
                            (when (getf loc :address)
                              (format s "~%  ~A"
-                                     (tui:colored (getf loc :address) :fg tui:*fg-bright-black*)))
+                                     (tui:colored (getf loc :address) :fg (theme-fg :bright-black))))
                            (when (getf loc :phone)
                              (format s "~%  Tel: ~A"
-                                     (tui:colored (getf loc :phone) :fg tui:*fg-green*)))
+                                     (tui:colored (getf loc :phone) :fg (theme-fg :green))))
                            (when (getf loc :map-url)
                              (format s "~%  ~A"
-                                     (tui:wrap-text (tui:colored (getf loc :map-url) :fg tui:*fg-blue*)
+                                     (tui:wrap-text (tui:colored (getf loc :map-url) :fg (theme-fg :blue))
                                                     content-width :indent 2 :continuation-indent 4)))
                            (when (getf loc :website)
                              (format s "~%  ~A"
-                                     (tui:wrap-text (tui:colored (getf loc :website) :fg tui:*fg-blue*)
+                                     (tui:wrap-text (tui:colored (getf loc :website) :fg (theme-fg :blue))
                                                     content-width :indent 2 :continuation-indent 4)))))
 
                        ;; URL (wrapped)
                        (when (todo-url todo)
                          (format s "~%~%~A~%  ~A"
-                                 (tui:bold (tui:colored "Link:" :fg tui:*fg-cyan*))
-                                 (tui:wrap-text (tui:colored (todo-url todo) :fg tui:*fg-blue*)
+                                 (tui:bold (tui:colored "Link:" :fg (theme-fg :cyan)))
+                                 (tui:wrap-text (tui:colored (todo-url todo) :fg (theme-fg :blue))
                                                 content-width :indent 2 :continuation-indent 4)))
 
                        ;; Attachments
                        (when (todo-attachment-hashes todo)
                          (let ((count (length (todo-attachment-hashes todo))))
                            (format s "~%~%~A ~A"
-                                   (tui:bold (tui:colored "Attachments:" :fg tui:*fg-cyan*))
+                                   (tui:bold (tui:colored "Attachments:" :fg (theme-fg :cyan)))
                                    (tui:colored (format nil "~D photo~:P (press p to view)"
                                                         count)
-                                               :fg tui:*fg-yellow*))))
+                                               :fg (theme-fg :yellow)))))
 
                        ;; Metadata
                        (format s "~%~%~A"
@@ -651,7 +562,7 @@
                                 (format nil "Created: ~A"
                                        (lt:format-timestring nil (todo-created-at todo)
                                                             :format '(:short-month " " :day ", " :year)))
-                                :fg tui:*fg-bright-black*))
+                                :fg (theme-fg :bright-black)))
 
                        (when (todo-completed-at todo)
                          (format s "~%~A"
@@ -659,12 +570,12 @@
                                   (format nil "Closed:  ~A"
                                          (lt:format-timestring nil (todo-completed-at todo)
                                                               :format '(:short-month " " :day ", " :year)))
-                                  :fg tui:*fg-bright-black*)))
+                                  :fg (theme-fg :bright-black))))
 
                        ;; Help line at bottom
                        (format s "~%~%~A"
                                (tui:colored "q:back  e:edit │ s:sched  d:deadline │ n:notes  o:url  p:photo"
-                                           :fg tui:*fg-bright-black*))))
+                                           :fg (theme-fg :bright-black)))))
                    (modal (render-box-with-title "ITEM DETAILS" content :min-width modal-width)))
               (tui:composite modal background
                             :x-position tui:+center+
@@ -701,31 +612,31 @@
              ;; Title input
              (format c "~A ~A"
                      (if (eql (model-active-field model) :title)
-                         (tui:colored ">" :fg tui:*fg-cyan*)
+                         (tui:colored ">" :fg (theme-fg :cyan))
                          " ")
                      title-input-view)
 
              ;; Notes input
              (format c "~%~A ~A"
                      (if (eql (model-active-field model) :description)
-                         (tui:colored ">" :fg tui:*fg-cyan*)
+                         (tui:colored ">" :fg (theme-fg :cyan))
                          " ")
                      (tui.textinput:textinput-view (model-description-input model)))
 
              ;; Priority
              (format c "~%~%~A Priority: ~A ~A ~A"
                      (if (eql (model-active-field model) :priority)
-                         (tui:colored ">" :fg tui:*fg-cyan*)
+                         (tui:colored ">" :fg (theme-fg :cyan))
                          " ")
                      (if (eql (model-edit-priority model) :high)
-                         (tui:bold (tui:colored "[#A]" :fg tui:*fg-red*))
-                         (tui:colored " #A " :fg tui:*fg-bright-black*))
+                         (tui:bold (tui:colored "[#A]" :fg (theme-fg :red)))
+                         (tui:colored " #A " :fg (theme-fg :bright-black)))
                      (if (eql (model-edit-priority model) :medium)
-                         (tui:bold (tui:colored "[#B]" :fg tui:*fg-yellow*))
-                         (tui:colored " #B " :fg tui:*fg-bright-black*))
+                         (tui:bold (tui:colored "[#B]" :fg (theme-fg :yellow)))
+                         (tui:colored " #B " :fg (theme-fg :bright-black)))
                      (if (eql (model-edit-priority model) :low)
-                         (tui:bold (tui:colored "[#C]" :fg tui:*fg-green*))
-                         (tui:colored " #C " :fg tui:*fg-bright-black*)))
+                         (tui:bold (tui:colored "[#C]" :fg (theme-fg :green)))
+                         (tui:colored " #C " :fg (theme-fg :bright-black))))
 
              ;; Scheduled date
              (let* ((sched-date (model-edit-scheduled-date model))
@@ -735,13 +646,13 @@
                                    "Not set")))
                (format c "~%~A Scheduled: ~A~A"
                        (if (eql (model-active-field model) :scheduled)
-                           (tui:colored ">" :fg tui:*fg-cyan*)
+                           (tui:colored ">" :fg (theme-fg :cyan))
                            " ")
                        (if sched-date
-                           (tui:colored (format nil "[~A]" sched-str) :fg tui:*fg-cyan*)
-                           (tui:colored (format nil "[~A]" sched-str) :fg tui:*fg-bright-black*))
+                           (tui:colored (format nil "[~A]" sched-str) :fg (theme-fg :cyan))
+                           (tui:colored (format nil "[~A]" sched-str) :fg (theme-fg :bright-black)))
                        (if (eql (model-active-field model) :scheduled)
-                           (tui:colored "  (Space)" :fg tui:*fg-bright-black*)
+                           (tui:colored "  (Space)" :fg (theme-fg :bright-black))
                            "")))
 
              ;; Due date
@@ -752,13 +663,13 @@
                                  "Not set")))
                (format c "~%~A Due:       ~A~A"
                        (if (eql (model-active-field model) :due)
-                           (tui:colored ">" :fg tui:*fg-cyan*)
+                           (tui:colored ">" :fg (theme-fg :cyan))
                            " ")
                        (if due-date
-                           (tui:colored (format nil "[~A]" due-str) :fg tui:*fg-red*)
-                           (tui:colored (format nil "[~A]" due-str) :fg tui:*fg-bright-black*))
+                           (tui:colored (format nil "[~A]" due-str) :fg (theme-fg :red))
+                           (tui:colored (format nil "[~A]" due-str) :fg (theme-fg :bright-black)))
                        (if (eql (model-active-field model) :due)
-                           (tui:colored "  (Space)" :fg tui:*fg-bright-black*)
+                           (tui:colored "  (Space)" :fg (theme-fg :bright-black))
                            "")))
 
              ;; Repeat
@@ -767,13 +678,13 @@
                                 (model-edit-repeat-unit model))))
                (format c "~%~A Repeat:    ~A~A"
                        (if (eql (model-active-field model) :repeat)
-                           (tui:colored ">" :fg tui:*fg-cyan*)
+                           (tui:colored ">" :fg (theme-fg :cyan))
                            " ")
                        (if (model-edit-repeat-interval model)
-                           (tui:colored (format nil "[~A]" repeat-str) :fg tui:*fg-magenta*)
-                           (tui:colored (format nil "[~A]" repeat-str) :fg tui:*fg-bright-black*))
+                           (tui:colored (format nil "[~A]" repeat-str) :fg (theme-fg :magenta))
+                           (tui:colored (format nil "[~A]" repeat-str) :fg (theme-fg :bright-black)))
                        (if (eql (model-active-field model) :repeat)
-                           (tui:colored "  (←/→)" :fg tui:*fg-bright-black*)
+                           (tui:colored "  (←/→)" :fg (theme-fg :bright-black))
                            "")))
 
              ;; Labels/Tags
@@ -781,15 +692,15 @@
                         (tags-focused (eql (model-active-field model) :tags)))
                    (format c "~%~A Labels:    "
                            (if tags-focused
-                               (tui:colored ">" :fg tui:*fg-cyan*)
+                               (tui:colored ">" :fg (theme-fg :cyan))
                                " "))
                    ;; Show current tags as chips
                    (if edit-tags
                        (format c "~{~A~^ ~}"
                                (mapcar (lambda (tag)
-                                         (tui:colored (format nil "[~A]" tag) :fg tui:*fg-magenta*))
+                                         (tui:colored (format nil "[~A]" tag) :fg (theme-fg :magenta)))
                                        (reverse edit-tags)))
-                       (format c "~A" (tui:colored "(none)" :fg tui:*fg-bright-black*)))
+                       (format c "~A" (tui:colored "(none)" :fg (theme-fg :bright-black))))
                    ;; Show input when field is active
                    (when tags-focused
                      (format c " ~A" (tui.textinput:textinput-view (model-tags-input model)))
@@ -804,12 +715,12 @@
                                for idx from 0
                                do (format c "~%             ~A"
                                           (if (= idx cursor)
-                                              (tui:colored (format nil "> ~A" tag) :bg tui:*bg-cyan* :fg tui:*fg-black*)
+                                              (tui:colored (format nil "> ~A" tag) :bg (theme-bg :cyan) :fg (theme-fg :black))
                                               (format nil "  ~A" tag))))))))
 
              ;; Help line at bottom
              (format c "~%~%~A"
-                     (tui:colored "Tab:next  ^E:edit notes  Enter:save  Esc:cancel" :fg tui:*fg-bright-black*))))
+                     (tui:colored "Tab:next  ^E:edit notes  Enter:save  Esc:cancel" :fg (theme-fg :bright-black)))))
          (modal (render-box-with-title title content :min-width dialog-width)))
     (tui:composite-with-shadow modal background
                                :x-position tui:+center+
@@ -829,7 +740,7 @@
              ;; Match count
              (format c "~A~%"
                      (tui:colored (format nil "~D match~:P" (length todos))
-                                 :fg tui:*fg-bright-black*))
+                                 :fg (theme-fg :bright-black)))
 
              ;; Preview of results
              (when todos
@@ -846,11 +757,11 @@
                (when (> (length todos) 5)
                  (format c "~%~A"
                          (tui:colored (format nil "... and ~D more" (- (length todos) 5))
-                                     :fg tui:*fg-bright-black*))))
+                                     :fg (theme-fg :bright-black)))))
 
              ;; Help line
              (format c "~%~%~A"
-                     (tui:colored "RET:apply  ESC:cancel" :fg tui:*fg-bright-black*))))
+                     (tui:colored "RET:apply  ESC:cancel" :fg (theme-fg :bright-black)))))
          (modal (render-box-with-title "SEARCH" content :min-width modal-width)))
     (tui:composite-with-shadow modal background
                                :x-position tui:+center+
@@ -873,7 +784,7 @@
                                 (sanitize-title-for-display (todo-title todo)))
                         (format c "~A"
                                 (tui:colored "y:confirm  any other key:cancel"
-                                            :fg tui:*fg-bright-black*)))
+                                            :fg (theme-fg :bright-black))))
                       "No item selected"))
          (modal (render-box-with-title "DELETE ITEM" content :min-width modal-width)))
     (tui:composite-with-shadow modal background
@@ -894,7 +805,7 @@
                     (format c "This will remove completed items from the list.~%~%")
                     (format c "~A"
                             (tui:colored "y:confirm  any other key:cancel"
-                                        :fg tui:*fg-bright-black*))))
+                                        :fg (theme-fg :bright-black)))))
          (modal (render-box-with-title "DELETE DONE ITEMS" content :min-width modal-width)))
     (tui:composite-with-shadow modal background
                                :x-position tui:+center+
@@ -918,7 +829,7 @@
                             count)
                     (format c "~A"
                             (tui:colored "y:confirm  any other key:cancel"
-                                        :fg tui:*fg-bright-black*))))
+                                        :fg (theme-fg :bright-black)))))
          (modal (render-box-with-title "DELETE LABEL" content :min-width modal-width)))
     (tui:composite-with-shadow modal background
                                :x-position tui:+center+
@@ -936,20 +847,20 @@
              (format c "User context provides personal information to help~%")
              (format c "the AI better understand and enrich your TODOs.~%~%")
              (format c "~A~%"
-                     (tui:colored "Context File:" :fg tui:*fg-cyan*))
+                     (tui:colored "Context File:" :fg (theme-fg :cyan)))
              (format c "  ~A~%~%"
-                     (tui:colored context-file :fg tui:*fg-yellow*))
+                     (tui:colored context-file :fg (theme-fg :yellow)))
              (format c "~A~%"
-                     (tui:colored "To edit, open in your editor:" :fg tui:*fg-cyan*))
+                     (tui:colored "To edit, open in your editor:" :fg (theme-fg :cyan)))
              (format c "  ~A~%~%"
-                     (tui:colored (format nil "$EDITOR ~A" context-file) :fg tui:*fg-green*))
+                     (tui:colored (format nil "$EDITOR ~A" context-file) :fg (theme-fg :green)))
              (if has-context
                  (format c "~A~%"
-                         (tui:colored "✓ Context file has content" :fg tui:*fg-green*))
+                         (tui:colored "✓ Context file has content" :fg (theme-fg :green)))
                  (format c "~A~%"
-                         (tui:colored "○ Context file is empty - add your info!" :fg tui:*fg-yellow*)))
+                         (tui:colored "○ Context file is empty - add your info!" :fg (theme-fg :yellow))))
              (format c "~%~A"
-                     (tui:colored "Press any key to close" :fg tui:*fg-bright-black*))))
+                     (tui:colored "Press any key to close" :fg (theme-fg :bright-black)))))
          (modal (render-box-with-title "USER CONTEXT" content :min-width modal-width)))
     (tui:composite-with-shadow modal background
                                :x-position tui:+center+
@@ -970,17 +881,17 @@
              (cond
                ((zerop (length filename))
                 (format c "~A"
-                        (tui:colored "Enter a file path above" :fg tui:*fg-bright-black*)))
+                        (tui:colored "Enter a file path above" :fg (theme-fg :bright-black))))
                (file-exists
                 (format c "~A"
-                        (tui:colored "✓ File found - press Enter to import" :fg tui:*fg-green*)))
+                        (tui:colored "✓ File found - press Enter to import" :fg (theme-fg :green))))
                (t
                 (format c "~A"
-                        (tui:colored "✗ File not found" :fg tui:*fg-red*))))
+                        (tui:colored "✗ File not found" :fg (theme-fg :red)))))
              (format c "~%~%~A"
-                     (tui:colored "Non-DONE items will be imported and enriched." :fg tui:*fg-bright-black*))
+                     (tui:colored "Non-DONE items will be imported and enriched." :fg (theme-fg :bright-black)))
              (format c "~%~%~A"
-                     (tui:colored "RET:import  ESC:cancel" :fg tui:*fg-bright-black*))))
+                     (tui:colored "RET:import  ESC:cancel" :fg (theme-fg :bright-black)))))
          (modal (render-box-with-title "IMPORT ORG-MODE FILE" content :min-width modal-width)))
     (tui:composite-with-shadow modal background
                                :x-position tui:+center+
@@ -1011,7 +922,7 @@
                           (if (> (length todo-title) (- modal-width 6))
                               (concatenate 'string (subseq todo-title 0 (- modal-width 8)) "..")
                               todo-title)
-                          :fg tui:*fg-bright-black*))))
+                          :fg (theme-fg :bright-black)))))
 
              ;; Current date status
              (format c "~A ~A~%"
@@ -1020,8 +931,8 @@
                          (tui:colored
                           (lt:format-timestring nil current-date
                                                :format '(:short-month " " :day ", " :year))
-                          :fg tui:*fg-cyan*)
-                         (tui:colored "Not set" :fg tui:*fg-bright-black*)))
+                          :fg (theme-fg :cyan))
+                         (tui:colored "Not set" :fg (theme-fg :bright-black))))
 
              ;; Datepicker calendar
              (format c "~%~A~%" (tui.datepicker:datepicker-view picker))
@@ -1038,13 +949,13 @@
                                                        "Jul" "Aug" "Sep" "Oct" "Nov" "Dec")
                                                       (1- month))
                                                 day year)
-                                       :fg tui:*fg-green*))
-                         (tui:colored "None" :fg tui:*fg-bright-black*)))
+                                       :fg (theme-fg :green)))
+                         (tui:colored "None" :fg (theme-fg :bright-black))))
 
              ;; Navigation help
              (format c "~%~A"
                      (tui:colored "hjkl/←↑↓→:nav  []:month  {}:year  Home:today  RET:save  DEL:clear  ESC:cancel"
-                                 :fg tui:*fg-bright-black*))))
+                                 :fg (theme-fg :bright-black)))))
          (modal (render-box-with-title title content :min-width modal-width)))
     (tui:composite-with-shadow modal background
                                :x-position tui:+center+
@@ -1053,7 +964,7 @@
 (defun render-help-column (title entries &optional (key-width 10))
   "Render a help column with TITLE and list of (key . description) ENTRIES."
   (with-output-to-string (s)
-    (format s "~A~%" (tui:bold (tui:colored title :fg tui:*fg-cyan*)))
+    (format s "~A~%" (tui:bold (tui:colored title :fg (theme-fg :cyan))))
     (dolist (entry entries)
       (let ((key (first entry))
             (desc (rest entry)))
@@ -1061,10 +972,10 @@
             ;; Empty key = section header or blank line
             (if (string= desc "")
                 (format s "~%")
-                (format s "~A~%" (tui:colored desc :fg tui:*fg-bright-black*)))
+                (format s "~A~%" (tui:colored desc :fg (theme-fg :bright-black))))
             ;; Normal key-description pair
             (format s "~A  ~A~%"
-                    (tui:colored (format nil "~vA" key-width key) :fg tui:*fg-yellow*)
+                    (tui:colored (format nil "~vA" key-width key) :fg (theme-fg :yellow))
                     desc))))))
 
 (defun valid-preset-p (p)
@@ -1083,14 +994,14 @@
         (if (> (length tags) 20)
             (concatenate 'string (subseq tags 0 18) "..")
             tags))
-      (tui:colored "_______" :fg tui:*fg-bright-black*)))
+      (tui:colored "_______" :fg (theme-fg :bright-black))))
 
 (defun render-presets-row (presets)
   "Render presets in two columns below the keyboard shortcuts."
   (let ((col-width 28))
     (with-output-to-string (s)
       ;; Header spanning both columns
-      (format s "~A~%" (tui:bold (tui:colored "LABEL PRESETS (1-0 to apply, !@# to save)" :fg tui:*fg-cyan*)))
+      (format s "~A~%" (tui:bold (tui:colored "LABEL PRESETS (1-0 to apply, !@# to save)" :fg (theme-fg :cyan))))
       ;; Two columns: 1-5 on left, 6-0 on right
       (loop for row from 0 below 5
             for left-idx = row
@@ -1104,10 +1015,10 @@
             for left-str = (format-preset-tags left-preset)
             for right-str = (format-preset-tags right-preset)
             do (format s "~A ~A~A~A ~A~%"
-                       (tui:colored left-key :fg tui:*fg-yellow*)
+                       (tui:colored left-key :fg (theme-fg :yellow))
                        left-str
                        (make-string (max 1 (- col-width 2 (tui:visible-length left-str))) :initial-element #\Space)
-                       (tui:colored right-key :fg tui:*fg-yellow*)
+                       (tui:colored right-key :fg (theme-fg :yellow))
                        right-str)))))
 
 (defun render-help-modal-content (model)
@@ -1133,7 +1044,7 @@
                   ("r" . "Refresh list")
                   ("S/L" . "Set sched/due")
                   ("&" . "Re-enrich")
-                  ("" . "")
+                  ("T" . "Cycle theme")
                   ("" . "")
                   ("" . ""))))
          (col3 (render-help-column "SIDEBAR"
@@ -1163,17 +1074,17 @@
          (presets (model-tag-presets model)))
     ;; Create vertical separator spanning all rows
     (let* ((num-rows 12)  ; title + 11 entries
-           (sep-line (tui:colored " │ " :fg tui:*fg-bright-black*))
+           (sep-line (tui:colored " │ " :fg (theme-fg :bright-black)))
            (sep (format nil "~{~A~^~%~}" (loop repeat num-rows collect sep-line)))
            (keys-section (tui:join-horizontal :top col1 sep col2 sep col3 sep col4))
            (presets-section (render-presets-row presets)))
       (format nil "~A~%~%~A" keys-section presets-section))))
 
 (defun render-box-with-title (title content &key min-width)
-  "Render a box with a title label on the top border line using double-line borders.
-   ╔══╡ TITLE ╞═════════════════════════╗
-   ║ content                            ║
-   ╚════════════════════════════════════╝
+  "Render a box with a title label on the top border line using rounded borders.
+   ╭──┤ TITLE ├─────────────────────────╮
+   │ content                            │
+   ╰────────────────────────────────────╯
    If MIN-WIDTH is specified, the box will be at least that wide (inner content area).
    Shadow should be added at composition time using composite-with-shadow."
   (let* ((content-lines (tui:split-string-by-newline content))
@@ -1189,32 +1100,32 @@
          ;; Box inner width = content + 2 for padding
          (box-inner-width (+ content-width 2))
          ;; Width after title to right edge
-         (right-width (max 0 (- box-inner-width indent title-len 2)))  ; -2 for ╡ and ╞
+         (right-width (max 0 (- box-inner-width indent title-len 2)))  ; -2 for ┤ and ├
          (reset (format nil "~C[0m" #\Escape)))  ; ANSI reset to prevent color bleed
     (with-output-to-string (s)
-      ;; Top border with embedded title (double-line)
-      (format s "~A╔~A╡~A╞~A╗~%"
+      ;; Top border with embedded title
+      (format s "~A╭~A┤~A├~A╮~%"
               reset
-              (make-string indent :initial-element #\═)
+              (make-string indent :initial-element #\─)
               (tui:bold padded-title)
-              (make-string right-width :initial-element #\═))
-      ;; Content rows (double-line)
+              (make-string right-width :initial-element #\─))
+      ;; Content rows
       (dolist (line content-lines)
         (let ((padding (max 0 (- content-width (tui:visible-length line)))))
-          (format s "~A║ ~A~A ║~%"
+          (format s "~A│ ~A~A │~%"
                   reset
                   line
                   (make-string padding :initial-element #\Space))))
-      ;; Bottom border (double-line)
-      (format s "~A╚~A╝"
+      ;; Bottom border
+      (format s "~A╰~A╯"
               reset
-              (make-string box-inner-width :initial-element #\═)))))
+              (make-string box-inner-width :initial-element #\─)))))
 
 (defun render-help-view (model)
   "Render the help view as an overlay dialog on the list view."
   (let* ((background (render-list-view model))
          (content (render-help-modal-content model))
-         (footer (tui:colored "Press any key to close" :fg tui:*fg-bright-black*))
+         (footer (tui:colored "Press any key to close" :fg (theme-fg :bright-black)))
          (inner (format nil "~%~A~%~A" content footer))
          (modal (render-box-with-title "KEYBOARD SHORTCUTS" inner)))
     (tui:composite-with-shadow modal background
@@ -1238,7 +1149,7 @@
          (content
            (with-output-to-string (c)
              ;; Todo title (truncated)
-             (format c "~A~%" (tui:colored title :fg tui:*fg-bright-black*))
+             (format c "~A~%" (tui:colored title :fg (theme-fg :bright-black)))
              ;; Separator
              (format c "~A~%" (make-string 42 :initial-element #\─))
              ;; Current labels
@@ -1246,9 +1157,9 @@
              (if edit-tags
                  (format c "~{~A~^ ~}~%"
                          (mapcar (lambda (tag)
-                                   (tui:colored (format nil "[~A]" tag) :fg tui:*fg-magenta*))
+                                   (tui:colored (format nil "[~A]" tag) :fg (theme-fg :magenta)))
                                  (reverse edit-tags)))
-                 (format c "~A~%" (tui:colored "(none)" :fg tui:*fg-bright-black*)))
+                 (format c "~A~%" (tui:colored "(none)" :fg (theme-fg :bright-black))))
              ;; Blank line
              (format c "~%")
              ;; Input field
@@ -1263,13 +1174,13 @@
                        for idx from 0
                        do (format c "      ~A~%"
                                   (if (= idx cursor)
-                                      (tui:colored (format nil "> ~A" tag) :bg tui:*bg-cyan* :fg tui:*fg-black*)
+                                      (tui:colored (format nil "> ~A" tag) :bg (theme-bg :cyan) :fg (theme-fg :black))
                                       (format nil "  ~A" tag))))))
              ;; Blank line before help
              (format c "~%")
              ;; Help line
              (format c "~A"
-                     (tui:colored "Enter:add/save  Backspace:remove  Esc:save" :fg tui:*fg-bright-black*))))
+                     (tui:colored "Enter:add/save  Backspace:remove  Esc:save" :fg (theme-fg :bright-black)))))
          (modal (render-box-with-title "EDIT LABELS" content)))
     (tui:composite-with-shadow modal background
                                :x-position tui:+center+
@@ -1306,7 +1217,7 @@
            (with-output-to-string (c)
              ;; Current value
              (format c "Current: ~A~%~%"
-                     (tui:colored current-str :fg tui:*fg-cyan*))
+                     (tui:colored current-str :fg (theme-fg :cyan)))
 
              ;; Datepicker calendar (centered)
              (loop for picker-line in picker-lines
@@ -1323,12 +1234,12 @@
 
              ;; New/selected date
              (format c "New: ~A~%~%"
-                     (tui:colored (or cursor-str "None") :fg tui:*fg-green*))
+                     (tui:colored (or cursor-str "None") :fg (theme-fg :green)))
 
              ;; Help line
              (format c "~A"
                      (tui:colored "hjkl/←↑↓→:nav  []:month  {}:year  Home:today  RET:save  DEL:clear  ESC:cancel"
-                                 :fg tui:*fg-bright-black*))))
+                                 :fg (theme-fg :bright-black)))))
          (modal (render-box-with-title title content :min-width modal-width)))
     (tui:composite-with-shadow modal background
                                :x-position tui:+center+
@@ -1362,7 +1273,7 @@
                           (if (> (length todo-title) (- modal-width 6))
                               (concatenate 'string (subseq todo-title 0 (- modal-width 8)) "..")
                               todo-title)
-                          :fg tui:*fg-bright-black*))))
+                          :fg (theme-fg :bright-black)))))
 
              ;; Current date status
              (format c "~A ~A~%"
@@ -1371,8 +1282,8 @@
                          (tui:colored
                           (lt:format-timestring nil current-date
                                                :format '(:short-month " " :day ", " :year))
-                          :fg tui:*fg-cyan*)
-                         (tui:colored "Not set" :fg tui:*fg-bright-black*)))
+                          :fg (theme-fg :cyan))
+                         (tui:colored "Not set" :fg (theme-fg :bright-black))))
 
              ;; Datepicker calendar
              (format c "~%~A~%" (tui.datepicker:datepicker-view picker))
@@ -1389,13 +1300,13 @@
                                                        "Jul" "Aug" "Sep" "Oct" "Nov" "Dec")
                                                       (1- month))
                                                 day year)
-                                       :fg tui:*fg-green*))
-                         (tui:colored "None" :fg tui:*fg-bright-black*)))
+                                       :fg (theme-fg :green)))
+                         (tui:colored "None" :fg (theme-fg :bright-black))))
 
              ;; Navigation help
              (format c "~%~A"
                      (tui:colored "hjkl/←↑↓→:nav  []:month  {}:year  Home:today  RET:save  DEL:clear  ESC:cancel"
-                                 :fg tui:*fg-bright-black*))))
+                                 :fg (theme-fg :bright-black)))))
          (modal (render-box-with-title title content :min-width modal-width)))
     (tui:composite-with-shadow modal background
                                :x-position tui:+center+
@@ -1415,22 +1326,23 @@
            (with-output-to-string (c)
              (if (null lists)
                  (format c "~A~%~%~A"
-                         (tui:colored "No lists defined." :fg tui:*fg-bright-black*)
-                         (tui:colored "Press 'a' to create one." :fg tui:*fg-bright-black*))
+                         (tui:colored "No lists defined." :fg (theme-fg :bright-black))
+                         (tui:colored "Press 'a' to create one." :fg (theme-fg :bright-black)))
                  (loop for list-def in lists
                        for idx from 0
                        for selected = (= idx cursor)
                        for name = (list-def-name list-def)
                        for desc = (list-def-description list-def)
-                       for item-count = (length (db-load-list-items (list-def-id list-def)))
+                       for item-count = (gethash (list-def-id list-def)
+                                                 (model-lists-item-counts model) 0)
                        for count-str = (format nil "(~D item~:P)" item-count)
                        for line = (format nil "~A  ~A"
                                           (pad-to-width name (min 30 (- content-width (length count-str) 3)))
-                                          (tui:colored count-str :fg tui:*fg-bright-black*))
+                                          (tui:colored count-str :fg (theme-fg :bright-black)))
                        do (if selected
                               (format c "~A~%"
                                       (tui:colored (pad-to-width line content-width)
-                                                   :bg tui:*bg-cyan* :fg tui:*fg-black*))
+                                                   :bg (theme-bg :cyan) :fg (theme-fg :black)))
                               (format c "~A~%" line))
                           (when (and desc selected)
                             (format c "  ~A~%"
@@ -1438,11 +1350,11 @@
                                      (if (> (length desc) (- content-width 2))
                                          (concatenate 'string (subseq desc 0 (- content-width 4)) "..")
                                          desc)
-                                     :fg tui:*fg-bright-black*)))))
+                                     :fg (theme-fg :bright-black))))))
              ;; Help line
              (format c "~%~A"
                      (tui:colored "jk:nav  Enter:open  a:create  e:edit  d:del  Esc:back"
-                                 :fg tui:*fg-bright-black*))))
+                                 :fg (theme-fg :bright-black)))))
          (modal (render-box-with-title "LISTS" content :min-width modal-width)))
     (tui:composite-with-shadow modal background
                                :x-position tui:+center+
@@ -1463,8 +1375,8 @@
            (with-output-to-string (c)
              (if (null items)
                  (format c "~A~%~%~A"
-                         (tui:colored "No items in this list." :fg tui:*fg-bright-black*)
-                         (tui:colored "Press 'a' to add one." :fg tui:*fg-bright-black*))
+                         (tui:colored "No items in this list." :fg (theme-fg :bright-black))
+                         (tui:colored "Press 'a' to add one." :fg (theme-fg :bright-black)))
                  (let* ((flat (build-list-detail-flat-items list-def items))
                         ;; Map item cursor position to flat list position
                         (item-idx 0)
@@ -1479,7 +1391,7 @@
                             (when (> visible-count 0)
                               (format c "~%"))
                             (format c "~A~%"
-                                    (tui:bold (tui:colored (string-upcase sec-name) :fg tui:*fg-cyan*)))
+                                    (tui:bold (tui:colored (string-upcase sec-name) :fg (theme-fg :cyan))))
                             (incf visible-count)))
                          (:item
                           (let* ((item (second entry))
@@ -1490,12 +1402,12 @@
                             (if selected
                                 (format c "~A~%"
                                         (tui:colored (pad-to-width line content-width)
-                                                     :bg tui:*bg-cyan* :fg tui:*fg-black*))
+                                                     :bg (theme-bg :cyan) :fg (theme-fg :black)))
                                 (if (list-item-checked item)
                                     (format c "~A~%"
                                             (tui:render-styled
                                              (tui:make-style :strikethrough t
-                                                             :foreground tui:*fg-bright-black*)
+                                                             :foreground (theme-fg :bright-black))
                                              line))
                                     (format c "~A~%" line)))
                             (incf item-idx)
@@ -1505,11 +1417,11 @@
                    (checked (count-if #'list-item-checked items)))
                (format c "~%~A"
                        (tui:colored (format nil "~D/~D checked" checked total)
-                                   :fg tui:*fg-bright-black*)))
+                                   :fg (theme-fg :bright-black))))
              ;; Help line
              (format c "~%~A"
                      (tui:colored "jk:nav  Space:check  a:add  d:del  s:share  Esc:back"
-                                 :fg tui:*fg-bright-black*))))
+                                 :fg (theme-fg :bright-black)))))
          (title (if list-def (string-upcase (list-def-name list-def)) "LIST"))
          (modal (render-box-with-title title content :min-width modal-width)))
     (tui:composite-with-shadow modal background
@@ -1529,7 +1441,7 @@
              ;; Name input
              (format c "~A ~A ~A~%"
                      (if (eql active :name)
-                         (tui:colored ">" :fg tui:*fg-cyan*)
+                         (tui:colored ">" :fg (theme-fg :cyan))
                          " ")
                      (tui:bold "Name:")
                      (tui.textinput:textinput-view (model-list-form-name-input model)))
@@ -1537,7 +1449,7 @@
              ;; Description input
              (format c "~A ~A ~A~%"
                      (if (eql active :desc)
-                         (tui:colored ">" :fg tui:*fg-cyan*)
+                         (tui:colored ">" :fg (theme-fg :cyan))
                          " ")
                      (tui:bold "Desc:")
                      (tui.textinput:textinput-view (model-list-form-desc-input model)))
@@ -1545,25 +1457,25 @@
              ;; Sections input
              (format c "~A ~A ~A~%"
                      (if (eql active :sections)
-                         (tui:colored ">" :fg tui:*fg-cyan*)
+                         (tui:colored ">" :fg (theme-fg :cyan))
                          " ")
                      (tui:bold "Secs:")
                      (tui.textinput:textinput-view (model-list-form-sections-input model)))
              (format c "  ~A~%"
-                     (tui:colored "comma-separated section names" :fg tui:*fg-bright-black*))
+                     (tui:colored "comma-separated section names" :fg (theme-fg :bright-black)))
 
              ;; Submit button
              (format c "~%~A ~A"
                      (if (eql active :submit)
-                         (tui:colored ">" :fg tui:*fg-cyan*)
+                         (tui:colored ">" :fg (theme-fg :cyan))
                          " ")
                      (if (eql active :submit)
-                         (tui:bold (tui:colored "[ Save ]" :fg tui:*fg-green*))
-                         (tui:colored "[ Save ]" :fg tui:*fg-bright-black*)))
+                         (tui:bold (tui:colored "[ Save ]" :fg (theme-fg :green)))
+                         (tui:colored "[ Save ]" :fg (theme-fg :bright-black))))
 
              ;; Help
              (format c "~%~%~A"
-                     (tui:colored "Tab:next field  Enter:save  Esc:cancel" :fg tui:*fg-bright-black*))))
+                     (tui:colored "Tab:next field  Enter:save  Esc:cancel" :fg (theme-fg :bright-black)))))
          (modal (render-box-with-title title content :min-width dialog-width)))
     (tui:composite-with-shadow modal background
                                :x-position tui:+center+
@@ -1581,7 +1493,7 @@
                      (tui:bold "Item:")
                      (tui.textinput:textinput-view (model-list-item-add-input model)))
              (format c "~%~A"
-                     (tui:colored "Enter:add  Esc:cancel" :fg tui:*fg-bright-black*))))
+                     (tui:colored "Enter:add  Esc:cancel" :fg (theme-fg :bright-black)))))
          (title (format nil "ADD TO ~A" (if list-def (string-upcase (list-def-name list-def)) "LIST")))
          (modal (render-box-with-title title content :min-width modal-width)))
     (tui:composite-with-shadow modal background
@@ -1600,12 +1512,13 @@
                       (with-output-to-string (c)
                         (format c "~A~%~%"
                                 (tui:bold (format nil "Delete list \"~A\"?" (list-def-name list-def))))
-                        (let ((item-count (length (db-load-list-items (list-def-id list-def)))))
+                        (let ((item-count (gethash (list-def-id list-def)
+                                                   (model-lists-item-counts model) 0)))
                           (when (> item-count 0)
                             (format c "This will remove ~D item~:P.~%~%" item-count)))
                         (format c "~A"
                                 (tui:colored "y:confirm  any other key:cancel"
-                                            :fg tui:*fg-bright-black*)))
+                                            :fg (theme-fg :bright-black))))
                       "No list selected"))
          (modal (render-box-with-title "DELETE LIST" content :min-width modal-width)))
     (tui:composite-with-shadow modal background

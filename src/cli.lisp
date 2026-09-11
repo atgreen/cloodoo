@@ -177,13 +177,13 @@
                               (setf (todo-attachment-hashes todo) (list hash)))))
                         (save-todo todo)
                         (format t "~A Added: ~A~%"
-                               (tui:colored "✓" :fg tui:*fg-green*)
+                               (tui:colored "✓" :fg (theme-fg :green))
                                title)
                         (when attachment-path
                           (if (probe-file attachment-path)
                               (format t "  Attachment: ~A~%" (file-namestring attachment-path))
                               (format t "  ~A Attachment file not found: ~A~%"
-                                     (tui:colored "⚠" :fg tui:*fg-yellow*) attachment-path)))
+                                     (tui:colored "⚠" :fg (theme-fg :yellow)) attachment-path)))
                         (when scheduled-date
                           (format t "  Scheduled: ~A~%"
                                  (lt:format-timestring nil scheduled-date
@@ -196,11 +196,11 @@
                         (handler-case
                             (when (cli-sync-todo todo)
                               (format t "  ~A Synced to server~%"
-                                      (tui:colored "✓" :fg tui:*fg-green*)))
+                                      (tui:colored "✓" :fg (theme-fg :green))))
                           (error (e)
                             (declare (ignore e))
                             (format t "  ~A Could not sync to server~%"
-                                    (tui:colored "⚠" :fg tui:*fg-yellow*)))))
+                                    (tui:colored "⚠" :fg (theme-fg :yellow))))))
                       (format t "Error: Please provide a title for the TODO~%")))))))
 
 (defun make-list-command ()
@@ -267,7 +267,7 @@
                           (format t "~%"))
                         (format t "~%~A~%"
                                (tui:colored (format nil "~D item~:P" (length filtered))
-                                           :fg tui:*fg-bright-black*)))
+                                           :fg (theme-fg :bright-black))))
       (t (format t "~%No items found.~%~%"))))))))
 
 (defun make-done-command ()
@@ -295,7 +295,7 @@
                            (setf (todo-completed-at todo) (lt:now))
                            (save-todo todo)
                            (format t "~A Completed: ~A~%"
-                                  (tui:colored "✓" :fg tui:*fg-green*)
+                                  (tui:colored "✓" :fg (theme-fg :green))
                                   (todo-title todo))))
                         (t
                          (format t "Multiple matches found:~%")
@@ -323,20 +323,20 @@
                                               (lt:timestamp< (todo-due-date item) (lt:now))))
                                        todos)))
                 (format t "~%~A~%~%"
-                       (tui:bold (tui:colored "  CLOODOO STATS  " :fg tui:*fg-black* :bg tui:*bg-cyan*)))
+                       (tui:bold (tui:colored "  CLOODOO STATS  " :fg (theme-fg :black) :bg (theme-bg :cyan))))
                 (format t "  Total TODOs:    ~D~%" total)
                 (format t "  Pending:        ~A~%"
-                       (tui:colored (format nil "~D" pending) :fg tui:*fg-white*))
+                       (tui:colored (format nil "~D" pending) :fg (theme-fg :white)))
                 (format t "  In Progress:    ~A~%"
-                       (tui:colored (format nil "~D" in-progress) :fg tui:*fg-cyan*))
+                       (tui:colored (format nil "~D" in-progress) :fg (theme-fg :cyan)))
                 (format t "  Completed:      ~A~%"
-                       (tui:colored (format nil "~D" completed) :fg tui:*fg-green*))
+                       (tui:colored (format nil "~D" completed) :fg (theme-fg :green)))
                 (format t "~%")
                 (format t "  High Priority:  ~A~%"
-                       (tui:colored (format nil "~D" high) :fg tui:*fg-red*))
+                       (tui:colored (format nil "~D" high) :fg (theme-fg :red)))
                 (when (> overdue 0)
                   (format t "  Overdue:        ~A~%"
-                         (tui:bold (tui:colored (format nil "~D" overdue) :fg tui:*fg-red*))))
+                         (tui:bold (tui:colored (format nil "~D" overdue) :fg (theme-fg :red)))))
                 (format t "~%")))))
 
 (defun make-compact-command ()
@@ -628,7 +628,7 @@
                         (find-paired-sync-config)
                       (unless server-id
                         (format t "~A No paired sync server found.~%"
-                                (tui:colored "✗" :fg tui:*fg-red*))
+                                (tui:colored "✗" :fg (theme-fg :red)))
                         (format t "Pair with a server first using QR code pairing.~%")
                         (return-from make-sync-upload-attachments-command nil))
 
@@ -637,7 +637,7 @@
 
                         (unless (and (probe-file cert-path) (probe-file key-path))
                           (format t "~A Client certificates not found.~%"
-                                  (tui:colored "✗" :fg tui:*fg-red*))
+                                  (tui:colored "✗" :fg (theme-fg :red)))
                           (format t "Certificates missing for paired server ~A~%" server-id)
                           (return-from make-sync-upload-attachments-command nil))
 
@@ -652,31 +652,31 @@
 
                       (unless (sync-client-connected-p)
                         (format t "~A Failed to connect to sync server~%"
-                                (tui:colored "✗" :fg tui:*fg-red*))
+                                (tui:colored "✗" :fg (theme-fg :red)))
                         (stop-sync-client)
                         (return-from make-sync-upload-attachments-command nil))
 
-                      (format t "~A Connected!~%~%" (tui:colored "✓" :fg tui:*fg-green*))
+                      (format t "~A Connected!~%~%" (tui:colored "✓" :fg (theme-fg :green)))
 
                       ;; Upload all attachments
                       (let ((result (upload-all-attachments-to-server)))
                         (if result
                             (progn
                               (format t "~%~A Upload complete!~%"
-                                      (tui:colored "✓" :fg tui:*fg-green*))
+                                      (tui:colored "✓" :fg (theme-fg :green)))
                               (format t "  Uploaded: ~A~%" (getf result :uploaded))
                               (when (plusp (getf result :failed))
                                 (format t "  ~A Failed: ~A~%"
-                                        (tui:colored "⚠" :fg tui:*fg-yellow*)
+                                        (tui:colored "⚠" :fg (theme-fg :yellow))
                                         (getf result :failed))))
                             (format t "~A Failed to upload attachments~%"
-                                    (tui:colored "✗" :fg tui:*fg-red*))))
+                                    (tui:colored "✗" :fg (theme-fg :red)))))
 
                         ;; Disconnect
                         (stop-sync-client))))
                 (error (e)
                   (format t "~A Error: ~A~%"
-                          (tui:colored "✗" :fg tui:*fg-red*) e))))))
+                          (tui:colored "✗" :fg (theme-fg :red)) e))))))
 
 (defun make-sync-reset-command ()
   "Create the 'sync-reset' subcommand to force a multi-way resync."
@@ -702,7 +702,7 @@
                             (find-paired-sync-config)
                           (unless server-id
                             (format t "~A No paired sync server found.~%"
-                                    (tui:colored "✗" :fg tui:*fg-red*))
+                                    (tui:colored "✗" :fg (theme-fg :red)))
                             (format t "Pair with a server first using QR code pairing.~%")
                             (return))
 
@@ -711,7 +711,7 @@
 
                             (unless (and (probe-file cert-path) (probe-file key-path))
                               (format t "~A Client certificates not found.~%"
-                                      (tui:colored "✗" :fg tui:*fg-red*))
+                                      (tui:colored "✗" :fg (theme-fg :red)))
                               (format t "Certificates missing for paired server ~A~%" server-id)
                               (return))
 
@@ -734,10 +734,10 @@
                                    (let ((ack-msg (ag-grpc:stream-read-message stream)))
                                      (unless (and ack-msg (eql (proto-msg-case ack-msg) :ack))
                                        (format t "~A Failed to get ACK from server~%"
-                                               (tui:colored "✗" :fg tui:*fg-red*))
+                                               (tui:colored "✗" :fg (theme-fg :red)))
                                        (return)))
 
-                                   (format t "~A Connected!~%~%" (tui:colored "✓" :fg tui:*fg-green*))
+                                   (format t "~A Connected!~%~%" (tui:colored "✓" :fg (theme-fg :green)))
 
                                    ;; Send reset message
                                    (let* ((reset-to (if (string-equal since "full") "" since))
@@ -745,9 +745,9 @@
                                      (ag-grpc:stream-send stream reset-msg)
                                      (if (string-equal since "full")
                                          (format t "~A Full sync reset broadcasted to all devices!~%~%"
-                                                 (tui:colored "✓" :fg tui:*fg-green*))
+                                                 (tui:colored "✓" :fg (theme-fg :green)))
                                          (format t "~A Sync reset broadcasted (since: ~A)~%~%"
-                                                 (tui:colored "✓" :fg tui:*fg-green*) since))
+                                                 (tui:colored "✓" :fg (theme-fg :green)) since))
                                      (format t "All connected devices will resync on their next connection.~%~%"))
 
                                    ;; Give the message time to be sent
@@ -759,7 +759,7 @@
                                 (ag-grpc:channel-close channel)))))))
                     (error (e)
                       (format t "~A Error: ~A~%"
-                              (tui:colored "✗" :fg tui:*fg-red*) e)))))))))
+                              (tui:colored "✗" :fg (theme-fg :red)) e)))))))))
 
 ;;── Certificate Management Commands ────────────────────────────────────────────
 
@@ -790,12 +790,12 @@
                         (init-ca :force force :days days)
                         (init-server-cert :days (min days 365))
                         (format t "~%~A mTLS certificates initialized!~%"
-                                (tui:colored "✓" :fg tui:*fg-green*))
+                                (tui:colored "✓" :fg (theme-fg :green)))
                         (format t "~%You can now issue client certificates with:~%")
                         (format t "  cloodoo cert issue DEVICE_NAME~%~%"))
                     (error (e)
                       (format t "~A Error: ~A~%"
-                              (tui:colored "✗" :fg tui:*fg-red*) e))))))))
+                              (tui:colored "✗" :fg (theme-fg :red)) e))))))))
 
 (defun make-cert-issue-command ()
   "Create the 'cert issue' subcommand."
@@ -848,7 +848,7 @@
                                 ;; Just create the cert, no pairing server
                                 (let ((passphrase (issue-client-cert device-name :days days)))
                                   (format t "~%~A Certificate created for '~A'~%"
-                                          (tui:colored "✓" :fg tui:*fg-green*) device-name)
+                                          (tui:colored "✓" :fg (theme-fg :green)) device-name)
                                   (format t "~%Cert: ~A~%" (namestring (client-cert-file device-name)))
                                   (format t "Key:  ~A~%" (namestring (client-key-file device-name)))
                                   (format t "Passphrase: ~A~%~%" passphrase))
@@ -872,7 +872,7 @@
                                                     do (format t "  ~A) ~A~A~%"
                                                                i ip
                                                                (if (str:starts-with-p "100." ip)
-                                                                   (tui:colored " (VPN)" :fg tui:*fg-cyan*)
+                                                                   (tui:colored " (VPN)" :fg (theme-fg :cyan))
                                                                    "")))
                                               (format t "~%Select address [1]: ")
                                               (force-output)
@@ -891,17 +891,17 @@
                                                      (format nil ":~A" effective-port)))
                                        (url (format nil "~A://~A~A/pair/~A" scheme primary-ip port-str token)))
                                   (format t "~%~A Certificate created for '~A'~%"
-                                          (tui:colored "✓" :fg tui:*fg-green*) device-name)
+                                          (tui:colored "✓" :fg (theme-fg :green)) device-name)
                                   (format t "~%Scan this QR code in the Cloodoo app, or run on the client:~%")
-                                  (format t "  ~A~%~%" (tui:colored (format nil "cloodoo cert pair ~A" url) :fg tui:*fg-cyan*))
+                                  (format t "  ~A~%~%" (tui:colored (format nil "cloodoo cert pair ~A" url) :fg (theme-fg :cyan)))
                                   ;; Try to generate QR code
                                   (let ((qr (generate-qr-ascii url)))
                                     (when qr
                                       (format t "~A~%" qr)))
                                   (format t "~A Link expires in 10 minutes.~%"
-                                          (tui:colored "!" :fg tui:*fg-yellow*))
+                                          (tui:colored "!" :fg (theme-fg :yellow)))
                                   (format t "~%Passphrase: ~A~%~%"
-                                          (tui:bold (tui:colored passphrase :fg tui:*fg-green*)))
+                                          (tui:bold (tui:colored passphrase :fg (theme-fg :green))))
                                   ;; Start server for pairing
                                   (if tls
                                       (start-server :port effective-port :address "0.0.0.0"
@@ -917,7 +917,7 @@
                                         ;; Check if token was consumed (cert downloaded)
                                         (unless (get-pairing-request token)
                                           (format t "~%~A Device '~A' has downloaded its certificate.~%"
-                                                  (tui:colored "✓" :fg tui:*fg-green*) device-name)
+                                                  (tui:colored "✓" :fg (theme-fg :green)) device-name)
                                           (return)))
                                     (#+sbcl sb-sys:interactive-interrupt
                                      #+ccl ccl:interrupt-signal-condition
@@ -926,11 +926,11 @@
                                   (stop-server)))
                           (usocket:address-in-use-error ()
                             (format t "~A Port ~A is already in use.~%"
-                                    (tui:colored "✗" :fg tui:*fg-red*) port)
+                                    (tui:colored "✗" :fg (theme-fg :red)) port)
                             (format t "  Use --port to specify a different port, or stop the existing server.~%"))
                           (error (e)
                             (format t "~A Error: ~A~%"
-                                    (tui:colored "✗" :fg tui:*fg-red*) e))))
+                                    (tui:colored "✗" :fg (theme-fg :red)) e))))
                       (format t "Usage: cloodoo cert issue DEVICE_NAME~%")))))))
 
 (defun make-cert-list-command ()
@@ -956,8 +956,8 @@
                               (format t "  ~30A ~12A ~A~%"
                                       name
                                       (if revoked
-                                          (tui:colored "REVOKED" :fg tui:*fg-red*)
-                                          (tui:colored "active" :fg tui:*fg-green*))
+                                          (tui:colored "REVOKED" :fg (theme-fg :red))
+                                          (tui:colored "active" :fg (theme-fg :green)))
                                       (lt:format-timestring
                                        nil (lt:universal-to-timestamp issued)
                                        :format '(:year "-" (:month 2) "-" (:day 2))))))
@@ -979,10 +979,10 @@
                           (progn
                             (revoke-client-cert device-name)
                             (format t "~%~A Certificate for '~A' has been revoked.~%~%"
-                                    (tui:colored "✓" :fg tui:*fg-green*) device-name))
+                                    (tui:colored "✓" :fg (theme-fg :green)) device-name))
                         (error (e)
                           (format t "~A Error: ~A~%"
-                                  (tui:colored "✗" :fg tui:*fg-red*) e))))
+                                  (tui:colored "✗" :fg (theme-fg :red)) e))))
                     (format t "Usage: cloodoo cert revoke DEVICE_NAME~%"))))))
 
 (defun make-cert-pair-command ()
@@ -998,7 +998,7 @@
                           (pair-with-server url)
                         (error (e)
                           (format t "~A Error: ~A~%"
-                                  (tui:colored "✗" :fg tui:*fg-red*) e)))))
+                                  (tui:colored "✗" :fg (theme-fg :red)) e)))))
       (t
                       (format t "Usage: cloodoo cert pair URL~%~%")
                       (format t "Example: cloodoo cert pair http://192.168.1.100:9876/pair/abc123~%")))))))
@@ -1073,7 +1073,7 @@ URL format: http[s]://HOST[:PORT]/pair/TOKEN"
                (device-name (gethash "device_name" info))
                (expires-in (gethash "expires_in" info)))
           (format t "~A Server is offering certificate for '~A'~%"
-                  (tui:colored "✓" :fg tui:*fg-green*) device-name)
+                  (tui:colored "✓" :fg (theme-fg :green)) device-name)
           (format t "  Expires in ~A seconds~%~%" expires-in)
 
           ;; Step 2: Get server device ID for storage path
@@ -1146,7 +1146,7 @@ URL format: http[s]://HOST[:PORT]/pair/TOKEN"
 
                     ;; Success
                     (format t "~%~A Pairing complete!~%"
-                            (tui:colored "✓" :fg tui:*fg-green*))
+                            (tui:colored "✓" :fg (theme-fg :green)))
                     (format t "~%Certificate stored in:~%")
                     (format t "  ~A~%" (namestring cert-path))
                     (format t "  ~A~%" (namestring key-path))
@@ -1766,7 +1766,7 @@ URL format: http[s]://HOST[:PORT]/pair/TOKEN"
                                                   :if-exists :supersede
                                                   :if-does-not-exist :create)
                             (jzon:stringify manifest :stream stream :pretty t)))
-                        (format t "~A ~A~%" (tui:colored "✓" :fg tui:*fg-green*) browser-name)
+                        (format t "~A ~A~%" (tui:colored "✓" :fg (theme-fg :green)) browser-name)
                         (format t "  Manifest: ~A~%" manifest-file)
                         (incf installed-count))))
                   (format t "~%Wrapper script: ~A~%" (merge-pathnames wrapper-name
@@ -1777,7 +1777,7 @@ URL format: http[s]://HOST[:PORT]/pair/TOKEN"
                   ;; Windows-specific instructions
                   (when is-windows
                     (format t "~%~A Windows Registry Setup Required:~%"
-                           (tui:colored "!" :fg tui:*fg-yellow*))
+                           (tui:colored "!" :fg (theme-fg :yellow)))
                     (format t "Run this in an elevated Command Prompt:~%~%")
                     (format t "  REG ADD \"HKCU\\Software\\Google\\Chrome\\NativeMessagingHosts\\com.cloodoo.native\" /ve /t REG_SZ /d \"~A\" /f~%~%"
                            (namestring (merge-pathnames "com.cloodoo.native.json"
@@ -1873,18 +1873,18 @@ URL format: http[s]://HOST[:PORT]/pair/TOKEN"
                        (cond
                          ((export-todos-pdf filtered output-file :title title :by-tag by-tag)
                           (format t "~A Exported ~D TODO~:P to ~A~%"
-                                 (tui:colored "✓" :fg tui:*fg-green*)
+                                 (tui:colored "✓" :fg (theme-fg :green))
                                  (length filtered)
                                  output-file))
                          (t
                           (format t "~A No PDF converter found (wkhtmltopdf, pandoc, or enscript).~%"
-                                 (tui:colored "✗" :fg tui:*fg-red*))
+                                 (tui:colored "✗" :fg (theme-fg :red)))
                           (format t "  Falling back to text export...~%")
                           (let ((text-file (format nil "~A.txt" (pathname-name output-file))))
                             (with-open-file (stream text-file :direction :output :if-exists :supersede)
                               (export-todos-text filtered :stream stream :title title :by-tag by-tag))
                             (format t "~A Exported ~D TODO~:P to ~A~%"
-                                   (tui:colored "✓" :fg tui:*fg-green*)
+                                   (tui:colored "✓" :fg (theme-fg :green))
                                    (length filtered)
                                    text-file)))))
                       (t
@@ -1892,7 +1892,7 @@ URL format: http[s]://HOST[:PORT]/pair/TOKEN"
                        (with-open-file (stream output-file :direction :output :if-exists :supersede)
                          (export-todos-text filtered :stream stream :title title :by-tag by-tag))
                        (format t "~A Exported ~D TODO~:P to ~A~%"
-                              (tui:colored "✓" :fg tui:*fg-green*)
+                              (tui:colored "✓" :fg (theme-fg :green))
                               (length filtered)
                               output-file)))))))))
 
@@ -1937,12 +1937,12 @@ URL format: http[s]://HOST[:PORT]/pair/TOKEN"
                         (let ((new-context (uiop:read-file-string temp-file)))
                           (save-user-context new-context)
                           (format t "~A User context saved~%"
-                                  (tui:colored "✓" :fg tui:*fg-green*)))
+                                  (tui:colored "✓" :fg (theme-fg :green))))
                         ;; Clean up temp file
                         (when (probe-file temp-file)
                           (delete-file temp-file)))
                       (format t "~A Editor exited with error~%"
-                              (tui:colored "✗" :fg tui:*fg-red*))))))))
+                              (tui:colored "✗" :fg (theme-fg :red)))))))))
 
 (defun make-context-set-command ()
   "Create the 'context set' subcommand."
@@ -1957,10 +1957,10 @@ URL format: http[s]://HOST[:PORT]/pair/TOKEN"
                    (let ((text (format nil "~{~A~^ ~}" args)))
                      (save-user-context text)
                      (format t "~A User context set~%"
-                             (tui:colored "✓" :fg tui:*fg-green*))))
+                             (tui:colored "✓" :fg (theme-fg :green)))))
                   (t
                    (format t "~A Error: no text provided~%"
-                           (tui:colored "✗" :fg tui:*fg-red*))
+                           (tui:colored "✗" :fg (theme-fg :red)))
                    (format t "Usage: cloodoo context set <text>~%")))))))
 
 (defun make-context-command ()
@@ -1994,7 +1994,7 @@ URL format: http[s]://HOST[:PORT]/pair/TOKEN"
                           (let ((items (db-load-list-items (list-def-id list-def))))
                             (export-list list-def items))
                           (format t "~A List not found: ~A~%"
-                                  (tui:colored "✗" :fg tui:*fg-red*) name)))
+                                  (tui:colored "✗" :fg (theme-fg :red)) name)))
                     (format t "Error: Please provide a list name~%"))))))
 
 (defun make-lists-add-command ()
@@ -2030,10 +2030,10 @@ URL format: http[s]://HOST[:PORT]/pair/TOKEN"
                                                         :notes notes)))
                               (db-save-list-item item)
                               (format t "~A Added to ~A: ~A~%"
-                                      (tui:colored "✓" :fg tui:*fg-green*)
+                                      (tui:colored "✓" :fg (theme-fg :green))
                                       (list-def-name list-def) item-title))
                             (format t "~A List not found: ~A~%"
-                                    (tui:colored "✗" :fg tui:*fg-red*) list-name)))
+                                    (tui:colored "✗" :fg (theme-fg :red)) list-name)))
                       (format t "Error: Usage: cloodoo lists add LIST-NAME ITEM-TITLE~%")))))))
 
 (defun make-lists-check-command ()
@@ -2055,13 +2055,13 @@ URL format: http[s]://HOST[:PORT]/pair/TOKEN"
                                   (db-check-list-item (list-item-id item)
                                                       (not (list-item-checked item)))
                                   (format t "~A ~A: ~A~%"
-                                          (tui:colored "✓" :fg tui:*fg-green*)
+                                          (tui:colored "✓" :fg (theme-fg :green))
                                           (if (list-item-checked item) "Unchecked" "Checked")
                                           item-title))
                                 (format t "~A Item not found: ~A~%"
-                                        (tui:colored "✗" :fg tui:*fg-red*) item-title)))
+                                        (tui:colored "✗" :fg (theme-fg :red)) item-title)))
                           (format t "~A List not found: ~A~%"
-                                  (tui:colored "✗" :fg tui:*fg-red*) list-name)))
+                                  (tui:colored "✗" :fg (theme-fg :red)) list-name)))
                     (format t "Error: Usage: cloodoo lists check LIST-NAME ITEM-TITLE~%"))))))
 
 (defun make-lists-create-command ()
@@ -2092,7 +2092,7 @@ URL format: http[s]://HOST[:PORT]/pair/TOKEN"
                              (existing (db-find-list-by-name name)))
                         (if existing
                             (format t "~A List already exists: ~A~%"
-                                    (tui:colored "✗" :fg tui:*fg-red*) name)
+                                    (tui:colored "✗" :fg (theme-fg :red)) name)
                             (let* ((sections (when sections-str
                                               (mapcar (lambda (s) (str:trim s))
                                                       (str:split #\, sections-str))))
@@ -2101,7 +2101,7 @@ URL format: http[s]://HOST[:PORT]/pair/TOKEN"
                                                                    :sections sections)))
                               (db-save-list-definition list-def)
                               (format t "~A Created list: ~A~%"
-                                      (tui:colored "✓" :fg tui:*fg-green*) name)
+                                      (tui:colored "✓" :fg (theme-fg :green)) name)
                               (when sections
                                 (format t "  Sections: ~{~A~^, ~}~%" sections)))))
                       (format t "Error: Please provide a list name~%")))))))
@@ -2145,9 +2145,9 @@ URL format: http[s]://HOST[:PORT]/pair/TOKEN"
                                                           :created-at (list-def-created-at list-def))))
                               (db-save-list-definition updated)
                               (format t "~A Updated list: ~A~%"
-                                      (tui:colored "✓" :fg tui:*fg-green*) name))
+                                      (tui:colored "✓" :fg (theme-fg :green)) name))
                             (format t "~A List not found: ~A~%"
-                                    (tui:colored "✗" :fg tui:*fg-red*) name)))
+                                    (tui:colored "✗" :fg (theme-fg :red)) name)))
                       (format t "Error: Please provide a list name~%")))))))
 
 (defun make-lists-delete-command ()
@@ -2164,14 +2164,14 @@ URL format: http[s]://HOST[:PORT]/pair/TOKEN"
                       (cond
                         ((null list-def)
                          (format t "~A List not found: ~A~%"
-                                 (tui:colored "✗" :fg tui:*fg-red*) name))
+                                 (tui:colored "✗" :fg (theme-fg :red)) name))
                         ((groceries-list-p (list-def-id list-def))
                          (format t "~A The Groceries list cannot be deleted.~%"
-                                 (tui:colored "✗" :fg tui:*fg-red*)))
+                                 (tui:colored "✗" :fg (theme-fg :red))))
                         (t
                          (db-delete-list-definition (list-def-id list-def))
                          (format t "~A Deleted list: ~A~%"
-                                 (tui:colored "✓" :fg tui:*fg-green*) name))))
+                                 (tui:colored "✓" :fg (theme-fg :green)) name))))
                     (format t "Error: Please provide a list name~%"))))))
 
 (defun make-lists-move-to-todo-command ()
@@ -2194,12 +2194,12 @@ URL format: http[s]://HOST[:PORT]/pair/TOKEN"
                                   (save-todo todo)
                                   (db-delete-list-item (list-item-id item))
                                   (format t "~A Moved to todo inbox: ~A~%"
-                                          (tui:colored "✓" :fg tui:*fg-green*)
+                                          (tui:colored "✓" :fg (theme-fg :green))
                                           (list-item-title item)))
                                 (format t "~A Item not found: ~A~%"
-                                        (tui:colored "✗" :fg tui:*fg-red*) item-title)))
+                                        (tui:colored "✗" :fg (theme-fg :red)) item-title)))
                           (format t "~A List not found: ~A~%"
-                                  (tui:colored "✗" :fg tui:*fg-red*) list-name)))
+                                  (tui:colored "✗" :fg (theme-fg :red)) list-name)))
                     (format t "Error: Usage: cloodoo lists move-to-todo LIST-NAME ITEM-TITLE~%"))))))
 
 (defun make-lists-command ()
@@ -2224,7 +2224,7 @@ URL format: http[s]://HOST[:PORT]/pair/TOKEN"
                                 (incf checked)
                                 (incf unchecked)))
                           (format t "  ~A"
-                                  (tui:colored (list-def-name list-def) :fg tui:*fg-cyan*))
+                                  (tui:colored (list-def-name list-def) :fg (theme-fg :cyan)))
                           (format t " (~D item~:P" (length items))
                           (when (> checked 0)
                             (format t ", ~D checked" checked))
@@ -2232,7 +2232,7 @@ URL format: http[s]://HOST[:PORT]/pair/TOKEN"
                           (when (list-def-description list-def)
                             (format t "    ~A~%"
                                     (tui:colored (list-def-description list-def)
-                                                 :fg tui:*fg-bright-black*)))))
+                                                 :fg (theme-fg :bright-black))))))
                       (format t "~%"))
                     (format t "~%No lists defined. Create one with: cloodoo lists create NAME~%~%"))))
    :sub-commands (list (make-lists-show-command)
@@ -2294,7 +2294,7 @@ URL format: http[s]://HOST[:PORT]/pair/TOKEN"
                         ;; Ensure CA is initialized
                         (unless (ca-initialized-p)
                           (format t "~A CA not initialized. Run 'cloodoo cert init' first.~%"
-                                  (tui:colored "✗" :fg tui:*fg-red*))
+                                  (tui:colored "✗" :fg (theme-fg :red)))
                           (return-from make-user-create-command nil))
                         (let ((cert-exists (client-cert-exists-p username)))
                         (handler-case
@@ -2302,12 +2302,12 @@ URL format: http[s]://HOST[:PORT]/pair/TOKEN"
                                 (if cert-exists
                                     (progn
                                       (format t "~%~A User '~A' already exists.~%"
-                                              (tui:colored "✓" :fg tui:*fg-green*) username)
+                                              (tui:colored "✓" :fg (theme-fg :green)) username)
                                       (format t "~%Cert: ~A~%" (namestring (client-cert-file username)))
                                       (format t "Key:  ~A~%~%" (namestring (client-key-file username))))
                                     (let ((passphrase (issue-client-cert username :days days)))
                                       (format t "~%~A User '~A' created.~%"
-                                              (tui:colored "✓" :fg tui:*fg-green*) username)
+                                              (tui:colored "✓" :fg (theme-fg :green)) username)
                                       (format t "~%Cert: ~A~%" (namestring (client-cert-file username)))
                                       (format t "Key:  ~A~%" (namestring (client-key-file username)))
                                       (format t "Passphrase: ~A~%~%" passphrase)))
@@ -2329,7 +2329,7 @@ URL format: http[s]://HOST[:PORT]/pair/TOKEN"
                                                     do (format t "  ~A) ~A~A~%"
                                                                i ip
                                                                (if (str:starts-with-p "100." ip)
-                                                                   (tui:colored " (VPN)" :fg tui:*fg-cyan*)
+                                                                   (tui:colored " (VPN)" :fg (theme-fg :cyan))
                                                                    "")))
                                               (format t "~%Select address [1]: ")
                                               (force-output)
@@ -2348,17 +2348,17 @@ URL format: http[s]://HOST[:PORT]/pair/TOKEN"
                                                      (format nil ":~A" effective-port)))
                                        (url (format nil "~A://~A~A/pair/~A" scheme primary-ip port-str token)))
                                   (format t "~%~A User '~A' ~A.~%"
-                                          (tui:colored "✓" :fg tui:*fg-green*) username
+                                          (tui:colored "✓" :fg (theme-fg :green)) username
                                           (if cert-exists "ready to pair" "created"))
                                   (format t "~%Scan this QR code in the Cloodoo app to pair:~%")
-                                  (format t "  ~A~%~%" (tui:colored (format nil "cloodoo cert pair ~A" url) :fg tui:*fg-cyan*))
+                                  (format t "  ~A~%~%" (tui:colored (format nil "cloodoo cert pair ~A" url) :fg (theme-fg :cyan)))
                                   (let ((qr (generate-qr-ascii url)))
                                     (when qr
                                       (format t "~A~%" qr)))
                                   (format t "~A Link expires in 10 minutes.~%"
-                                          (tui:colored "!" :fg tui:*fg-yellow*))
+                                          (tui:colored "!" :fg (theme-fg :yellow)))
                                   (format t "~%Passphrase: ~A~%~%"
-                                          (tui:bold (tui:colored passphrase :fg tui:*fg-green*)))
+                                          (tui:bold (tui:colored passphrase :fg (theme-fg :green))))
                                   (handler-case
                                       (if tls
                                           (start-server :port effective-port :address "0.0.0.0"
@@ -2376,7 +2376,7 @@ URL format: http[s]://HOST[:PORT]/pair/TOKEN"
                                         (let ((req (get-pairing-request token)))
                                           (when (null req)
                                             (format t "~%~A User '~A' has paired a device.~%"
-                                                    (tui:colored "✓" :fg tui:*fg-green*) username)
+                                                    (tui:colored "✓" :fg (theme-fg :green)) username)
                                             ;; Give the POST handler time to finish sending the response
                                             (sleep 3)
                                             (return))))
@@ -2387,7 +2387,7 @@ URL format: http[s]://HOST[:PORT]/pair/TOKEN"
                                   (ignore-errors (stop-server))))
                           (error (e)
                             (format t "~A Error: ~A~%"
-                                    (tui:colored "✗" :fg tui:*fg-red*) e)))))
+                                    (tui:colored "✗" :fg (theme-fg :red)) e)))))
                       (format t "Usage: cloodoo user create USERNAME~%")))))))
 
 (defun make-user-list-command ()
@@ -2413,8 +2413,8 @@ URL format: http[s]://HOST[:PORT]/pair/TOKEN"
                                (format t "  ~30A ~12A ~A~%"
                                        name
                                        (if revoked
-                                           (tui:colored "REVOKED" :fg tui:*fg-red*)
-                                           (tui:colored "active" :fg tui:*fg-green*))
+                                           (tui:colored "REVOKED" :fg (theme-fg :red))
+                                           (tui:colored "active" :fg (theme-fg :green)))
                                        (lt:format-timestring
                                         nil (lt:universal-to-timestamp issued)
                                         :format '(:year "-" (:month 2) "-" (:day 2))))))
@@ -2436,10 +2436,10 @@ URL format: http[s]://HOST[:PORT]/pair/TOKEN"
                           (progn
                             (revoke-client-cert username)
                             (format t "~%~A User '~A' has been deleted (certificate revoked).~%~%"
-                                    (tui:colored "✓" :fg tui:*fg-green*) username))
+                                    (tui:colored "✓" :fg (theme-fg :green)) username))
                         (error (e)
                           (format t "~A Error: ~A~%"
-                                  (tui:colored "✗" :fg tui:*fg-red*) e))))
+                                  (tui:colored "✗" :fg (theme-fg :red)) e))))
                     (format t "Usage: cloodoo user delete USERNAME~%"))))))
 
 (defun make-user-migrate-data-command ()
@@ -2457,7 +2457,7 @@ URL format: http[s]://HOST[:PORT]/pair/TOKEN"
                       (handler-case
                           (let ((counts (db-migrate-user-data from-id to-id)))
                             (format t "~%~A Migration complete:~%"
-                                    (tui:colored "✓" :fg tui:*fg-green*))
+                                    (tui:colored "✓" :fg (theme-fg :green)))
                             (format t "  Todos:            ~D rows~%"
                                     (getf counts :todos))
                             (format t "  List definitions:  ~D rows~%"
@@ -2468,7 +2468,7 @@ URL format: http[s]://HOST[:PORT]/pair/TOKEN"
                                     (getf counts :settings)))
                         (error (e)
                           (format t "~A Error: ~A~%"
-                                  (tui:colored "✗" :fg tui:*fg-red*) e))))
+                                  (tui:colored "✗" :fg (theme-fg :red)) e))))
                     (format t "Usage: cloodoo user migrate-data FROM_USER_ID TO_USERNAME~%~%~
                               Example: cloodoo user migrate-data default alice~%"))))))
 
@@ -2489,13 +2489,13 @@ URL format: http[s]://HOST[:PORT]/pair/TOKEN"
                                  (hashes (mapcar #'hash-recovery-code codes)))
                             (db-store-recovery-codes user-id hashes)
                             (format t "~%~A Recovery codes generated for '~A':~%~%"
-                                    (tui:colored "✓" :fg tui:*fg-green*) user-id)
+                                    (tui:colored "✓" :fg (theme-fg :green)) user-id)
                             (dolist (code codes)
                               (format t "  ~A~%" code))
                             (format t "~%Save these codes somewhere safe!~%~%"))
                         (error (e)
                           (format t "~A Error: ~A~%"
-                                  (tui:colored "✗" :fg tui:*fg-red*) e))))
+                                  (tui:colored "✗" :fg (theme-fg :red)) e))))
                     (format t "Usage: cloodoo user recovery-codes USER_ID~%"))))))
 
 (defun make-user-command ()
@@ -2549,7 +2549,7 @@ URL format: http[s]://HOST[:PORT]/pair/TOKEN"
                                                      :expires-at expires-at
                                                      :note note)
                         (format t "~%~A Invite code created.~%~%"
-                                (tui:colored "✓" :fg tui:*fg-green*))
+                                (tui:colored "✓" :fg (theme-fg :green)))
                         (if *server-hostname*
                             (format t "  URL: https://~A/register?invite=~A~%"
                                     *server-hostname* code)
@@ -2562,7 +2562,7 @@ URL format: http[s]://HOST[:PORT]/pair/TOKEN"
                         (format t "~%"))
                     (error (e)
                       (format t "~A Error: ~A~%"
-                              (tui:colored "✗" :fg tui:*fg-red*) e))))))))
+                              (tui:colored "✗" :fg (theme-fg :red)) e))))))))
 
 (defun parse-duration-to-iso (duration-str)
   "Parse a duration string like '24h', '7d', '30m' to an ISO 8601 timestamp from now."
@@ -2588,7 +2588,7 @@ URL format: http[s]://HOST[:PORT]/pair/TOKEN"
                 (if invites
                     (progn
                       (format t "~%~A ~D invite code~:P:~%~%"
-                              (tui:colored "●" :fg tui:*fg-blue*) (length invites))
+                              (tui:colored "●" :fg (theme-fg :blue)) (length invites))
                       (dolist (inv invites)
                         (format t "  ~A  uses: ~D/~D  created: ~A~A~A~%"
                                 (getf inv :code)
@@ -2622,10 +2622,10 @@ URL format: http[s]://HOST[:PORT]/pair/TOKEN"
                               (sqlite:execute-non-query db "
                                 UPDATE invite_codes SET max_uses = use_count WHERE code = ?" code))
                             (format t "~%~A Invite code '~A' revoked.~%~%"
-                                    (tui:colored "✓" :fg tui:*fg-green*) code))
+                                    (tui:colored "✓" :fg (theme-fg :green)) code))
                         (error (e)
                           (format t "~A Error: ~A~%"
-                                  (tui:colored "✗" :fg tui:*fg-red*) e))))
+                                  (tui:colored "✗" :fg (theme-fg :red)) e))))
                     (format t "Usage: cloodoo invite revoke CODE~%"))))))
 
 (defun make-invite-command ()

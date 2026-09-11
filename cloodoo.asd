@@ -41,6 +41,7 @@
                              (:file "proto-helpers")
                              (:file "storage")
                              (:file "db")
+                             (:file "theme")
                              (:file "lists")
                              (:file "certs")
                              (:file "enrich")

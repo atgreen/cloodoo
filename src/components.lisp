@@ -28,9 +28,9 @@
   "Return colored priority indicator."
   (let ((str (priority-string priority)))
     (case priority
-      (:high (tui:bold (tui:colored str :fg tui:*fg-red*)))
-      (:medium (tui:colored str :fg tui:*fg-yellow*))
-      (:low (tui:colored str :fg tui:*fg-green*))
+      (:high (tui:bold (tui:colored str :fg (theme-fg :red))))
+      (:medium (tui:colored str :fg (theme-fg :yellow)))
+      (:low (tui:colored str :fg (theme-fg :green)))
       (otherwise str))))
 
 ;;; Status formatting
@@ -49,19 +49,19 @@
   "Return colored status character."
   (let ((ch (status-char status)))
     (case status
-      (:completed (tui:colored ch :fg tui:*fg-green*))
-      (:in-progress (tui:colored ch :fg tui:*fg-cyan*))
-      (:pending (tui:colored ch :fg tui:*fg-white*))
-      (:waiting (tui:colored ch :fg tui:*fg-yellow*))
-      (:cancelled (tui:colored ch :fg tui:*fg-bright-black*))
-      (:deleted (tui:colored ch :fg tui:*fg-bright-black*))
+      (:completed (tui:colored ch :fg (theme-fg :green)))
+      (:in-progress (tui:colored ch :fg (theme-fg :cyan)))
+      (:pending (tui:colored ch :fg (theme-fg :white)))
+      (:waiting (tui:colored ch :fg (theme-fg :yellow)))
+      (:cancelled (tui:colored ch :fg (theme-fg :bright-black)))
+      (:deleted (tui:colored ch :fg (theme-fg :bright-black)))
       (otherwise ch))))
 
 ;;; Tags formatting
 (defun format-tags (tags)
   "Format tags for display."
   (if (and tags (> (length tags) 0))
-      (tui:colored (format nil "[~{~A~^,~}]" tags) :fg tui:*fg-magenta*)
+      (tui:colored (format nil "[~{~A~^,~}]" tags) :fg (theme-fg :magenta))
       ""))
 
 ;;; Local timezone-aware "today" calculation
@@ -92,17 +92,17 @@
          (tui:bold (tui:colored
                    (format nil "OVERDUE ~A"
                           (lt:format-timestring nil due-date :format '(:short-month " " :day)))
-                   :fg tui:*fg-red*)))
+                   :fg (theme-fg :red))))
         ;; Today
         ((lt:timestamp< due-date tomorrow)
-         (tui:bold (tui:colored "TODAY" :fg tui:*fg-yellow*)))
+         (tui:bold (tui:colored "TODAY" :fg (theme-fg :yellow))))
         ;; Tomorrow
         ((lt:timestamp< due-date (lt:timestamp+ tomorrow 1 :day))
-         (tui:colored "Tomorrow" :fg tui:*fg-cyan*))
+         (tui:colored "Tomorrow" :fg (theme-fg :cyan)))
         ;; Future
         (t
          (tui:colored (lt:format-timestring nil due-date :format '(:short-month " " :day))
-                     :fg tui:*fg-bright-black*))))))
+                     :fg (theme-fg :bright-black)))))))
 
 ;;; Date categorization for grouping
 (defun categorize-by-date (todo)
@@ -188,32 +188,24 @@
     (:no-date "UNSCHEDULED")
     (otherwise "OTHER")))
 
-(defun date-category-border (category)
-  "Return the border style for a date category."
-  (case category
-    (:overdue (tui:make-border :top "─" :bottom "─" :left "│" :right "├"
-                               :top-left "╭" :top-right "╮"
-                               :bottom-left "╰" :bottom-right "╯"))
-    (otherwise *border-header-title*)))
-
 (defun date-category-colored (category width)
-  "Return colored category header rendered as pager-style box with line.
-   WIDTH is the total width to fill."
+  "Return colored single-line category header: ─┤ LABEL ├─── filled to WIDTH."
   (let* ((label (date-category-label category))
-         (border (date-category-border category))
-         (header (render-pager-header label width :border border)))
+         (prefix (format nil "─┤ ~A ├" label))
+         (fill (max 0 (- width (tui:visible-length prefix))))
+         (header (format nil "~A~A" prefix (make-string fill :initial-element #\─))))
     ;; Apply category-specific coloring to the entire header
     (case category
-      (:overdue (tui:bold (tui:colored header :fg tui:*fg-red*)))
-      (:today (tui:bold (tui:colored header :fg tui:*fg-yellow*)))
-      (:tomorrow (tui:colored header :fg tui:*fg-cyan*))
-      (:this-week (tui:colored header :fg tui:*fg-blue*))
-      (:next-week (tui:colored header :fg tui:*fg-bright-cyan*))
-      (:next-30-days (tui:colored header :fg tui:*fg-green*))
-      (:next-60-days (tui:colored header :fg tui:*fg-bright-green*))
-      (:next-90-days (tui:colored header :fg tui:*fg-bright-blue*))
-      (:later (tui:colored header :fg tui:*fg-magenta*))
-      (:no-date (tui:colored header :fg tui:*fg-bright-black*))
+      (:overdue (tui:bold (tui:colored header :fg (theme-fg :red))))
+      (:today (tui:bold (tui:colored header :fg (theme-fg :yellow))))
+      (:tomorrow (tui:colored header :fg (theme-fg :cyan)))
+      (:this-week (tui:colored header :fg (theme-fg :blue)))
+      (:next-week (tui:colored header :fg (theme-fg :bright-cyan)))
+      (:next-30-days (tui:colored header :fg (theme-fg :green)))
+      (:next-60-days (tui:colored header :fg (theme-fg :bright-green)))
+      (:next-90-days (tui:colored header :fg (theme-fg :bright-blue)))
+      (:later (tui:colored header :fg (theme-fg :magenta)))
+      (:no-date (tui:colored header :fg (theme-fg :bright-black)))
       (otherwise header))))
 
 (defun group-todos-by-date (todos)
@@ -236,20 +228,20 @@
 (defun org-status-colored (status)
   "Return org-mode style colored status keyword."
   (case status
-    (:completed (tui:colored "DONE" :fg tui:*fg-green*))
-    (:in-progress (tui:bold (tui:colored "STRT" :fg tui:*fg-cyan*)))
-    (:pending (tui:bold (tui:colored "TODO" :fg tui:*fg-magenta*)))
-    (:waiting (tui:bold (tui:colored "WAIT" :fg tui:*fg-yellow*)))
-    (:cancelled (tui:colored "CNCL" :fg tui:*fg-bright-black*))
-    (:deleted (tui:colored "DELE" :fg tui:*fg-bright-black*))
+    (:completed (tui:colored "DONE" :fg (theme-fg :green)))
+    (:in-progress (tui:bold (tui:colored "STRT" :fg (theme-fg :cyan))))
+    (:pending (tui:bold (tui:colored "TODO" :fg (theme-fg :magenta))))
+    (:waiting (tui:bold (tui:colored "WAIT" :fg (theme-fg :yellow))))
+    (:cancelled (tui:colored "CNCL" :fg (theme-fg :bright-black)))
+    (:deleted (tui:colored "DELE" :fg (theme-fg :bright-black)))
     (otherwise "    ")))
 
 (defun org-priority-colored (priority)
   "Return org-mode style colored priority."
   (case priority
-    (:high (tui:bold (tui:colored "[#A]" :fg tui:*fg-red*)))
-    (:medium (tui:colored "[#B]" :fg tui:*fg-yellow*))
-    (:low (tui:colored "[#C]" :fg tui:*fg-green*))
+    (:high (tui:bold (tui:colored "[#A]" :fg (theme-fg :red))))
+    (:medium (tui:colored "[#B]" :fg (theme-fg :yellow)))
+    (:low (tui:colored "[#C]" :fg (theme-fg :green)))
     (otherwise "    ")))
 
 (defun org-tags-string (tags)
@@ -306,26 +298,26 @@
         ;; Deadline/due overdue - "262 d. ago: " (due date is before today)
         ((and due-date (lt:timestamp< due-date today))
          (let ((days-ago (max 1 (days-difference today due-date))))
-           (tui:bold (tui:colored (format nil "~3D d. ago: " days-ago) :fg tui:*fg-red*))))
+           (tui:bold (tui:colored (format nil "~3D d. ago: " days-ago) :fg (theme-fg :red)))))
         ;; Scheduled in past - "Sched.137x: "
         ((and scheduled-date (lt:timestamp< scheduled-date today))
          (let ((days-ago (max 1 (days-difference today scheduled-date))))
-           (tui:colored (format nil "Sched.~3Dx: " days-ago) :fg tui:*fg-magenta*)))
+           (tui:colored (format nil "Sched.~3Dx: " days-ago) :fg (theme-fg :magenta))))
         ;; Scheduled for today
         ((and scheduled-date
               (= (lt:timestamp-day scheduled-date) today-day)
               (= (lt:timestamp-month scheduled-date) today-month)
               (= (lt:timestamp-year scheduled-date) today-year))
-         (tui:colored "Scheduled:  " :fg tui:*fg-green*))
+         (tui:colored "Scheduled:  " :fg (theme-fg :green)))
         ;; Scheduled in future
         (scheduled-date
          (let ((days-until (max 1 (days-difference scheduled-date today))))
-           (tui:colored (format nil "In ~3D d.:  " days-until) :fg tui:*fg-cyan*)))
+           (tui:colored (format nil "In ~3D d.:  " days-until) :fg (theme-fg :cyan))))
         ;; Due date coming up (not overdue)
         (due-date
          (let ((days-until (days-difference due-date today)))
            (if (<= days-until 7)
-               (tui:colored (format nil "Due ~2D d.:  " days-until) :fg tui:*fg-yellow*)
+               (tui:colored (format nil "Due ~2D d.:  " days-until) :fg (theme-fg :yellow))
                "            ")))
         ;; No date info
         (t "            ")))))
@@ -334,11 +326,11 @@
   "Render the current filter status for display."
   (let ((parts nil))
     (when search
-      (push (tui:colored (format nil "Search:~A" search) :fg tui:*fg-cyan*) parts))
+      (push (tui:colored (format nil "Search:~A" search) :fg (theme-fg :cyan)) parts))
     (when priority
-      (push (tui:colored (format nil "Priority:~A" priority) :fg tui:*fg-yellow*) parts))
+      (push (tui:colored (format nil "Priority:~A" priority) :fg (theme-fg :yellow)) parts))
     (when (and status (not (eql status :all)))
-      (push (tui:colored (format nil "Status:~A" status) :fg tui:*fg-green*) parts))
+      (push (tui:colored (format nil "Status:~A" status) :fg (theme-fg :green)) parts))
     (if parts
         (format nil "[~{~A~^ ~}]" (nreverse parts))
         "")))
@@ -350,59 +342,13 @@
            (tomorrow (lt:timestamp+ today 1 :day)))
       (cond
         ((lt:timestamp< due-date today)
-         (tui:bold (tui:colored "OVERDUE" :fg tui:*fg-red*)))
+         (tui:bold (tui:colored "OVERDUE" :fg (theme-fg :red))))
         ((lt:timestamp< due-date tomorrow)
-         (tui:bold (tui:colored "TODAY" :fg tui:*fg-yellow*)))
+         (tui:bold (tui:colored "TODAY" :fg (theme-fg :yellow))))
         ((lt:timestamp< due-date (lt:timestamp+ tomorrow 1 :day))
-         (tui:colored "Tomorrow" :fg tui:*fg-cyan*))
+         (tui:colored "Tomorrow" :fg (theme-fg :cyan)))
         (t
          (tui:colored (lt:format-timestring nil due-date :format '(:short-month " " :day))
-                     :fg tui:*fg-bright-black*))))))
+                     :fg (theme-fg :bright-black)))))))
 
 ;;── Subtask Progress Formatting ───────────────────────────────────────────────
-
-;;── Pager-style Header (like Charm's bubbletea) ────────────────────────────────
-
-(defparameter *border-header-title*
-  (tui:make-border :top "─" :bottom "─" :left "│" :right "├"
-                   :top-left "╭" :top-right "╮"
-                   :bottom-left "╰" :bottom-right "╯")
-  "Border style for header title box - rounded corners with ├ on the right.")
-
-(defun render-pager-header (title width &key (border *border-header-title*))
-  "Render a pager-style header with title in a bordered box and a line extending to width.
-   Format:
-      ╭───────────╮
-     ─┤ Mr. Pager ├────────────────────────────────
-      ╰───────────╯
-   The horizontal line extends from the middle (content) row, with ─┤ on the left."
-  (let* (;; Render the title with padding inside the border
-         (padded-title (format nil " ~A " title))
-         ;; Create the bordered title box
-         (title-box (tui:render-border padded-title border))
-         ;; Create lines for each row of the title box
-         (box-lines (tui:split-string-by-newline title-box))
-         ;; Get the width of the title box (max visible width of all lines)
-         (box-width (if box-lines
-                        (apply #'max (mapcar #'tui:visible-length box-lines))
-                        0))
-         ;; Calculate remaining width for the line (subtract 1 for the leading ─)
-         (line-width (max 0 (- width box-width 1)))
-         (num-lines (length box-lines))
-         ;; Middle row is where we extend with the horizontal line
-         (middle-row (floor num-lines 2)))
-    ;; Join each line of the title box with appropriate fill
-    (with-output-to-string (s)
-      (loop for line in box-lines
-            for i from 0
-            do (when (> i 0) (format s "~%"))
-               (if (= i middle-row)
-                   ;; Middle row: ─┤ content ├────
-                   ;; Replace leading │ with ─┤
-                   (let ((modified-line (if (and (> (length line) 0)
-                                                 (char= (char line 0) #\│))
-                                            (concatenate 'string "─┤" (subseq line 1))
-                                            (concatenate 'string "─┤" line))))
-                     (format s "~A~A" modified-line (make-string line-width :initial-element #\─)))
-                   ;; Other rows: space prefix to align with ─┤
-                   (format s " ~A~A" line (make-string line-width :initial-element #\Space)))))))

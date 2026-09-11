@@ -436,6 +436,56 @@
                           :key #'cloodoo:todo-id :test #'string=)))
         (is (equal '("abc123") (cloodoo::todo-attachment-hashes loaded)))))))
 
+;;── Theme Tests ────────────────────────────────────────────────────────────────
+
+(test theme-terminal-passthrough-test
+  "The terminal theme passes plain ANSI SGR codes through."
+  (cloodoo::activate-theme "terminal")
+  (is (string= "31" (cloodoo::theme-fg :red)))
+  (is (string= "90" (cloodoo::theme-fg :bright-black)))
+  (is (string= "46" (cloodoo::theme-bg :cyan))))
+
+(test theme-unknown-falls-back-test
+  "An unknown theme name activates the terminal theme."
+  (let ((theme (cloodoo::activate-theme "no-such-theme")))
+    (is (string= "terminal" (cloodoo::color-theme-name theme)))
+    (is (string= "31" (cloodoo::theme-fg :red))))
+  (cloodoo::activate-theme "terminal"))
+
+(test theme-hex-resolves-truecolor-test
+  "Hex palettes resolve to truecolor SGR codes when COLORTERM says so."
+  (let ((old (uiop:getenv "COLORTERM")))
+    (unwind-protect
+         (progn
+           (setf (uiop:getenv "COLORTERM") "truecolor")
+           (cloodoo::activate-theme "dracula")
+           ;; Dracula red #ff5555 -> 38;2;255;85;85
+           (is (string= "38;2;255;85;85" (cloodoo::theme-fg :red)))
+           (is (string= "48;2;255;85;85" (cloodoo::theme-bg :red))))
+      (setf (uiop:getenv "COLORTERM") (or old ""))
+      (cloodoo::activate-theme "terminal"))))
+
+(test theme-mono-disables-color-test
+  "The mono theme returns NIL for every slot (no color emitted)."
+  (cloodoo::activate-theme "mono")
+  (is (null (cloodoo::theme-fg :red)))
+  (is (null (cloodoo::theme-bg :cyan)))
+  (cloodoo::activate-theme "terminal"))
+
+(test theme-cycle-wraps-test
+  "Cycling advances through all themes, persists, and wraps around."
+  (with-test-db
+    (cloodoo::activate-theme "terminal")
+    (let ((n (length cloodoo::*themes*)))
+      (dotimes (i (1- n))
+        (cloodoo::cycle-theme))
+      (is (string= "mono" (cloodoo::color-theme-name cloodoo::*current-theme*)))
+      (is (string= "mono" (cloodoo::db-load-setting "theme")))
+      (cloodoo::cycle-theme)
+      (is (string= "terminal"
+                   (cloodoo::color-theme-name cloodoo::*current-theme*))))
+    (cloodoo::activate-theme "terminal")))
+
 ;;── Run Tests ──────────────────────────────────────────────────────────────────
 
 (defun run-tests ()
