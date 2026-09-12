@@ -62,33 +62,15 @@ jobs:
     - name: Checkout code
       uses: actions/checkout@v4
 
-    - name: Check for package.json
-      id: check_package
-      run: |
-        if [ -f browser-extension/package.json ]; then
-          echo "has_npm=true" >> $GITHUB_OUTPUT
-        else
-          echo "has_npm=false" >> $GITHUB_OUTPUT
-          echo "No package.json found in browser-extension, skipping npm-based linting"
-        fi
-
     - name: Setup Node.js
-      if: steps.check_package.outputs.has_npm == 'true'
       uses: actions/setup-node@v4
       with:
         node-version: '20'
 
-    - name: Install dependencies
-      if: steps.check_package.outputs.has_npm == 'true'
+    - name: Run ESLint
       run: |
         cd browser-extension
-        npm ci
-
-    - name: Run linting
-      if: steps.check_package.outputs.has_npm == 'true'
-      run: |
-        cd browser-extension
-        npm run lint || echo "No lint script defined"
+        npx --yes eslint@9 .
 
     - name: Validate manifest
       run: |

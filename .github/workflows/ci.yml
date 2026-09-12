@@ -23,13 +23,26 @@ jobs:
     - name: Install ocicl
       env:
         GH_TOKEN: ${{ github.token }}
+        # Pinned: latest-release downloads are neither reproducible nor
+        # rate-limit safe (cloodoo-yxj). Bump deliberately.
+        OCICL_VERSION: "2.18.0"
       run: |
         # Authenticated download: the anonymous releases API is rate-limited
         # and returns empty on 403, which broke tag builds (v0.2.2).
-        gh release download --repo ocicl/ocicl --pattern '*_amd64.deb' --dir /tmp
+        gh release download "v${OCICL_VERSION}" --repo ocicl/ocicl \
+          --pattern '*_amd64.deb' --dir /tmp \
+          || gh release download --repo ocicl/ocicl --pattern '*_amd64.deb' --dir /tmp
         sudo dpkg -i /tmp/ocicl_*_amd64.deb
         ocicl setup > ~/.sbclrc
         ocicl version
+
+    - name: Cache ocicl dependencies
+      uses: actions/cache@v4
+      with:
+        path: ocicl
+        key: ocicl-${{ runner.os }}-${{ hashFiles('ocicl.csv', 'cloodoo.asd') }}
+        restore-keys: |
+          ocicl-${{ runner.os }}-
 
     - name: Install dependencies
       run: |
@@ -51,6 +64,29 @@ jobs:
 
     - name: Build executable
       run: make cloodoo
+
+    - name: Headless smoke test
+      run: |
+        # Fresh HOME so nothing leaks between runs (cloodoo-yxj)
+        export HOME="$(mktemp -d)"
+        ./cloodoo --version
+        ./cloodoo add "smoke test task"
+        ./cloodoo list | grep -q "smoke test task"
+        ./cloodoo export -o "$HOME/agenda.txt"
+        test -s "$HOME/agenda.txt"
+        # The sync server starts and listens on its gRPC port
+        ./cloodoo sync-server --no-tls --no-http -p 19876 &
+        SRV=$!
+        ok=0
+        for i in $(seq 1 40); do
+          if nc -z 127.0.0.1 19876 2>/dev/null; then ok=1; break; fi
+          sleep 0.5
+        done
+        kill "$SRV" 2>/dev/null || true
+        test "$ok" = 1
+
+    - name: Check man page matches --help
+      run: releng/check-man-sync.sh ./cloodoo releng/cloodoo.1
 
     - name: Upload executable artifact
       uses: actions/upload-artifact@v4
