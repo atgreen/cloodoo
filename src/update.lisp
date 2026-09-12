@@ -67,6 +67,11 @@
    :initform :list
    :accessor model-view-state
     :documentation "Current view: :list, :detail, :add, :edit, :help, :search, :delete-confirm, :delete-done-confirm, :import, :edit-date, :add-scheduled-date, :add-due-date.") ; lint:suppress max-line-length
+   (edit-return-view
+    :initform :list
+    :accessor model-edit-return-view
+    :documentation "View the add/edit form returns to on save or cancel:
+     :detail when editing was entered from the detail view, else :list.")
    (filter-status
     :initarg :filter-status
     :initform nil
@@ -478,8 +483,9 @@
     (dolist (group groups)
       (let* ((category (first group))
              (group-todos (rest group))
-             ;; Sort by priority within group
-             (sorted (sort-todos group-todos :priority t))
+             ;; Sort within group by the user-selected field ('s' cycles it)
+             (sorted (sort-todos group-todos (model-sort-by model)
+                                 (model-sort-descending model)))
              (visible-ids (mapcar #'todo-id sorted)))
         (when visible-ids
           (push (cons category visible-ids) result))))
@@ -616,8 +622,10 @@
   "Adjust scroll offset to keep selected item visible."
   (let* ((cursor (model-cursor model))
          (offset (model-scroll-offset model))
+         ;; Use the cached grouping the renderer uses; regrouping fresh
+         ;; disagrees with the display after in-place edits (cloodoo-hsi)
+         (groups (get-visible-todos-grouped model))
          (todos (get-visible-todos model))
-         (groups (group-todos-by-date todos))
          (num-lines (max 1 (+ (length todos) (* (length groups) +header-lines+))))
          (cursor-line (list-line-index-for-cursor groups cursor))
          (header-start (header-start-line-for-cursor groups cursor))
@@ -1116,6 +1124,7 @@
       ((and (characterp key) (char= key #\a))
        (llog:info "Add TODO triggered" :key key)
        (setf (model-view-state model) :add)
+       (setf (model-edit-return-view model) :list)
        (setf (model-edit-todo-id model) nil)
        (setf (model-edit-priority model) :medium)
        (setf (model-active-field model) :title)
@@ -1146,6 +1155,7 @@
              (setf (model-status-message model) "Cannot edit while enriching")
              (return-from handle-list-keys (values model nil)))
            (setf (model-view-state model) :edit)
+           (setf (model-edit-return-view model) :list)
            (setf (model-edit-todo-id model) (todo-id todo))
            (setf (model-edit-priority model) (todo-priority todo))
            (setf (model-active-field model) :title)
@@ -1212,6 +1222,10 @@
                (:due-date :created-at)
                (:created-at :title)
                (:title :priority)))
+       (invalidate-visible-todos-cache model)
+       (setf (model-status-message model)
+             (format nil "Sorted by ~A"
+                     (string-downcase (symbol-name (model-sort-by model)))))
        (values model nil))
 
       ;; Set scheduled date (Shift+S) - opens modal datepicker
@@ -1374,12 +1388,12 @@
     (cond
       ;; Cancel with Escape
       ((eql key :escape)
-       (setf (model-view-state model) :list)
+       (setf (model-view-state model) (model-edit-return-view model))
        (values model nil))
 
       ;; Cancel with Ctrl+C
       ((and ctrl (characterp key) (char= key #\c))
-       (setf (model-view-state model) :list)
+       (setf (model-view-state model) (model-edit-return-view model))
        (values model nil))
 
       ;; Ctrl+E to edit notes in external editor
@@ -1571,7 +1585,7 @@
                    ;; Save tags
                    (setf (todo-tags todo) (reverse (model-edit-tags model)))
                    (commit-todo-edit model todo :retag t))
-                 (setf (model-view-state model) :list)
+                 (setf (model-view-state model) (model-edit-return-view model))
                  (return-from handle-add-edit-keys (values model nil)))
                ;; Create new TODO with async LLM enrichment
                (let* ((desc-input (tui.textinput:textinput-value (model-description-input model)))
@@ -1854,6 +1868,8 @@
        (let ((todo (cursor-todo model todos)))
          (when todo
            (setf (model-view-state model) :edit)
+           ;; Editing from the detail view returns to it (cloodoo-cjy)
+           (setf (model-edit-return-view model) :detail)
            (setf (model-edit-todo-id model) (todo-id todo))
            (setf (model-edit-priority model) (todo-priority todo))
            (setf (model-active-field model) :title)
@@ -1913,12 +1929,12 @@
       ;; Edit notes with 'n' - opens external editor
       ((and (characterp key) (char= key #\n))
        (let ((todo (cursor-todo model todos)))
-         (when todo
-           (let ((current-notes (or (todo-description todo) "")))
-             ;; Store the todo id so we know which todo to update
-             (setf (model-edit-todo-id model) (todo-id todo))
-             (values model (make-detail-notes-editor-cmd (todo-id todo) current-notes)))))
-       (values model nil))
+         (if todo
+             (let ((current-notes (or (todo-description todo) "")))
+               ;; Store the todo id so we know which todo to update
+               (setf (model-edit-todo-id model) (todo-id todo))
+               (values model (make-detail-notes-editor-cmd (todo-id todo) current-notes)))
+             (values model nil))))
 
       (t (values model nil)))))
 
@@ -2448,8 +2464,9 @@
   (when (eql (model-view-state model) :list)
     (let* ((direction (tui:mouse-wheel-direction msg))
            (count (tui:mouse-wheel-count msg))
+           ;; Cached grouping, matching the renderer (cloodoo-hsi)
+           (groups (get-visible-todos-grouped model))
            (todos (get-visible-todos model))
-           (groups (group-todos-by-date todos))
            (num-lines (max 1 (+ (length todos) (* (length groups) +header-lines+))))
            (viewport-height (list-viewport-height model))
            (max-offset (max 0 (- num-lines viewport-height)))
@@ -2504,8 +2521,10 @@
            ;; Click in sidebar area
            ((and sidebar-visible-effective (< screen-x sidebar-width)
                  (eql button :left))
-            ;; Sidebar rows: 0=header, 1=separator, 2="All", 3+=tags
-            (let* ((sidebar-item (- screen-line 2))
+            ;; Sidebar rows: 0=header, 1=separator, 2="All", 3+=tags.
+            ;; list-line accounts for the filter banner; raw screen-line
+            ;; would be off by one when it's visible (cloodoo-wkb)
+            (let* ((sidebar-item (- list-line 2))
                    (tags (model-all-tags-cache model))
                    (max-cursor (length tags)))
               (when (and (>= sidebar-item 0) (<= sidebar-item max-cursor))
@@ -2834,7 +2853,9 @@
   (let ((new-text (editor-msg-new-text msg)))
     (when new-text
       (tui.textinput:textinput-set-value (model-description-input model) new-text))
-    ;; Force a redraw by sending window size
+    ;; WORKAROUND: the external editor repainted the terminal but the
+    ;; differential renderer thinks nothing changed (cloodoo-mpl)
+    (force-full-redraw)
     (values model nil)))
 
 (defun make-editor-cmd (current-text)
@@ -2900,6 +2921,9 @@
           (setf (todo-description todo) (if (string= new-text "") nil new-text))
           (commit-todo-edit model todo)
           (llog:info "Updated todo notes" :todo-id todo-id))))
+    ;; WORKAROUND: the external editor repainted the terminal but the
+    ;; differential renderer thinks nothing changed (cloodoo-mpl)
+    (force-full-redraw)
     (values model nil)))
 
 (defclass user-context-editor-complete-msg ()

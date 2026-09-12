@@ -566,9 +566,7 @@
                                (tui:colored "q:back  e:edit │ s:sched  d:deadline │ n:notes  o:url  p:photo"
                                            :fg (theme-fg :bright-black)))))
                    (modal (render-box-with-title "ITEM DETAILS" content :min-width modal-width)))
-              (tui:composite modal background
-                            :x-position tui:+center+
-                            :y-position tui:+middle+))))
+              (overlay-modal modal background))))
     (error (e)
       (llog:error "Error rendering detail view"
                   :error-type (type-of e)
@@ -863,7 +861,7 @@
 
 (defun render-presets-row (presets)
   "Render presets in two columns below the keyboard shortcuts."
-  (let ((col-width 28))
+  (let ((col-width 26))
     (with-output-to-string (s)
       ;; Header spanning both columns
       (format s "~A~%" (tui:bold (tui:colored "LABEL PRESETS (1-0 to apply, !@# to save)" :fg (theme-fg :cyan))))
@@ -941,7 +939,13 @@
     (let* ((num-rows 12)  ; title + 11 entries
            (sep-line (tui:colored " │ " :fg (theme-fg :bright-black)))
            (sep (format nil "~{~A~^~%~}" (loop repeat num-rows collect sep-line)))
-           (keys-section (tui:join-horizontal :top col1 sep col2 sep col3 sep col4))
+           ;; Four columns need ~110 columns; stack them 2x2 on narrower
+           ;; terminals so the modal fits 80- and 60-col screens (cloodoo-8oh)
+           (keys-section (if (>= (model-term-width model) 112)
+                             (tui:join-horizontal :top col1 sep col2 sep col3 sep col4)
+                             (format nil "~A~%~A"
+                                     (tui:join-horizontal :top col1 sep col2)
+                                     (tui:join-horizontal :top col3 sep col4))))
            (presets-section (render-presets-row presets)))
       (format nil "~A~%~%~A" keys-section presets-section))))
 
@@ -1099,7 +1103,10 @@
 
              ;; Help line
              (format c "~A"
-                     (tui:colored "hjkl/←↑↓→:nav  []:month  {}:year  Home:today  RET:save  DEL:clear  ESC:cancel"
+                     (tui:colored "hjkl/←↑↓→:nav  []:month  {}:year  Home:today"
+                                 :fg (theme-fg :bright-black)))
+             (format c "~%~A"
+                     (tui:colored "RET:save  DEL:clear  ESC:cancel"
                                  :fg (theme-fg :bright-black)))))
          (modal (render-box-with-title title content :min-width modal-width)))
     (overlay-modal modal background)))
@@ -1164,7 +1171,10 @@
 
              ;; Navigation help
              (format c "~%~A"
-                     (tui:colored "hjkl/←↑↓→:nav  []:month  {}:year  Home:today  RET:save  DEL:clear  ESC:cancel"
+                     (tui:colored "hjkl/←↑↓→:nav  []:month  {}:year  Home:today"
+                                 :fg (theme-fg :bright-black)))
+             (format c "~%~A"
+                     (tui:colored "RET:save  DEL:clear  ESC:cancel"
                                  :fg (theme-fg :bright-black)))))
          (modal (render-box-with-title title content :min-width modal-width)))
     (overlay-modal modal background)))
