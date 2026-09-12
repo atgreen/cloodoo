@@ -221,14 +221,14 @@
     :accessor model-tag-dropdown-filtered
     :documentation "Filtered list of tags matching current input.")
    ;; Visible todos cache for stable ordering
-   (visible-todos-cache
+   (visible-todo-ids-cache
     :initform nil
-    :accessor model-visible-todos-cache
+    :accessor model-visible-todo-ids-cache
     :documentation "Cached list of visible todos to maintain stable order.")
    (visible-todos-dirty
     :initform t
     :accessor model-visible-todos-dirty
-    :documentation "When T, regenerate visible-todos-cache on next access.")
+    :documentation "When T, regenerate visible-todo-ids-cache on next access.")
    (deleting-tag
     :initform nil
     :accessor model-deleting-tag
@@ -492,11 +492,11 @@
    Call invalidate-visible-todos-cache to force re-grouping (on 'r', add, delete)."
   (when (model-visible-todos-dirty model)
     ;; Regenerate the cache (stores IDs, not objects)
-    (setf (model-visible-todos-cache model) (compute-visible-todos-grouped model))
+    (setf (model-visible-todo-ids-cache model) (compute-visible-todos-grouped model))
     (setf (model-visible-todos-dirty model) nil))
   ;; Return cached groups, but resolve IDs to current todo objects
   (let ((all-todos (model-todos model)))
-    (loop for (category . ids) in (model-visible-todos-cache model)
+    (loop for (category . ids) in (model-visible-todo-ids-cache model)
           for todos = (remove nil
                               (mapcar (lambda (id)
                                         (find id all-todos :key #'todo-id :test #'equal))
@@ -931,6 +931,31 @@
 
 ;;── List View Key Handling ─────────────────────────────────────────────────────
 
+(defun advance-repeating-todo (model todo)
+  "Reschedule a completed repeating TODO to its next occurrence instead of
+   marking it done, shifting any due date by the same interval."
+  (let ((next-date (calculate-next-occurrence todo)))
+    (when next-date
+      (setf (todo-scheduled-date todo) next-date)
+      ;; Adjust due-date if it was set (shift by same interval)
+      (when (todo-due-date todo)
+        (let ((interval (todo-repeat-interval todo))
+              (unit (todo-repeat-unit todo)))
+          (setf (todo-due-date todo)
+                (case unit
+                  (:day (lt:timestamp+ (todo-due-date todo) interval :day))
+                  (:week (lt:timestamp+ (todo-due-date todo) (* interval 7) :day))
+                  (:month (lt:timestamp+ (todo-due-date todo) interval :month))
+                  (:year (lt:timestamp+ (todo-due-date todo) interval :year))
+                  (otherwise (todo-due-date todo))))))
+      ;; Keep status as pending (or reset from in-progress)
+      (setf (todo-status todo) +status-pending+)
+      (setf (todo-completed-at todo) nil))
+    (setf (model-status-message model)
+          (format nil "Rescheduled to ~A"
+                  (lt:format-timestring nil next-date
+                                        :format '(:short-month " " :day))))))
+
 (defun handle-list-keys (model msg)
   "Handle keyboard input in list view."
   ;; Clear any transient status message on next keypress
@@ -970,22 +995,10 @@
        (setf (model-sidebar-focused model) t)
        (values model nil))
 
-      ;; Apply preset 1-9 (digit keys apply presets)
-      ((and (characterp key) (digit-char-p key) (not (char= key #\0)))
-       (let* ((digit (digit-char-p key))
-              (preset-idx (1- digit))  ; 1->0, 2->1, etc
+      ;; Apply tag preset (digit keys; 1-9 -> slots 0-8, 0 -> slot 9)
+      ((and (characterp key) (digit-char-p key))
+       (let* ((preset-idx (mod (1- (digit-char-p key)) 10))
               (preset (aref (model-tag-presets model) preset-idx)))
-         (when preset
-           (clrhash (model-selected-tags model))
-           (dolist (tag preset)
-             (setf (gethash tag (model-selected-tags model)) t))
-           (invalidate-visible-todos-cache model)
-           (setf (model-cursor model) 0)))
-       (values model nil))
-
-      ;; Apply preset 0 (stored in slot 9)
-      ((and (characterp key) (char= key #\0))
-       (let ((preset (aref (model-tag-presets model) 9)))
          (when preset
            (clrhash (model-selected-tags model))
            (dolist (tag preset)
@@ -1066,29 +1079,10 @@
          (when todo
            (case (todo-status todo)
              ((:pending :in-progress)
-              ;; Check if this is a repeating task
-              (cond ((and (todo-repeat-interval todo) (todo-repeat-unit todo)) (let ((next-date (calculate-next-occurrence todo)))
-                    (when next-date
-                      (setf (todo-scheduled-date todo) next-date)
-                      ;; Adjust due-date if it was set (shift by same interval)
-                      (when (todo-due-date todo)
-                        (let* ((interval (todo-repeat-interval todo))
-                               (unit (todo-repeat-unit todo)))
-                          (setf (todo-due-date todo)
-                                (case unit
-                                  (:day (lt:timestamp+ (todo-due-date todo) interval :day))
-                                  (:week (lt:timestamp+ (todo-due-date todo) (* interval 7) :day))
-                                  (:month (lt:timestamp+ (todo-due-date todo) interval :month))
-                                  (:year (lt:timestamp+ (todo-due-date todo) interval :year))
-                                  (otherwise (todo-due-date todo))))))
-                      ;; Keep status as pending (or reset from in-progress)
-                      (setf (todo-status todo) +status-pending+)
-                      (setf (todo-completed-at todo) nil))
-                    (setf (model-status-message model)
-                          (format nil "Rescheduled to ~A"
-                                  (lt:format-timestring nil next-date
-                                                       :format '(:short-month " " :day))))))
-      (t
+              ;; Completing a repeating task reschedules it instead
+              (if (and (todo-repeat-interval todo) (todo-repeat-unit todo))
+                  (advance-repeating-todo model todo)
+                  (progn
                     (setf (todo-status todo) +status-completed+)
                     (setf (todo-completed-at todo) (lt:now))
                     (setf (model-status-message model) "→ DONE"))))
@@ -1508,11 +1502,11 @@
               (new-idx (mod (+ idx direction) (length presets)))
               (new-val (nth new-idx presets)))
          (cond (new-val
-               (setf (model-edit-repeat-interval model) (first new-val))
-               (setf (model-edit-repeat-unit model) (rest new-val)))
-      (t
-               (setf (model-edit-repeat-interval model) nil)
-               (setf (model-edit-repeat-unit model) nil))))
+                (setf (model-edit-repeat-interval model) (first new-val))
+                (setf (model-edit-repeat-unit model) (rest new-val)))
+               (t
+                (setf (model-edit-repeat-interval model) nil)
+                (setf (model-edit-repeat-unit model) nil))))
        (values model nil))
 
       ;; Tags field: Up/Down to navigate dropdown
@@ -1737,17 +1731,17 @@
       ((eql key :enter)
        (let ((filename (tui.textinput:textinput-value (model-import-input model))))
          (cond ((and (> (length filename) 0)
-                  (probe-file filename))
-               (llog:info "Starting org-mode import" :filename filename)
-               (setf (model-view-state model) :list)
-               ;; Return command to perform async import
-               (values model (list (make-import-cmd filename)
-                                   (make-spinner-start-cmd
-                                    (model-enrichment-spinner model)))))
-      (t
-               (llog:warn "Import file not found" :filename filename)
-               ;; Stay in import view - file doesn't exist
-               (values model nil)))))
+                     (probe-file filename))
+                (llog:info "Starting org-mode import" :filename filename)
+                (setf (model-view-state model) :list)
+                ;; Return command to perform async import
+                (values model (list (make-import-cmd filename)
+                                    (make-spinner-start-cmd
+                                     (model-enrichment-spinner model)))))
+               (t
+                (llog:warn "Import file not found" :filename filename)
+                ;; Stay in import view - file doesn't exist
+                (values model nil)))))
 
       ;; Pass key to import input
       (t
@@ -1827,7 +1821,9 @@
          ;; Invalidate caches
          (invalidate-visible-todos-cache model)
          ;; Adjust sidebar cursor if needed
-         (let ((tags (refresh-tags-cache model)))
+         (refresh-tags-cache model)
+         ;; Adjust sidebar cursor if the tag list shrank
+         (let ((tags (model-all-tags-cache model)))
            (when (> (model-sidebar-cursor model) (length tags))
              (setf (model-sidebar-cursor model) (max 0 (length tags))))))
        (setf (model-deleting-tag model) nil)
@@ -1929,7 +1925,7 @@
 
 ;;── List Date Modal Key Handling ───────────────────────────────────────────────
 
-(defun handle-list-date-keys (model msg)
+(defun handle-date-keys-from-list (model msg)
   "Handle keyboard input in list view date modal."
   (let ((key (tui:key-event-code msg))
         (ctrl (tui:mod-contains (tui:key-event-mod msg) tui:+mod-ctrl+))
@@ -1982,7 +1978,7 @@
 
 ;;── Date Edit View Key Handling ────────────────────────────────────────────────
 
-(defun handle-date-edit-keys (model msg)
+(defun handle-date-keys-from-detail (model msg)
   "Handle keyboard input in date editing view."
   (let ((key (tui:key-event-code msg))
         (ctrl (tui:mod-contains (tui:key-event-mod msg) tui:+mod-ctrl+))
@@ -2032,7 +2028,7 @@
          (setf (model-date-picker model) new-picker)
          (values model cmd))))))
 
-(defun handle-form-date-edit-keys (model msg)
+(defun handle-date-keys-from-form (model msg)
   "Handle keyboard input in add/edit form date picker view."
   (let* ((key (tui:key-event-code msg))
          (ctrl (tui:mod-contains (tui:key-event-mod msg) tui:+mod-ctrl+))
@@ -2081,7 +2077,7 @@
          (multiple-value-bind (new-picker cmd)
              (tui.datepicker:datepicker-update picker msg)
            (setf (model-date-picker model) new-picker)
-           (return-from handle-form-date-edit-keys (values model cmd))))
+           (return-from handle-date-keys-from-form (values model cmd))))
        (values model nil)))))
 
 ;;── Help View Key Handling ─────────────────────────────────────────────────────
@@ -2418,9 +2414,9 @@
     (:delete-done-confirm (handle-delete-done-confirm-keys model msg))
     (:delete-tag-confirm (handle-delete-tag-confirm-keys model msg))
     (:detail (handle-detail-keys model msg))
-    (:edit-date (handle-date-edit-keys model msg))
-    (:list-set-date (handle-list-date-keys model msg))
-    ((:add-scheduled-date :add-due-date) (handle-form-date-edit-keys model msg))
+    (:edit-date (handle-date-keys-from-detail model msg))
+    (:list-set-date (handle-date-keys-from-list model msg))
+    ((:add-scheduled-date :add-due-date) (handle-date-keys-from-form model msg))
     (:help (handle-help-keys model msg))
     (:lists-overview (handle-lists-overview-keys model msg))
     (:list-detail (handle-list-detail-keys model msg))

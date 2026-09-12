@@ -125,6 +125,24 @@
                              (make-string (- width (length text)) :initial-element #\Space)))
                  :fg fg)))
 
+(defun overlay-modal (modal background)
+  "Composite MODAL, with a drop shadow, centered over BACKGROUND."
+  (tui:composite-with-shadow modal background
+                             :x-position tui:+center+
+                             :y-position tui:+middle+))
+
+(defun field-marker (active field)
+  "Return the \">\" cursor when FIELD is the ACTIVE form field, else a space."
+  (if (eql active field)
+      (tui:colored ">" :fg (theme-fg :cyan))
+      " "))
+
+(defun struck (text)
+  "Render TEXT struck through and dimmed, the completed/cancelled styling."
+  (tui:render-styled
+   (tui:make-style :strikethrough t :foreground (theme-fg :bright-black))
+   text))
+
 (defun render-scrollbar-lines (viewport height)
   "Render a 1-column scrollbar for a viewport."
   (let ((total (tui.viewport:viewport-total-lines viewport)))
@@ -217,7 +235,7 @@
                 (unless first-line (format c "~%"))
                 (setf first-line nil)
                 ;; Render pager-style section header (multi-line)
-                (format c "~A" (date-category-colored category list-width))
+                (format c "~A" (render-category-header category list-width))
                 (dolist (todo group-todos)
                   (format c "~%")
                   (let* ((selected-p (and (not (model-sidebar-focused model))
@@ -297,12 +315,8 @@
                                                 (if (> tags-len 0) (1+ tags-len) 0))))
                                (title-text (sanitize-title-for-display (todo-title todo)))
                                (trunc-title (tui:truncate-text title-text avail :ellipsis ".."))
-                               ;; Dim and strikethrough title for completed/cancelled items
                                (styled-title (if (member (todo-status todo) '(:completed :cancelled))
-                                                 (tui:render-styled
-                                                  (tui:make-style :strikethrough t
-                                                                  :foreground (theme-fg :bright-black))
-                                                  trunc-title)
+                                                 (struck trunc-title)
                                                  trunc-title))
                                (base (format nil "~A~A" prefix styled-title))
                                (base-len (tui:visible-length base))
@@ -452,10 +466,7 @@
 
                        ;; Title (wrapped if needed)
                        (let ((title-text (if (member (todo-status todo) '(:completed :cancelled))
-                                             (tui:render-styled
-                                              (tui:make-style :strikethrough t
-                                                              :foreground (theme-fg :bright-black))
-                                              (sanitize-title-for-display (todo-title todo)))
+                                             (struck (sanitize-title-for-display (todo-title todo)))
                                              (tui:bold (sanitize-title-for-display (todo-title todo))))))
                          (format s "~A" (tui:wrap-text title-text content-width)))
 
@@ -589,23 +600,17 @@
            (with-output-to-string (c)
              ;; Title input
              (format c "~A ~A"
-                     (if (eql (model-active-field model) :title)
-                         (tui:colored ">" :fg (theme-fg :cyan))
-                         " ")
+                     (field-marker (model-active-field model) :title)
                      title-input-view)
 
              ;; Notes input
              (format c "~%~A ~A"
-                     (if (eql (model-active-field model) :description)
-                         (tui:colored ">" :fg (theme-fg :cyan))
-                         " ")
+                     (field-marker (model-active-field model) :description)
                      (tui.textinput:textinput-view (model-description-input model)))
 
              ;; Priority
              (format c "~%~%~A Priority: ~A ~A ~A"
-                     (if (eql (model-active-field model) :priority)
-                         (tui:colored ">" :fg (theme-fg :cyan))
-                         " ")
+                     (field-marker (model-active-field model) :priority)
                      (if (eql (model-edit-priority model) :high)
                          (tui:bold (tui:colored "[#A]" :fg (theme-fg :red)))
                          (tui:colored " #A " :fg (theme-fg :bright-black)))
@@ -623,9 +628,7 @@
                                                          :format '(:short-month " " :day ", " :year))
                                    "Not set")))
                (format c "~%~A Scheduled: ~A~A"
-                       (if (eql (model-active-field model) :scheduled)
-                           (tui:colored ">" :fg (theme-fg :cyan))
-                           " ")
+                       (field-marker (model-active-field model) :scheduled)
                        (if sched-date
                            (tui:colored (format nil "[~A]" sched-str) :fg (theme-fg :cyan))
                            (tui:colored (format nil "[~A]" sched-str) :fg (theme-fg :bright-black)))
@@ -640,9 +643,7 @@
                                                        :format '(:short-month " " :day ", " :year))
                                  "Not set")))
                (format c "~%~A Due:       ~A~A"
-                       (if (eql (model-active-field model) :due)
-                           (tui:colored ">" :fg (theme-fg :cyan))
-                           " ")
+                       (field-marker (model-active-field model) :due)
                        (if due-date
                            (tui:colored (format nil "[~A]" due-str) :fg (theme-fg :red))
                            (tui:colored (format nil "[~A]" due-str) :fg (theme-fg :bright-black)))
@@ -655,9 +656,7 @@
                                 (model-edit-repeat-interval model)
                                 (model-edit-repeat-unit model))))
                (format c "~%~A Repeat:    ~A~A"
-                       (if (eql (model-active-field model) :repeat)
-                           (tui:colored ">" :fg (theme-fg :cyan))
-                           " ")
+                       (field-marker (model-active-field model) :repeat)
                        (if (model-edit-repeat-interval model)
                            (tui:colored (format nil "[~A]" repeat-str) :fg (theme-fg :magenta))
                            (tui:colored (format nil "[~A]" repeat-str) :fg (theme-fg :bright-black)))
@@ -700,9 +699,7 @@
              (format c "~%~%~A"
                      (tui:colored "Tab:next  ^E:edit notes  Enter:save  Esc:cancel" :fg (theme-fg :bright-black)))))
          (modal (render-box-with-title title content :min-width dialog-width)))
-    (tui:composite-with-shadow modal background
-                               :x-position tui:+center+
-                               :y-position tui:+middle+)))
+    (overlay-modal modal background)))
 
 (defun render-search-view (model)
   "Render the search view as an overlay dialog on the list view."
@@ -741,9 +738,7 @@
              (format c "~%~%~A"
                      (tui:colored "RET:apply  ESC:cancel" :fg (theme-fg :bright-black)))))
          (modal (render-box-with-title "SEARCH" content :min-width modal-width)))
-    (tui:composite-with-shadow modal background
-                               :x-position tui:+center+
-                               :y-position tui:+middle+)))
+    (overlay-modal modal background)))
 
 (defun render-delete-confirm-view (model)
   "Render the delete confirmation dialog as an overlay."
@@ -765,9 +760,7 @@
                                             :fg (theme-fg :bright-black))))
                       "No item selected"))
          (modal (render-box-with-title "DELETE ITEM" content :min-width modal-width)))
-    (tui:composite-with-shadow modal background
-                               :x-position tui:+center+
-                               :y-position tui:+middle+)))
+    (overlay-modal modal background)))
 
 (defun render-delete-done-confirm-view (model)
   "Render the delete-done confirmation dialog as an overlay."
@@ -785,9 +778,7 @@
                             (tui:colored "y:confirm  any other key:cancel"
                                         :fg (theme-fg :bright-black)))))
          (modal (render-box-with-title "DELETE DONE ITEMS" content :min-width modal-width)))
-    (tui:composite-with-shadow modal background
-                               :x-position tui:+center+
-                               :y-position tui:+middle+)))
+    (overlay-modal modal background)))
 
 (defun render-delete-tag-confirm-view (model)
   "Render the delete tag confirmation dialog as an overlay."
@@ -809,9 +800,7 @@
                             (tui:colored "y:confirm  any other key:cancel"
                                         :fg (theme-fg :bright-black)))))
          (modal (render-box-with-title "DELETE LABEL" content :min-width modal-width)))
-    (tui:composite-with-shadow modal background
-                               :x-position tui:+center+
-                               :y-position tui:+middle+)))
+    (overlay-modal modal background)))
 
 (defun render-import-view (model)
   "Render the org-mode import view as a modal overlay on the list view."
@@ -840,9 +829,7 @@
              (format c "~%~%~A"
                      (tui:colored "RET:import  ESC:cancel" :fg (theme-fg :bright-black)))))
          (modal (render-box-with-title "IMPORT ORG-MODE FILE" content :min-width modal-width)))
-    (tui:composite-with-shadow modal background
-                               :x-position tui:+center+
-                               :y-position tui:+middle+)))
+    (overlay-modal modal background)))
 
 (defun render-help-column (title entries)
   "Render a help column with TITLE and list of (key . description) ENTRIES."
@@ -1006,9 +993,7 @@
          (footer (tui:colored "Press any key to close" :fg (theme-fg :bright-black)))
          (inner (format nil "~%~A~%~A" content footer))
          (modal (render-box-with-title "KEYBOARD SHORTCUTS" inner)))
-    (tui:composite-with-shadow modal background
-                               :x-position tui:+center+
-                               :y-position tui:+middle+)))
+    (overlay-modal modal background)))
 
 (defun render-inline-tag-editor (model)
   "Render the inline tag editor as an overlay on the list view."
@@ -1060,9 +1045,7 @@
              (format c "~A"
                      (tui:colored "Enter:add/save  Backspace:remove  Esc:save" :fg (theme-fg :bright-black)))))
          (modal (render-box-with-title "EDIT LABELS" content)))
-    (tui:composite-with-shadow modal background
-                               :x-position tui:+center+
-                               :y-position tui:+middle+)))
+    (overlay-modal modal background)))
 
 (defun render-form-date-edit-view (model)
   "Render the date picker view for add/edit form as an overlay on the form."
@@ -1119,13 +1102,11 @@
                      (tui:colored "hjkl/←↑↓→:nav  []:month  {}:year  Home:today  RET:save  DEL:clear  ESC:cancel"
                                  :fg (theme-fg :bright-black)))))
          (modal (render-box-with-title title content :min-width modal-width)))
-    (tui:composite-with-shadow modal background
-                               :x-position tui:+center+
-                               :y-position tui:+middle+)))
+    (overlay-modal modal background)))
 
 ;;── Modal Overlay Helpers ──────────────────────────────────────────────────────
 
-(defun render-list-date-modal (model)
+(defun render-date-picker-overlay (model)
   "Render the list view with a datepicker modal overlay."
   (let* ((background (render-list-view model))
          (term-width (model-term-width model))
@@ -1186,9 +1167,7 @@
                      (tui:colored "hjkl/←↑↓→:nav  []:month  {}:year  Home:today  RET:save  DEL:clear  ESC:cancel"
                                  :fg (theme-fg :bright-black)))))
          (modal (render-box-with-title title content :min-width modal-width)))
-    (tui:composite-with-shadow modal background
-                               :x-position tui:+center+
-                               :y-position tui:+middle+)))
+    (overlay-modal modal background)))
 
 ;;── List Management Views ─────────────────────────────────────────────────────
 
@@ -1234,9 +1213,7 @@
                      (tui:colored "jk:nav  Enter:open  a:create  e:edit  d:del  Esc:back"
                                  :fg (theme-fg :bright-black)))))
          (modal (render-box-with-title "LISTS" content :min-width modal-width)))
-    (tui:composite-with-shadow modal background
-                               :x-position tui:+center+
-                               :y-position tui:+middle+)))
+    (overlay-modal modal background)))
 
 (defun render-list-detail-view (model)
   "Render the list detail view as a modal overlay showing items grouped by section."
@@ -1282,11 +1259,7 @@
                                         (tui:colored (pad-to-width line content-width)
                                                      :bg (theme-bg :cyan) :fg (theme-fg :black)))
                                 (if (list-item-checked item)
-                                    (format c "~A~%"
-                                            (tui:render-styled
-                                             (tui:make-style :strikethrough t
-                                                             :foreground (theme-fg :bright-black))
-                                             line))
+                                    (format c "~A~%" (struck line))
                                     (format c "~A~%" line)))
                             (incf item-idx)
                             (incf visible-count))))))))
@@ -1302,9 +1275,7 @@
                                  :fg (theme-fg :bright-black)))))
          (title (if list-def (string-upcase (list-def-name list-def)) "LIST"))
          (modal (render-box-with-title title content :min-width modal-width)))
-    (tui:composite-with-shadow modal background
-                               :x-position tui:+center+
-                               :y-position tui:+middle+)))
+    (overlay-modal modal background)))
 
 (defun render-list-form-view (model)
   "Render the list create/edit form as a modal overlay."
@@ -1318,25 +1289,19 @@
            (with-output-to-string (c)
              ;; Name input
              (format c "~A ~A ~A~%"
-                     (if (eql active :name)
-                         (tui:colored ">" :fg (theme-fg :cyan))
-                         " ")
+                     (field-marker active :name)
                      (tui:bold "Name:")
                      (tui.textinput:textinput-view (model-list-form-name-input model)))
 
              ;; Description input
              (format c "~A ~A ~A~%"
-                     (if (eql active :desc)
-                         (tui:colored ">" :fg (theme-fg :cyan))
-                         " ")
+                     (field-marker active :desc)
                      (tui:bold "Desc:")
                      (tui.textinput:textinput-view (model-list-form-desc-input model)))
 
              ;; Sections input
              (format c "~A ~A ~A~%"
-                     (if (eql active :sections)
-                         (tui:colored ">" :fg (theme-fg :cyan))
-                         " ")
+                     (field-marker active :sections)
                      (tui:bold "Secs:")
                      (tui.textinput:textinput-view (model-list-form-sections-input model)))
              (format c "  ~A~%"
@@ -1344,9 +1309,7 @@
 
              ;; Submit button
              (format c "~%~A ~A"
-                     (if (eql active :submit)
-                         (tui:colored ">" :fg (theme-fg :cyan))
-                         " ")
+                     (field-marker active :submit)
                      (if (eql active :submit)
                          (tui:bold (tui:colored "[ Save ]" :fg (theme-fg :green)))
                          (tui:colored "[ Save ]" :fg (theme-fg :bright-black))))
@@ -1355,9 +1318,7 @@
              (format c "~%~%~A"
                      (tui:colored "Tab:next field  Enter:save  Esc:cancel" :fg (theme-fg :bright-black)))))
          (modal (render-box-with-title title content :min-width dialog-width)))
-    (tui:composite-with-shadow modal background
-                               :x-position tui:+center+
-                               :y-position tui:+middle+)))
+    (overlay-modal modal background)))
 
 (defun render-list-item-add-view (model)
   "Render the add list item dialog as a modal overlay."
@@ -1374,9 +1335,7 @@
                      (tui:colored "Enter:add  Esc:cancel" :fg (theme-fg :bright-black)))))
          (title (format nil "ADD TO ~A" (if list-def (string-upcase (list-def-name list-def)) "LIST")))
          (modal (render-box-with-title title content :min-width modal-width)))
-    (tui:composite-with-shadow modal background
-                               :x-position tui:+center+
-                               :y-position tui:+middle+)))
+    (overlay-modal modal background)))
 
 (defun render-list-delete-confirm-view (model)
   "Render the delete list confirmation dialog as an overlay."
@@ -1399,9 +1358,7 @@
                                             :fg (theme-fg :bright-black))))
                       "No list selected"))
          (modal (render-box-with-title "DELETE LIST" content :min-width modal-width)))
-    (tui:composite-with-shadow modal background
-                               :x-position tui:+center+
-                               :y-position tui:+middle+)))
+    (overlay-modal modal background)))
 
 ;;── Main View Method ───────────────────────────────────────────────────────────
 
@@ -1426,7 +1383,7 @@
      (:delete-confirm (render-delete-confirm-view model))
      (:delete-done-confirm (render-delete-done-confirm-view model))
      (:delete-tag-confirm (render-delete-tag-confirm-view model))
-     ((:edit-date :list-set-date) (render-list-date-modal model))
+     ((:edit-date :list-set-date) (render-date-picker-overlay model))
      ((:add-scheduled-date :add-due-date) (render-form-date-edit-view model))
      (:help (render-help-view model))
      (:inline-tags (render-inline-tag-editor model))

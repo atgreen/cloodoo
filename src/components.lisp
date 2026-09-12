@@ -115,7 +115,7 @@
     (:no-date "UNSCHEDULED")
     (otherwise "OTHER")))
 
-(defun date-category-colored (category width)
+(defun render-category-header (category width)
   "Return colored single-line category header: ─┤ LABEL ├─── filled to WIDTH."
   (let* ((label (date-category-label category))
          (prefix (format nil "─┤ ~A ├" label))
