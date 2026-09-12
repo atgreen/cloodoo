@@ -423,8 +423,22 @@
 ;;── Timestamp Helpers ─────────────────────────────────────────────────────────
 
 (defun now-iso ()
-  "Return current timestamp as ISO 8601 string."
-  (lt:format-rfc3339-timestring nil (lt:now)))
+  "Return current timestamp as an ISO 8601 string, always in UTC.
+   Emitting local offsets would break both SQL and lexicographic ordering
+   against the 'Z'-suffixed strings other devices produce (cloodoo-by2)."
+  (lt:format-rfc3339-timestring nil (lt:now) :timezone lt:+utc-zone+))
+
+(defun timestamp-string< (a b)
+  "True when timestamp string A is strictly earlier than B, compared as
+   parsed times.  Lexicographic comparison is wrong across UTC offsets
+   ('...14:30+02:00' sorts after '...12:45Z' but is earlier; cloodoo-by2).
+   Falls back to STRING< when either string doesn't parse."
+  (handler-case (lt:timestamp< (lt:parse-timestring a) (lt:parse-timestring b))
+    (error () (string< a b))))
+
+(defun timestamp-string> (a b)
+  "True when timestamp string A is strictly later than B (see TIMESTAMP-STRING<)."
+  (timestamp-string< b a))
 
 (defun parse-timestamp (str)
   "Parse an ISO 8601 timestamp string, returning NIL if invalid."
@@ -526,6 +540,17 @@
          VALUES (?, ?, ?, ?, ?, ?)"
         hash content filename mime-type size created-at)
       hash)))
+
+(defun db-attachment-referenced-by-user-p (hash &key user-id)
+  "True when a current todo owned by USER-ID references attachment HASH.
+   Used to scope attachment downloads to the requesting user (cloodoo-th6)."
+  (ensure-db-initialized)
+  (with-db (db)
+    (plusp (or (sqlite:execute-single db
+                 "SELECT COUNT(*) FROM todos
+                  WHERE valid_to IS NULL AND user_id = ? AND attachment_hashes LIKE ?"
+                 user-id (format nil "%~A%" hash))
+               0))))
 
 (defun resolve-attachment (db hash)
   "Retrieve attachment metadata and content by hash.
@@ -792,7 +817,7 @@
                                   "SELECT valid_from FROM todos WHERE id = ? AND valid_to IS NULL"
                                   (todo-id todo))))
         (when (and current-timestamp valid-from
-                   (string< valid-from current-timestamp))
+                   (timestamp-string< valid-from current-timestamp))
           (llog:warn "Rejecting stale update" :id (todo-id todo)
                      :incoming valid-from :current current-timestamp)
           (return-from db-save-todo nil)))
@@ -1180,7 +1205,7 @@
                        (list-def-id list-def))))
                (when (and most-recent-valid-to
                           (stringp most-recent-valid-to)
-                          (string> most-recent-valid-to now))
+                          (timestamp-string> most-recent-valid-to now))
                  (llog:info "Rejecting stale list upsert (deleted more recently)"
                             :id (list-def-id list-def)
                             :upsert-time now
@@ -1741,7 +1766,7 @@
           (when (and (< use-count max-uses)
                      (or (null expires-at)
                          (eql expires-at :null)
-                         (string> expires-at (now-iso))))
+                         (timestamp-string> expires-at (now-iso))))
             (list :code code
                   :created-at created-at
                   :max-uses max-uses
@@ -1875,9 +1900,14 @@
                   ((> now expires-at)
                    (sqlite:execute-non-query db "DELETE FROM pairing_requests WHERE token = ?" token)
                    nil)
-                  (t (sqlite:execute-non-query db
-                       "UPDATE pairing_requests SET completed = 1 WHERE token = ?" token)
-                     (list :token token
+                  ;; Conditional UPDATE + changes() makes consumption atomic:
+                  ;; two racing requests can't both win (cloodoo-0an)
+                  ((progn (sqlite:execute-non-query db
+                            "UPDATE pairing_requests SET completed = 1 WHERE token = ? AND completed = 0"
+                            token)
+                          (zerop (sqlite:execute-single db "SELECT changes()")))
+                   nil)
+                  (t (list :token token
                            :device-name device-name
                            :passphrase passphrase
                            :created-at created-at

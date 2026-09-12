@@ -106,7 +106,7 @@
   (setf (hunchentoot:content-type*) "application/json")
   (let ((request (get-pairing-request token))
         (response (make-hash-table :test #'equal)))
-    (cond (request
+    (cond ((and request (not (pairing-request-completed request)))
           (setf (gethash "device_name" response) (pairing-request-device-name request))
           (setf (gethash "expires_in" response)
                 (- (pairing-request-expires-at request) (get-universal-time)))
@@ -124,13 +124,34 @@
    The encrypted payload contains: {cert: PEM, key: PEM, ca_cert: PEM, device_name: string}."
   (setf (hunchentoot:content-type*) "application/json")
   (let ((request (get-pairing-request token)))
-    (cond (request (let* ((body (hunchentoot:raw-post-data :force-text t))
+    (cond ((and request (not (pairing-request-completed request)))
+        (let* ((body (hunchentoot:raw-post-data :force-text t))
                (data (when (plusp (length body)) (jzon:parse body)))
-               (provided-passphrase (when data (gethash "passphrase" data)))
-               (expected-passphrase (pairing-request-passphrase request)))
-          (cond ((and provided-passphrase
-                   (string= provided-passphrase expected-passphrase))
-                (consume-pairing-request token)
+               (provided-passphrase (when (hash-table-p data) (gethash "passphrase" data)))
+               (provided-proof (when (hash-table-p data) (gethash "passphrase_proof" data)))
+               (expected-passphrase (pairing-request-passphrase request))
+               ;; Prefer the hashed proof (cloodoo-st8); raw passphrase is
+               ;; accepted for older clients but leaks over plain HTTP
+               (authorized (or (passphrase-equal-p provided-proof
+                                                   (pairing-passphrase-proof expected-passphrase))
+                               (passphrase-equal-p provided-passphrase expected-passphrase))))
+          (cond ((not authorized)
+                 ;; One wrong guess voids the token so passphrases can't be
+                 ;; brute-forced within the token's lifetime (cloodoo-wfi)
+                 (consume-pairing-request token)
+                 (setf (hunchentoot:return-code*) 403)
+                 (jzon:stringify (alexandria:plist-hash-table
+                                  '("error" "Invalid passphrase")
+                                  :test #'equal)))
+                ;; Consumption is the gate: NIL means the token was already
+                ;; used (or a racing request won), so never re-serve the
+                ;; bundle (cloodoo-0an)
+                ((null (consume-pairing-request token))
+                 (setf (hunchentoot:return-code*) 404)
+                 (jzon:stringify (alexandria:plist-hash-table
+                                  '("error" "Invalid or expired pairing token")
+                                  :test #'equal)))
+                (t
                 (let ((device-name (pairing-request-device-name request))
                       (payload (make-hash-table :test #'equal)))
                   (let ((cert-path (client-cert-file device-name))
@@ -147,21 +168,18 @@
                                    (uiop:read-file-string ca-path)))
                            (setf (gethash "device_name" payload) device-name)
                            ;; Encrypt the payload with the passphrase
+                           ;; Encrypt with the stored passphrase: proof-mode
+                           ;; clients never transmit the raw one
                            (let ((encrypted-response
                                    (encrypt-with-passphrase
                                     (jzon:stringify payload)
-                                    provided-passphrase)))
+                                    expected-passphrase)))
                              (jzon:stringify encrypted-response)))
                           (t
                            (setf (hunchentoot:return-code*) 500)
                            (jzon:stringify (alexandria:plist-hash-table
                                             '("error" "Certificate files not found")
-                                            :test #'equal)))))))
-                (t
-                 (setf (hunchentoot:return-code*) 403)
-                 (jzon:stringify (alexandria:plist-hash-table
-                                  '("error" "Invalid passphrase")
-                                  :test #'equal))))))
+                                            :test #'equal))))))))))
           (t
            (setf (hunchentoot:return-code*) 404)
            (jzon:stringify (alexandria:plist-hash-table

@@ -1087,15 +1087,29 @@ URL format: http[s]://HOST[:PORT]/pair/TOKEN"
                 (when (zerop (length passphrase))
                   (error "Passphrase cannot be empty"))
 
-                ;; Step 4: Download cert and key as PEM
+                ;; Step 4: Download cert and key as PEM.  Send a SHA-256
+                ;; proof of the passphrase, not the passphrase itself, so
+                ;; plain-HTTP pairing doesn't leak the decryption secret
+                ;; (cloodoo-st8).  Older servers only understand the raw
+                ;; passphrase, so fall back once if the proof is rejected.
                 (format t "Downloading certificate...~%")
                 (multiple-value-bind (pem-body pem-status)
                     (http-post (format nil "~A/pair/~A/pem" base-url token)
                                :content (jzon:stringify
                                          (alexandria:plist-hash-table
-                                          (list "passphrase" passphrase)
+                                          (list "passphrase_proof"
+                                                (pairing-passphrase-proof passphrase))
                                           :test #'equal))
                                :content-type "application/json")
+                  (when (= pem-status 403)
+                    (format t "Server predates hashed pairing; sending passphrase directly.~%")
+                    (multiple-value-setq (pem-body pem-status)
+                      (http-post (format nil "~A/pair/~A/pem" base-url token)
+                                 :content (jzon:stringify
+                                           (alexandria:plist-hash-table
+                                            (list "passphrase" passphrase)
+                                            :test #'equal))
+                                 :content-type "application/json")))
                   (unless (= pem-status 200)
                     (error "Failed to download certificate (HTTP ~A). Token may have expired."
                            pem-status))

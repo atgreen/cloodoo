@@ -570,6 +570,61 @@
   (let ((ids (loop repeat 200 collect (cloodoo::generate-id))))
     (is (= (length ids) (length (remove-duplicates ids :test #'string=))))))
 
+;;── Sync Timestamp Clamping ────────────────────────────────────────────────────
+
+(test clamp-change-timestamp-test
+  "Sane timestamps pass through; missing, garbage, and far-future ones are
+   replaced with server time so they can't win LWW forever (cloodoo-2bh)."
+  (let ((recent (cloodoo::now-iso))
+        (past "2020-01-01T00:00:00Z")
+        (future (local-time:format-rfc3339-timestring
+                 nil (local-time:timestamp+ (local-time:now) 1 :hour))))
+    (is (string= recent (cloodoo::clamp-change-timestamp recent)))
+    (is (string= past (cloodoo::clamp-change-timestamp past)))
+    (is (string/= future (cloodoo::clamp-change-timestamp future)))
+    (is (stringp (cloodoo::clamp-change-timestamp nil)))
+    (is (stringp (cloodoo::clamp-change-timestamp "")))
+    (is (string/= "not-a-date" (cloodoo::clamp-change-timestamp "not-a-date")))))
+
+;;── Timestamp Comparison ───────────────────────────────────────────────────────
+
+(test timestamp-string-compare-test
+  "Timestamp strings compare as times, not lexicographically (cloodoo-by2):
+   14:30+02:00 is 12:30Z, earlier than 12:45Z, though it sorts after it."
+  (is-true (cloodoo::timestamp-string< "2026-09-12T14:30:00.000000+02:00"
+                                       "2026-09-12T12:45:00.000000Z"))
+  (is-false (cloodoo::timestamp-string< "2026-09-12T12:45:00.000000Z"
+                                        "2026-09-12T14:30:00.000000+02:00"))
+  ;; Unparseable input falls back to lexicographic rather than erroring
+  (is-true (cloodoo::timestamp-string< "abc" "abd"))
+  ;; now-iso must emit UTC so SQL-side lexicographic ordering stays sound
+  (is (char= #\Z (char (cloodoo::now-iso) (1- (length (cloodoo::now-iso)))))))
+
+;;── Pairing Security ───────────────────────────────────────────────────────────
+
+(test pairing-token-single-use-test
+  "Consuming a pairing token twice must fail the second time (cloodoo-0an)."
+  (with-test-db
+    (cloodoo::db-store-pairing-request "tok1" "dev" "pass" (get-universal-time)
+                                       (+ (get-universal-time) 600))
+    (is (not (null (cloodoo::db-consume-pairing-request "tok1"))))
+    (is (null (cloodoo::db-consume-pairing-request "tok1")))))
+
+(test pairing-passphrase-proof-test
+  "The proof is a stable hash that differs from the raw passphrase
+   (cloodoo-st8), and comparison is exact (cloodoo-wfi)."
+  (let ((proof (cloodoo::pairing-passphrase-proof "alpha-bravo")))
+    (is (string= proof (cloodoo::pairing-passphrase-proof "alpha-bravo")))
+    (is (string/= proof "alpha-bravo"))
+    (is (= 64 (length proof)))
+    (is-true (cloodoo::passphrase-equal-p "abc" "abc"))
+    (is-false (cloodoo::passphrase-equal-p "abc" "abd"))
+    (is-false (cloodoo::passphrase-equal-p nil "abc"))))
+
+(test pairing-passphrase-entropy-test
+  "Generated passphrases have six words (cloodoo-wfi)."
+  (is (= 6 (1+ (count #\- (cloodoo::generate-passphrase))))))
+
 ;;── Run Tests ──────────────────────────────────────────────────────────────────
 
 (defun run-tests ()

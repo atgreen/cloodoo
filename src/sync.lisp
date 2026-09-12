@@ -28,15 +28,21 @@
 
 (defun extract-username-from-ctx (ctx)
   "Extract authenticated username (CN) from the client certificate.
-   Returns NIL for non-TLS connections (backward compat / testing)."
+   Returns (values username tls-p).  USERNAME is NIL for non-TLS
+   connections (backward compat / testing) — and for TLS connections whose
+   CN cannot be read, which callers MUST treat as an authentication
+   failure, never as anonymous full access (cloodoo-4jw).  Errors while
+   probing the connection count as TLS so they fail closed."
   (handler-case
       (let* ((conn (ag-grpc::context-connection ctx))
              (tls-stream (ag-http2:connection-stream conn)))
-        (when (typep tls-stream 'pure-tls:tls-stream)
-          (let ((peer-cert (pure-tls:tls-peer-certificate tls-stream)))
-            (when peer-cert
-              (first (pure-tls:certificate-subject-common-names peer-cert))))))
-    (error () nil)))
+        (if (typep tls-stream 'pure-tls:tls-stream)
+            (values (let ((peer-cert (pure-tls:tls-peer-certificate tls-stream)))
+                      (when peer-cert
+                        (first (pure-tls:certificate-subject-common-names peer-cert))))
+                    t)
+            (values nil nil)))
+    (error () (values nil t))))
 
 ;;── Client Registration ───────────────────────────────────────────────────────
 
@@ -44,16 +50,35 @@
   "A connected sync client with identity information."
   device-id
   username
-  stream)
+  stream
+  (send-lock (bt:make-lock "client-send-lock")))
 
-(defun register-sync-client (stream device-id &optional username)
-  "Register a connected sync client for broadcasting."
+(defun sync-client-send (client msg)
+  "Send MSG on CLIENT's stream under its send lock, so broadcasts from other
+   handlers and this handler's own snapshot writes never interleave frames."
+  (bt:with-lock-held ((sync-client-send-lock client))
+    (ag-grpc:stream-send (sync-client-stream client) msg)))
+
+(defun register-sync-client (client)
+  "Register a connected sync CLIENT for broadcasting."
   (bt:with-lock-held (*clients-lock*)
-    (push (make-sync-client :device-id device-id
-                            :username username
-                            :stream stream)
-          *connected-clients*)
-    (llog:info "Sync client connected" :device-id device-id :username username)))
+    (push client *connected-clients*)
+    (llog:info "Sync client connected"
+               :device-id (sync-client-device-id client)
+               :username (sync-client-username client))))
+
+(defun clamp-change-timestamp (ts)
+  "Return TS unless it is missing, unparseable, or more than 60 seconds in
+   the future, in which case return the current time.  A forged or skewed
+   future timestamp would otherwise win last-write-wins forever, leaving the
+   row un-editable everywhere (cloodoo-2bh)."
+  (or (and ts
+           (plusp (length ts))
+           (handler-case
+               (when (< (lt:timestamp-difference (lt:parse-timestring ts) (lt:now)) 60)
+                 ts)
+             (error () nil)))
+      (now-iso)))
 
 (defun unregister-sync-client-by-stream (stream device-id)
   "Unregister a specific sync client stream.
@@ -75,7 +100,9 @@
 (defun broadcast-change (change-msg &optional exclude-device-id username)
   "Broadcast a change to all connected clients except the one specified.
    CHANGE-MSG should be a proto-sync-message.
-   When USERNAME is non-nil, only broadcast to clients with matching username.
+   Only clients whose authenticated username EQUALs USERNAME receive the
+   change; a NIL username (non-TLS mode) matches only other NIL-username
+   clients, so a failed CN extraction fails closed (cloodoo-4jw).
    Snapshots the client list under lock, then sends outside the lock
    to avoid holding the lock during network I/O.
    Failed sends result in the client being removed from the list."
@@ -89,14 +116,13 @@
       (let ((client-device-id (sync-client-device-id client))
             (client-username (sync-client-username client))
             (client-stream (sync-client-stream client)))
-        ;; Only send if: not excluded device, and username matches (when set)
+        ;; Only send if: not excluded device, and username matches exactly
+        ;; (EQUAL is NIL-safe and fail-closed: NIL only matches NIL)
         (when (and (or (null exclude-device-id)
                        (not (string= client-device-id exclude-device-id)))
-                   (or (null username)
-                       (null client-username)
-                       (string= username client-username)))
+                   (equal username client-username))
           (handler-case
-              (ag-grpc:stream-send client-stream change-msg)
+              (sync-client-send client change-msg)
             (error (e)
               (llog:warn "Failed to send to client, removing"
                          :device-id client-device-id :error (princ-to-string e))
@@ -120,10 +146,21 @@
    CTX is the call context, STREAM is for sending/receiving messages.
    Extracts username from mTLS client certificate CN for user namespacing."
   (when *sync-debug* (format t "~&[SYNC-DEBUG] handle-sync-stream entered~%"))
-  (let ((client-device-id nil)
-        (username (extract-username-from-ctx ctx)))
+  (multiple-value-bind (username tls-p) (extract-username-from-ctx ctx)
+   (let ((client-device-id nil))
     (when username
       (llog:info "Authenticated user from certificate" :username username))
+    ;; A TLS connection without a readable CN is an authentication failure,
+    ;; not anonymous access: serving it would hand over the unscoped
+    ;; all-users snapshot (cloodoo-4jw)
+    (when (and tls-p (null username))
+      (llog:warn "Rejected TLS connection without readable client CN")
+      (handler-case
+          (ag-grpc:stream-send stream (make-sync-ack-message
+                                       (now-iso) 0
+                                       "Client certificate with CN required."))
+        (error () nil))
+      (return-from handle-sync-stream))
     ;; Check if the certificate CN has been revoked
     (when (and username (cert-revoked-p username))
       (llog:warn "Rejected revoked certificate" :username username)
@@ -171,29 +208,50 @@
                  (format t "~&[SYNC-DEBUG] Init: device-id=~A since=~A client-time=~A capabilities=~A~%"
                          device-id since client-time-str client-capabilities))
 
-               ;; Check clock skew if client sent its time
-               (when (and client-time-str (plusp (length client-time-str)))
-                 (handler-case
-                     (let* ((client-time (lt:parse-timestring client-time-str))
-                            (server-time (lt:now))
-                            (skew-seconds (abs (lt:timestamp-difference server-time client-time))))
-                       (when (> skew-seconds 60)
-                         (llog:warn "Clock skew too large, rejecting connection"
-                                    :device-id device-id
-                                    :skew-seconds skew-seconds)
-                         (let ((error-ack (make-sync-ack-message
-                                           (now-iso) 0
-                                           (format nil "Clock skew too large (~,1F seconds). Please sync your device clock."
-                                                   skew-seconds))))
-                           (ag-grpc:stream-send stream error-ack))
-                         (return-from sync-handler)))
-                   (error (e)
-                     (llog:warn "Failed to parse client time" :error (princ-to-string e)))))
+               ;; Require a parseable client time and check clock skew.
+               ;; A missing or garbage client_time used to skip the check
+               ;; entirely, making it bypassable (cloodoo-2bh).
+               (let ((client-time (and client-time-str
+                                       (plusp (length client-time-str))
+                                       (handler-case (lt:parse-timestring client-time-str)
+                                         (error () nil)))))
+                 (unless client-time
+                   (llog:warn "Rejecting connection without valid client time"
+                              :device-id device-id :client-time client-time-str)
+                   (let ((error-ack (make-sync-ack-message
+                                     (now-iso) 0
+                                     "Valid client_time required. Please update your client.")))
+                     (ag-grpc:stream-send stream error-ack))
+                   (return-from sync-handler))
+                 (let ((skew-seconds (abs (lt:timestamp-difference (lt:now) client-time))))
+                   (when (> skew-seconds 60)
+                     (llog:warn "Clock skew too large, rejecting connection"
+                                :device-id device-id
+                                :skew-seconds skew-seconds)
+                     (let ((error-ack (make-sync-ack-message
+                                       (now-iso) 0
+                                       (format nil "Clock skew too large (~,1F seconds). Please sync your device clock."
+                                               skew-seconds))))
+                       (ag-grpc:stream-send stream error-ack))
+                     (return-from sync-handler))))
 
-               ;; Get pending changes to send (only current versions, not historical)
-               (let* ((effective-since (if (plusp (length since))
+               ;; Register BEFORE loading the snapshot so changes committed and
+               ;; broadcast while we stream it are not missed (cloodoo-3vr).
+               ;; Duplicates are harmless: upserts are idempotent and
+               ;; LWW-guarded, and the per-client send lock keeps concurrent
+               ;; broadcasts from interleaving with snapshot frames.
+               (let* ((client (make-sync-client :device-id device-id
+                                                :username username
+                                                :stream stream))
+                      (effective-since (if (plusp (length since))
                                            since
                                            "1970-01-01T00:00:00Z"))
+                      ;; Watermark taken BEFORE the snapshot query: changes
+                      ;; committed while we stream (and broadcast while we're
+                      ;; not yet registered) are re-queried after registration
+                      ;; as stragglers, so nothing is missed (cloodoo-3vr)
+                      ;; while the ACK stays the first message on the wire
+                      (snapshot-watermark (now-iso))
                       (rows (db-load-current-rows-since effective-since :user-id username))
                       (pending-count (length rows)))
                  (format t "~&[SYNC-INIT] device=~A since=~S effective=~S pending=~D~%"
@@ -213,7 +271,7 @@
                                (length ack-bytes))))
                    (handler-case
                        (progn
-                         (ag-grpc:stream-send stream ack-msg)
+                         (sync-client-send client ack-msg)
                          (when *sync-debug* (format t "~&[SYNC-DEBUG] ACK sent successfully~%")))
                      (error (e)
                        (llog:error "Failed to send ACK" :error (princ-to-string e))
@@ -226,7 +284,7 @@
                           (change-msg (make-sync-upsert-message-with-timestamp
                                        (get-device-id) todo valid-from)))
                      (handler-case
-                         (ag-grpc:stream-send stream change-msg)
+                         (sync-client-send client change-msg)
                        (error (e)
                          (llog:error "Failed to send change" :error (princ-to-string e))
                          (return-from sync-handler)))))
@@ -239,7 +297,7 @@
                          (format t "~&[SYNC-DEBUG] Sending ~D settings~%"
                                  (hash-table-count settings-hash)))
                        (handler-case
-                           (ag-grpc:stream-send stream settings-msg)
+                           (sync-client-send client settings-msg)
                          (error (e)
                            (llog:error "Failed to send settings" :error (princ-to-string e))
                            (return-from sync-handler))))))
@@ -270,7 +328,7 @@
                                                    (gethash "valid_to" row))))
                                   (change-msg (make-sync-list-upsert-message
                                                (get-device-id) list-def)))
-                             (ag-grpc:stream-send stream change-msg))
+                             (sync-client-send client change-msg))
                          (error (e)
                            (llog:error "Failed to send list definition" :error (princ-to-string e))
                            (return-from sync-handler)))))
@@ -294,7 +352,7 @@
                               (change-msg (make-sync-list-item-upsert-message
                                            (get-device-id) item)))
                          (handler-case
-                             (ag-grpc:stream-send stream change-msg)
+                             (sync-client-send client change-msg)
                            (error (e)
                              (llog:error "Failed to send list item" :error (princ-to-string e))
                              (return-from sync-handler))))))) ;; closes when client-has-lists
@@ -303,8 +361,21 @@
                    (format t "~&[SYNC-DEBUG] All pending changes sent. Entering receive loop.~%")
                    (force-output))
 
-                 ;; Register this client for receiving broadcasts
-                 (register-sync-client stream device-id username)
+                 ;; Register for broadcasts, then re-send anything committed
+                 ;; while the snapshot streamed and we weren't yet registered
+                 ;; (cloodoo-3vr).  Duplicates are harmless: upserts are
+                 ;; idempotent and LWW-guarded.
+                 (register-sync-client client)
+                 (dolist (row (db-load-current-rows-since snapshot-watermark :user-id username))
+                   (let* ((todo (db-row-to-todo row))
+                          (valid-from (gethash "valid_from" row))
+                          (change-msg (make-sync-upsert-message-with-timestamp
+                                       (get-device-id) todo valid-from)))
+                     (handler-case
+                         (sync-client-send client change-msg)
+                       (error (e)
+                         (llog:error "Failed to send straggler change" :error (princ-to-string e))
+                         (return-from sync-handler)))))
 
                  ;; Main receive loop - process incoming changes from this client
                  (loop
@@ -331,7 +402,8 @@
                             ;; Client is sending an upsert
                             (let* ((proto-data (proto-todo-change-upsert change))
                                    (origin-device-id (proto-todo-change-device-id change))
-                                   (change-timestamp (proto-todo-change-timestamp change))
+                                   (raw-timestamp (proto-todo-change-timestamp change))
+                                   (change-timestamp (clamp-change-timestamp raw-timestamp))
                                    (todo (proto-to-todo proto-data))
                                    (enriched nil))
                               ;; Set device-id from the change envelope (not from local server)
@@ -421,18 +493,27 @@
                                 ;; Clear enriching-p flag since enrichment is complete
                                 (setf (todo-enriching-p todo) nil)
 
-                                ;; Save to local database with original timestamp
+                                ;; Save to local database with the (clamped) original timestamp
                                 (db-save-todo todo :valid-from change-timestamp :user-id username)
 
                                 ;; If enriched, create a new change message with enriched data and broadcast
                                 ;; When enriched, send to ALL clients including the originator so they get the enrichment
                                 ;; When not enriched, exclude the originator (they already have this data)
-                                (if enriched
-                                    (let ((enriched-msg (make-sync-upsert-message-with-timestamp
-                                                         origin-device-id todo change-timestamp)))
-                                      (when enriched-msg
-                                        (broadcast-change enriched-msg nil username)))
-                                    (broadcast-change msg device-id username))))))
+                                (cond (enriched
+                                       (let ((enriched-msg (make-sync-upsert-message-with-timestamp
+                                                            origin-device-id todo change-timestamp)))
+                                         (when enriched-msg
+                                           (broadcast-change enriched-msg nil username))))
+                                      ((string= change-timestamp raw-timestamp)
+                                       (broadcast-change msg device-id username))
+                                      (t
+                                       ;; Timestamp was clamped: re-emit with the
+                                       ;; sanitized one so other clients don't
+                                       ;; store the poisoned original
+                                       (broadcast-change
+                                        (make-sync-upsert-message-with-timestamp
+                                         origin-device-id todo change-timestamp)
+                                        device-id username)))))))
                            (:delete-id
                             ;; Client is requesting a delete
                             (let ((todo-id (proto-todo-change-delete-id change)))
@@ -453,12 +534,18 @@
                             (dolist (setting-data settings-list)
                               (let* ((key (slot-value setting-data 'key))
                                      (value (slot-value setting-data 'value))
-                                     (updated-at (slot-value setting-data 'updated-at)))
+                                     ;; Clamp only present timestamps: an empty
+                                     ;; updated_at must stay "oldest", not
+                                     ;; become "now" and always win LWW
+                                     (raw-updated-at (slot-value setting-data 'updated-at))
+                                     (updated-at (if (plusp (length raw-updated-at))
+                                                     (clamp-change-timestamp raw-updated-at)
+                                                     raw-updated-at)))
                                 (multiple-value-bind (current-value current-timestamp)
                                     (db-load-setting-with-timestamp key :user-id username)
                                   ;; Only update if incoming timestamp is newer or setting doesn't exist
                                   (when (or (null current-value)
-                                           (string< current-timestamp updated-at))
+                                           (timestamp-string< current-timestamp updated-at))
                                     (when *sync-debug*
                                       (format t "~&[SYNC-DEBUG] Updating setting ~A~%" key))
                                     ;; Save with the incoming timestamp to preserve causality
@@ -474,7 +561,8 @@
                       (handler-case
                           (let* ((list-change (proto-msg-list-change msg))
                                  (origin-device-id (proto-list-change-device-id list-change))
-                                 (change-timestamp (proto-list-change-timestamp list-change)))
+                                 (change-timestamp (clamp-change-timestamp
+                                                    (proto-list-change-timestamp list-change))))
                             (when *sync-debug*
                               (format t "~&[SYNC-DEBUG] Received list change from ~A, case=~A~%"
                                       origin-device-id (slot-value list-change 'change-case)))
@@ -494,7 +582,7 @@
                                            (let ((delete-msg (make-sync-list-delete-message
                                                                (get-device-id)
                                                                (list-def-id list-def))))
-                                             (ag-grpc:stream-send stream delete-msg)
+                                             (sync-client-send client delete-msg)
                                              (llog:info "Sent corrective delete to client"
                                                         :list-id (list-def-id list-def)
                                                         :device device-id))
@@ -540,7 +628,7 @@
         (format t "~&[SYNC-DEBUG] Handler exiting, cleanup. device-id=~A~%" client-device-id)
         (force-output))
       (when client-device-id
-        (unregister-sync-client-by-stream stream client-device-id)))))
+        (unregister-sync-client-by-stream stream client-device-id))))))
 
 ;;── Helper: Convert DB row hash table to todo ─────────────────────────────────
 
@@ -780,6 +868,30 @@
 (defvar *sync-received-count* 0
   "Number of changes received so far during initial sync.")
 
+(defvar *sync-ack-server-time* nil
+  "Server time from the last ACK.  Persisted as last-sync only once the full
+   snapshot has been received, so a mid-snapshot disconnect cannot skip the
+   unreceived remainder forever (cloodoo-w7b).")
+
+(defvar *sync-reconnect-requested* nil
+  "When T, the connector's receive loop drops the connection and reconnects
+   with a fresh init instead of exiting (set by :reset; cloodoo-d1r).")
+
+(defvar *sync-server-rejected* nil
+  "When T, the last connection ended with a server rejection (skew, missing
+   client time, revocation); the connector retries at max backoff.")
+
+(defvar *sync-send-lock* (bt:make-lock "sync-send-lock")
+  "Serializes writes to *sync-client-stream*: the TUI thread (change hooks)
+   and the connector thread (init/backlog) both send on it (cloodoo-o1n).")
+
+(defun sync-stream-send (msg)
+  "Send MSG on the client sync stream under *sync-send-lock*.
+   A no-op when the stream is gone (cleanup races a late sender)."
+  (bt:with-lock-held (*sync-send-lock*)
+    (when *sync-client-stream*
+      (ag-grpc:stream-send *sync-client-stream* msg))))
+
 (defun notify-tui-refresh ()
   "Send a sync-refresh message to the TUI program to trigger a redraw."
   (when *sync-program-ref*
@@ -873,6 +985,9 @@
   (setf *sync-model-ref* model)
   (setf *sync-program-ref* program)
   (setf *sync-client-running* t)
+  (setf *sync-reconnect-requested* nil)
+  ;; Fresh lock in case a destroyed thread orphaned the old one
+  (setf *sync-send-lock* (bt:make-lock "sync-send-lock"))
   (setf *sync-connector-host* host)
   (setf *sync-connector-port* port)
   (setf *sync-connector-cert* client-certificate)
@@ -939,11 +1054,18 @@
               (let ((stub (make-todo-sync-stub *sync-client-channel*)))
                 (setf *sync-client-stream* (todo-sync-sync-stream stub)))
 
+              ;; Fresh per-connection sync accounting: stale counters from a
+              ;; dropped connection could trip the drain condition early and
+              ;; save a watermark for rows never received (cloodoo-w7b)
+              (setf *sync-pending-count* 0
+                    *sync-received-count* 0
+                    *sync-ack-server-time* nil)
+
               ;; Send init message with last known sync timestamp
               (let* ((client-time (now-iso))
                      (since (load-last-sync-timestamp))
                      (init-msg (make-sync-init-message (get-device-id) since client-time)))
-                (ag-grpc:stream-send *sync-client-stream* init-msg)
+                (sync-stream-send init-msg)
                 (llog:info "Sent sync init" :device-id (get-device-id)
                            :since (if (zerop (length since)) "(full sync)" since)
                            :client-time client-time))
@@ -961,7 +1083,11 @@
                     do (handler-case
                            (let ((msg (ag-grpc:stream-read-message *sync-client-stream*)))
                              (cond (msg
-                                    (handle-sync-client-message msg))
+                                    (handle-sync-client-message msg)
+                                    (when *sync-reconnect-requested*
+                                      (setf *sync-reconnect-requested* nil)
+                                      (llog:info "Dropping connection to resync")
+                                      (return)))
                                    (t
                                     (llog:info "Sync stream ended (nil message)")
                                     (return))))
@@ -981,6 +1107,11 @@
 
         ;; Cleanup before retry
         (cleanup-sync-client)
+
+        ;; A server rejection (skew, revocation) retries at max backoff
+        (when *sync-server-rejected*
+          (setf *sync-server-rejected* nil)
+          (setf backoff-delay max-backoff))
 
         ;; Sleep with backoff before retrying (unless told to stop).
         ;; Sleep in short increments so stop-sync-client isn't blocked.
@@ -1030,12 +1161,15 @@
 
 (defun cleanup-sync-client ()
   "Clean up sync client resources (channel and stream)."
-  (when *sync-client-stream*
-    (handler-case
-        (ag-grpc:stream-close-send *sync-client-stream*)
-      (error (e)
-        (llog:warn "Error closing stream" :error (princ-to-string e)))))
-  (setf *sync-client-stream* nil)
+  ;; Close and nil the stream under the send lock so a concurrent
+  ;; sync-stream-send can't write to a half-closed stream
+  (bt:with-lock-held (*sync-send-lock*)
+    (when *sync-client-stream*
+      (handler-case
+          (ag-grpc:stream-close-send *sync-client-stream*)
+        (error (e)
+          (llog:warn "Error closing stream" :error (princ-to-string e)))))
+    (setf *sync-client-stream* nil))
 
   (when *sync-client-channel*
     (handler-case
@@ -1242,17 +1376,26 @@
             (pending (proto-sync-ack-pending-changes ack))
             (error-msg (proto-sync-ack-error ack)))
        (cond ((and error-msg (plusp (length error-msg)))
+              ;; Retry at max backoff instead of killing the connector loop
+              ;; forever: skew and similar rejections self-heal (cloodoo-d1r)
               (llog:error "Server rejected connection" :error error-msg)
               (update-sync-status :error error-msg)
-              (setf *sync-client-running* nil))
+              (setf *sync-server-rejected* t)
+              (setf *sync-reconnect-requested* t))
              (t
               (llog:info "Sync connected" :server-time server-time :pending pending)
               (update-sync-status :connected)
              ;; Load old last-sync timestamp before updating it
              (let ((old-last-sync (load-last-sync-timestamp)))
-               ;; Save server time for next reconnect (avoid full resync)
-               (when (and server-time (plusp (length server-time)))
-                 (save-last-sync-timestamp server-time))
+               ;; Don't persist last-sync yet: if we disconnect mid-snapshot a
+               ;; saved watermark would permanently skip the unreceived rest
+               ;; (cloodoo-w7b).  It is saved once the pending count drains.
+               (setf *sync-ack-server-time*
+                     (when (and server-time (plusp (length server-time)))
+                       server-time))
+               (when (and *sync-ack-server-time* (zerop pending))
+                 (save-last-sync-timestamp *sync-ack-server-time*)
+                 (setf *sync-ack-server-time* nil))
 
                (setf *sync-pending-count* pending)
                (setf *sync-received-count* 0)
@@ -1277,7 +1420,7 @@
                                 (change-msg (make-sync-upsert-message-with-timestamp
                                              (get-device-id) todo valid-from)))
                            (handler-case
-                               (ag-grpc:stream-send *sync-client-stream* change-msg)
+                               (sync-stream-send change-msg)
                              (error (e)
                                (llog:error "Failed to send local change"
                                           :id (todo-id todo)
@@ -1314,7 +1457,7 @@
                                 (change-msg (make-sync-list-upsert-message
                                              (get-device-id) list-def)))
                            (handler-case
-                               (ag-grpc:stream-send *sync-client-stream* change-msg)
+                               (sync-stream-send change-msg)
                              (error (e)
                                (llog:error "Failed to send local list definition"
                                           :error (princ-to-string e)))))))
@@ -1336,7 +1479,7 @@
                                 (change-msg (make-sync-list-item-upsert-message
                                              (get-device-id) item)))
                            (handler-case
-                               (ag-grpc:stream-send *sync-client-stream* change-msg)
+                               (sync-stream-send change-msg)
                              (error (e)
                                (llog:error "Failed to send local list item"
                                           :error (princ-to-string e))))))))
@@ -1348,12 +1491,17 @@
        (case (change-case change)
          (:upsert
           (let* ((proto-data (proto-todo-change-upsert change))
+                 (change-timestamp (proto-todo-change-timestamp change))
                  (todo (proto-to-todo proto-data)))
             (llog:info "Received upsert from server" :id (todo-id todo))
             ;; Server always clears enriching-p after processing, so no need to check
             ;; Suppress notifications to avoid sending the change back
             (let ((*suppress-change-notifications* t))
-              (db-save-todo todo))
+              ;; Preserve the change's own timestamp: saving with local time
+              ;; would invert last-write-wins and echo every received change
+              ;; back to the server on reconnect (cloodoo-0v5)
+              (db-save-todo todo :valid-from (when (plusp (length change-timestamp))
+                                               change-timestamp)))
             ;; Track progress and only refresh when done with initial batch
             (when (> *sync-pending-count* 0)
               (incf *sync-received-count*)
@@ -1362,6 +1510,10 @@
                 (sleep 0.001))
               (when (>= *sync-received-count* *sync-pending-count*)
                 (llog:info "Initial sync complete" :count *sync-received-count*)
+                ;; Snapshot fully received: now the ACK watermark is safe to keep
+                (when *sync-ack-server-time*
+                  (save-last-sync-timestamp *sync-ack-server-time*)
+                  (setf *sync-ack-server-time* nil))
                 (notify-tui-reload)
                 (setf *sync-pending-count* 0 *sync-received-count* 0)))
             ;; For single updates outside initial sync, ask main thread to reload
@@ -1389,7 +1541,7 @@
                (db-load-setting-with-timestamp key)
              ;; Only update if incoming timestamp is newer or setting doesn't exist
              (when (or (null current-value)
-                       (string< current-timestamp updated-at))
+                       (timestamp-string< current-timestamp updated-at))
                (let ((*suppress-change-notifications* t))
                  ;; Save with incoming timestamp (bypass db-save-setting which auto-timestamps)
                  (with-db (db)
@@ -1454,9 +1606,11 @@
              ;; Partial reset - set to specific timestamp
              (save-last-sync-timestamp reset-to)
              (llog:info "Last sync timestamp reset" :to reset-to)))
-       ;; Trigger reconnect to perform the resync
+       ;; Drop the connection so the connector loop reconnects and resyncs.
+       ;; Killing *sync-client-running* here would end the connector loop
+       ;; permanently instead (cloodoo-d1r).
        (llog:info "Disconnecting to trigger resync...")
-       (setf *sync-client-running* nil)))
+       (setf *sync-reconnect-requested* t)))
 
     (otherwise
      (llog:warn "Unknown message from server" :case (proto-msg-case msg)))))
@@ -1478,7 +1632,7 @@
       (handler-case
           (progn
             ;; Send the TODO update
-            (ag-grpc:stream-send *sync-client-stream* msg)
+            (sync-stream-send msg)
 
             ;; Upload attachments if the TODO has any
             (when (todo-attachment-hashes todo)
@@ -1493,7 +1647,7 @@
   (when (and *sync-client-stream* (sync-client-connected-p))
     (let ((msg (make-sync-delete-message (get-device-id) todo-id)))
       (handler-case
-          (ag-grpc:stream-send *sync-client-stream* msg)
+          (sync-stream-send msg)
         (error (e)
           (llog:error "Failed to send delete" :error (princ-to-string e)))))))
 
@@ -1520,7 +1674,7 @@
     (let* ((settings-hash (db-load-all-settings))
            (msg (make-sync-settings-message (get-device-id) settings-hash)))
       (handler-case
-          (ag-grpc:stream-send *sync-client-stream* msg)
+          (sync-stream-send msg)
         (error (e)
           (llog:error "Failed to send settings" :error (princ-to-string e)))))))
 
@@ -1538,7 +1692,7 @@
   (when (and *sync-client-stream* (sync-client-connected-p))
     (let ((msg (make-sync-list-upsert-message (get-device-id) list-def)))
       (handler-case
-          (ag-grpc:stream-send *sync-client-stream* msg)
+          (sync-stream-send msg)
         (error (e)
           (llog:error "Failed to send list upsert" :error (princ-to-string e)))))))
 
@@ -1547,7 +1701,7 @@
   (when (and *sync-client-stream* (sync-client-connected-p))
     (let ((msg (make-sync-list-delete-message (get-device-id) list-def-id)))
       (handler-case
-          (ag-grpc:stream-send *sync-client-stream* msg)
+          (sync-stream-send msg)
         (error (e)
           (llog:error "Failed to send list delete" :error (princ-to-string e)))))))
 
@@ -1556,7 +1710,7 @@
   (when (and *sync-client-stream* (sync-client-connected-p))
     (let ((msg (make-sync-list-item-upsert-message (get-device-id) item)))
       (handler-case
-          (ag-grpc:stream-send *sync-client-stream* msg)
+          (sync-stream-send msg)
         (error (e)
           (llog:error "Failed to send list item upsert" :error (princ-to-string e)))))))
 
@@ -1565,7 +1719,7 @@
   (when (and *sync-client-stream* (sync-client-connected-p))
     (let ((msg (make-sync-list-item-delete-message (get-device-id) item-id)))
       (handler-case
-          (ag-grpc:stream-send *sync-client-stream* msg)
+          (sync-stream-send msg)
         (error (e)
           (llog:error "Failed to send list item delete" :error (princ-to-string e)))))))
 
@@ -1675,15 +1829,30 @@
   "Size of chunks for streaming attachment transfers (8KB).
 Keep small to avoid exhausting HTTP/2 flow control window.")
 
+(defparameter *attachment-max-size* (* 50 1024 1024)
+  "Maximum accepted attachment size in bytes.  Uploads buffer in memory, so
+   an unbounded stream could exhaust the server (cloodoo-th6).")
+
 (defun handle-upload-attachment (ctx stream)
   "Handler for AttachmentService.UploadAttachment RPC.
    Receives streaming chunks from client, stores in attachments table."
-  (declare (ignore ctx))
   (let ((metadata nil)
         (content-buffer nil)
         (total-size 0))
     (handler-case
         (block upload-handler
+          ;; Reject revoked certificates (cloodoo-th6)
+          (multiple-value-bind (username tls-p) (extract-username-from-ctx ctx)
+            (when (and tls-p (null username))
+              (llog:warn "Rejected attachment upload without readable client CN")
+              (return-from upload-handler
+                (make-instance 'proto-attachment-upload-response
+                               :error "Client certificate with CN required")))
+            (when (and username (cert-revoked-p username))
+              (llog:warn "Rejected attachment upload from revoked cert" :username username)
+              (return-from upload-handler
+                (make-instance 'proto-attachment-upload-response
+                               :error "Certificate has been revoked"))))
           ;; First message should be metadata
           (let ((first-msg (ag-grpc:stream-recv stream)))
             (unless first-msg
@@ -1698,6 +1867,11 @@ Keep small to avoid exhausting HTTP/2 flow control window.")
                 (return-from upload-handler resp)))
 
             (setf metadata (proto-attachment-upload-request-metadata first-msg))
+            (when (> (proto-attachment-meta-size metadata) *attachment-max-size*)
+              (return-from upload-handler
+                (make-instance 'proto-attachment-upload-response
+                               :error (format nil "Attachment exceeds maximum size (~D bytes)"
+                                              *attachment-max-size*))))
             (llog:info "Attachment upload started"
                        :hash (proto-attachment-meta-hash metadata)
                        :filename (proto-attachment-meta-filename metadata)
@@ -1714,6 +1888,12 @@ Keep small to avoid exhausting HTTP/2 flow control window.")
 
               (when (eql (request-case msg) :chunk)
                 (let ((chunk (proto-attachment-upload-request-chunk msg)))
+                  (when (> (+ total-size (length chunk)) *attachment-max-size*)
+                    ;; The declared size lied; stop buffering (cloodoo-th6)
+                    (return-from upload-handler
+                      (make-instance 'proto-attachment-upload-response
+                                     :error (format nil "Attachment exceeds maximum size (~D bytes)"
+                                                    *attachment-max-size*))))
                   (loop for byte across chunk
                         do (vector-push-extend byte content-buffer))
                   (incf total-size (length chunk))))))
@@ -1766,13 +1946,40 @@ Keep small to avoid exhausting HTTP/2 flow control window.")
 
 (defun handle-download-attachment (request ctx stream)
   "Handler for AttachmentService.DownloadAttachment RPC.
-   Streams attachment content to client in chunks."
-  (declare (ignore request ctx))
+   Streams attachment content to client in chunks.  Authenticated users may
+   only fetch hashes referenced by one of their own todos (cloodoo-th6).
+   Note this stops blind hash probing, not a user who already knows a hash
+   and upserts a todo referencing it: real ownership needs an owner column
+   on the attachments table."
+  (declare (ignore request))
 
   ;; For server-streaming, ag-grpc passes nil as request parameter
   ;; We need to read the request from the stream
-  (let* ((req-msg (ag-grpc:stream-recv stream))
-         (hash (when req-msg (slot-value req-msg 'hash))))
+  (multiple-value-bind (username tls-p) (extract-username-from-ctx ctx)
+   (let* ((req-msg (ag-grpc:stream-recv stream))
+          (hash (when req-msg (slot-value req-msg 'hash))))
+    (when (and tls-p (null username))
+      (llog:warn "Rejected attachment download without readable client CN")
+      (let ((resp (make-instance 'proto-attachment-download-response
+                                 :error "Client certificate with CN required")))
+        (ag-grpc:stream-send stream resp))
+      (return-from handle-download-attachment))
+    (when (and username (cert-revoked-p username))
+      (llog:warn "Rejected attachment download from revoked cert" :username username)
+      (let ((resp (make-instance 'proto-attachment-download-response
+                                 :error "Certificate has been revoked")))
+        (ag-grpc:stream-send stream resp))
+      (return-from handle-download-attachment))
+    ;; Authenticated users may only fetch attachments their todos reference;
+    ;; report the same error as a missing attachment to avoid probing.
+    (when (and username
+               (not (db-attachment-referenced-by-user-p hash :user-id username)))
+      (llog:warn "Rejected attachment download not owned by user"
+                 :username username :hash hash)
+      (let ((resp (make-instance 'proto-attachment-download-response
+                                 :error "Attachment not found")))
+        (ag-grpc:stream-send stream resp))
+      (return-from handle-download-attachment))
     (llog:info "ATTACHMENT DOWNLOAD REQUEST" :hash hash)
     (format t "~&[ATTACHMENT-DOWNLOAD] Request for hash: ~A~%" hash)
     (force-output)
@@ -1835,7 +2042,7 @@ Keep small to avoid exhausting HTTP/2 flow control window.")
         (llog:error "Attachment download failed" :hash hash :error (princ-to-string e))
         (let ((resp (make-instance 'proto-attachment-download-response
                                    :error (princ-to-string e))))
-          (ag-grpc:stream-send stream resp))))))
+          (ag-grpc:stream-send stream resp)))))))
 
 (defun register-attachment-service (server)
   "Register the AttachmentService handlers with the gRPC server."

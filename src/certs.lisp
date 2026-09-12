@@ -83,13 +83,31 @@
     "river" "mountain" "forest" "desert" "ocean" "island" "valley" "plain")
   "Word list for generating memorable passphrases.")
 
-(defun generate-passphrase (&optional (word-count 4))
+(defun generate-passphrase (&optional (word-count 6))
   "Generate a memorable passphrase with WORD-COUNT words using CSPRNG.
-   Default 4 words (~26 bits entropy from 72-word list)."
+   Default 6 words (~37 bits entropy from the 72-word list; cloodoo-wfi)."
   (let ((words (loop repeat word-count
                      collect (nth (secure-random (length *passphrase-words*))
                                   *passphrase-words*))))
     (format nil "~{~A~^-~}" words)))
+
+(defun passphrase-equal-p (provided expected)
+  "Constant-time passphrase comparison, so response timing doesn't leak how
+   many leading characters matched (cloodoo-wfi)."
+  (and (stringp provided) (stringp expected)
+       (ironclad:constant-time-equal
+        (flexi-streams:string-to-octets provided :external-format :utf-8)
+        (flexi-streams:string-to-octets expected :external-format :utf-8))))
+
+(defun pairing-passphrase-proof (passphrase)
+  "Hex SHA-256 proof of the pairing passphrase.  Clients send this instead
+   of the raw passphrase, so pairing over plain HTTP no longer hands an
+   eavesdropper the decryption secret for the cert bundle (cloodoo-st8)."
+  (ironclad:byte-array-to-hex-string
+   (ironclad:digest-sequence
+    :sha256 (flexi-streams:string-to-octets
+             (concatenate 'string "cloodoo-pair-v1:" passphrase)
+             :external-format :utf-8))))
 
 ;;── Recovery Code Generation ──────────────────────────────────────────────────
 
@@ -241,7 +259,7 @@
 
   (let ((client-key-path (namestring (client-key-file name)))
         (client-cert-path (namestring (client-cert-file name)))
-        (passphrase (generate-passphrase 4)))
+        (passphrase (generate-passphrase)))
 
     ;; Load CA key for signing
     (multiple-value-bind (ca-n ca-e ca-d)
@@ -432,7 +450,7 @@
    Stores in SQLite for cross-process access."
   (unless (probe-file (client-cert-file device-name))
     (error "No certificate found for '~A'." device-name))
-  (let* ((passphrase (generate-passphrase 4))
+  (let* ((passphrase (generate-passphrase))
          (token (generate-pairing-token))
          (now (get-universal-time))
          (expires-at (+ now (* expiry-minutes 60)))
