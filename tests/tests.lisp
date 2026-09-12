@@ -625,6 +625,57 @@
   "Generated passphrases have six words (cloodoo-wfi)."
   (is (= 6 (1+ (count #\- (cloodoo::generate-passphrase))))))
 
+;;── DB Integrity ───────────────────────────────────────────────────────────────
+
+(test db-save-todo-user-scoping-test
+  "An id collision across users must not close out the other user's row
+   (cloodoo-ab0)."
+  (with-test-db
+    (let ((todo-a (cloodoo:make-todo "Alice's task"))
+          (todo-b (cloodoo:make-todo "Bob's task")))
+      (setf (cloodoo:todo-id todo-b) (cloodoo:todo-id todo-a))
+      (cloodoo::db-save-todo todo-a :user-id "alice")
+      (cloodoo::db-save-todo todo-b :user-id "bob")
+      ;; Both users' rows must still be current
+      (cloodoo::with-db (db)
+        (is (= 2 (sqlite:execute-single db
+                   "SELECT COUNT(*) FROM todos WHERE id = ? AND valid_to IS NULL"
+                   (cloodoo:todo-id todo-a))))))))
+
+(test db-check-list-item-preserves-nulls-test
+  "Toggling a list item keeps NULL section/notes and its device_id
+   (cloodoo-0v9)."
+  (with-test-db
+    (let* ((list-def (cloodoo:make-list-definition "Groceries"))
+           (item (cloodoo:make-list-item (cloodoo:list-def-id list-def) "Milk"
+                                         :device-id "dev-42")))
+      (cloodoo::db-save-list-definition list-def)
+      (cloodoo::db-save-list-item item)
+      (is-true (cloodoo::db-check-list-item (cloodoo:list-item-id item) t))
+      (cloodoo::with-db (db)
+        (destructuring-bind (section notes device-id checked)
+            (first (sqlite:execute-to-list db
+                     "SELECT section, notes, device_id, checked FROM list_items
+                      WHERE id = ? AND valid_to IS NULL"
+                     (cloodoo:list-item-id item)))
+          (is (null section))
+          (is (null notes))
+          (is (equal "dev-42" device-id))
+          (is (= 1 checked)))))))
+
+(test migrate-inline-to-blobs-terminates-test
+  "Rows with empty-string inline content are cleared, not rescanned forever
+   (cloodoo-1bf)."
+  (with-test-db
+    (cloodoo::with-db (db)
+      (sqlite:execute-non-query db
+        "INSERT INTO todos (id, title, description, created_at, valid_from)
+         VALUES ('m1', 'Empty desc', '', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')")
+      (cloodoo::migrate-inline-to-blobs db)
+      (is (zerop (sqlite:execute-single db
+                   "SELECT COUNT(*) FROM todos
+                    WHERE description IS NOT NULL AND description_hash IS NULL"))))))
+
 ;;── Run Tests ──────────────────────────────────────────────────────────────────
 
 (defun run-tests ()

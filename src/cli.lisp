@@ -616,6 +616,10 @@
    :description "Upload all local attachments to the sync server"
    :handler (lambda (cmd)
               (declare (ignore cmd))
+              ;; The handler runs long after make-sync-upload-attachments-command
+              ;; has returned; return-from that block would signal a control
+              ;; error at runtime (cloodoo-jw4)
+              (block nil
               (format t "~%Connecting to sync server to upload attachments...~%~%")
               (handler-case
                   (progn
@@ -626,7 +630,7 @@
                         (format t "~A No paired sync server found.~%"
                                 (tui:colored "✗" :fg (theme-fg :red)))
                         (format t "Pair with a server first using QR code pairing.~%")
-                        (return-from make-sync-upload-attachments-command nil))
+                        (return nil))
 
                       (let ((cert-path (namestring (paired-client-cert-file server-id)))
                             (key-path (namestring (paired-client-key-file server-id))))
@@ -635,7 +639,7 @@
                           (format t "~A Client certificates not found.~%"
                                   (tui:colored "✗" :fg (theme-fg :red)))
                           (format t "Certificates missing for paired server ~A~%" server-id)
-                          (return-from make-sync-upload-attachments-command nil))
+                          (return nil))
 
                       ;; Connect to sync server
                       (format t "Connecting to ~A:~A...~%" host port)
@@ -650,7 +654,7 @@
                         (format t "~A Failed to connect to sync server~%"
                                 (tui:colored "✗" :fg (theme-fg :red)))
                         (stop-sync-client)
-                        (return-from make-sync-upload-attachments-command nil))
+                        (return nil))
 
                       (format t "~A Connected!~%~%" (tui:colored "✓" :fg (theme-fg :green)))
 
@@ -672,7 +676,7 @@
                         (stop-sync-client))))
                 (error (e)
                   (format t "~A Error: ~A~%"
-                          (tui:colored "✗" :fg (theme-fg :red)) e))))))
+                          (tui:colored "✗" :fg (theme-fg :red)) e)))))))
 
 (defun make-sync-reset-command ()
   "Create the 'sync-reset' subcommand to force a multi-way resync."
@@ -2293,6 +2297,9 @@ URL format: http[s]://HOST[:PORT]/pair/TOKEN"
      :usage "USERNAME"
      :options (list days-opt port-opt host-opt tls-opt no-server-opt)
      :handler (lambda (cmd)
+                ;; block nil: return-from the enclosing (long-gone) function
+                ;; block would be a runtime control error (cloodoo-jw4)
+                (block nil
                 (let ((args (clingon:command-arguments cmd))
                       (days (clingon:getopt cmd :days))
                       (port (clingon:getopt cmd :port))
@@ -2305,7 +2312,7 @@ URL format: http[s]://HOST[:PORT]/pair/TOKEN"
                         (unless (ca-initialized-p)
                           (format t "~A CA not initialized. Run 'cloodoo cert init' first.~%"
                                   (tui:colored "✗" :fg (theme-fg :red)))
-                          (return-from make-user-create-command nil))
+                          (return nil))
                         (let ((cert-exists (client-cert-exists-p username)))
                         (handler-case
                             (if no-server
@@ -2398,7 +2405,7 @@ URL format: http[s]://HOST[:PORT]/pair/TOKEN"
                           (error (e)
                             (format t "~A Error: ~A~%"
                                     (tui:colored "✗" :fg (theme-fg :red)) e)))))
-                      (format t "Usage: cloodoo user create USERNAME~%")))))))
+                      (format t "Usage: cloodoo user create USERNAME~%"))))))))
 
 (defun make-user-list-command ()
   "Create the 'user list' subcommand."

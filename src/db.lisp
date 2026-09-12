@@ -100,13 +100,18 @@
 
 (defmacro with-db ((db-var) &body body)
   "Execute BODY with a database connection bound to DB-VAR.
-   Uses connection pooling within the same process."
-  `(bt:with-lock-held (*db-lock*)
-     (let ((,db-var (or *db* (open-db)))) ; lint:suppress malformed-let
-       (unwind-protect
-            (progn ,@body) ; lint:suppress redundant-progn
-         (unless *db*
-           (close-db ,db-var))))))
+   Initializes the database on first use — every DB entry point funnels
+   through here, so fresh installs can't hit 'no such table' via paths
+   that forgot to call ensure-db-initialized (cloodoo-g8m).  Uses the
+   process-wide cached connection once initialization has run."
+  `(progn
+     (ensure-db-initialized)
+     (bt:with-lock-held (*db-lock*)
+       (let ((,db-var (or *db* (open-db)))) ; lint:suppress malformed-let
+         (unwind-protect
+              (progn ,@body) ; lint:suppress redundant-progn
+           (unless *db*
+             (close-db ,db-var)))))))
 
 (defun init-db ()
   "Initialize the database, creating tables if needed."
@@ -482,30 +487,31 @@
 (defun migrate-inline-to-blobs (db)
   "Migrate existing inline descriptions and location_info to the blobs table.
    Only runs if there are rows with inline content but no hash."
-  (let ((rows (sqlite:execute-to-list db "
-    SELECT row_id, description, location_info
-    FROM todos
-    WHERE (description IS NOT NULL AND description_hash IS NULL)
-       OR (location_info IS NOT NULL AND location_info_hash IS NULL)
-    LIMIT 1000")))
-    (when rows
+  (loop
+    (let ((rows (sqlite:execute-to-list db "
+      SELECT row_id, description, location_info
+      FROM todos
+      WHERE (description IS NOT NULL AND description_hash IS NULL)
+         OR (location_info IS NOT NULL AND location_info_hash IS NULL)
+      LIMIT 1000")))
+      (unless rows
+        (return))
       (dolist (row rows)
         (destructuring-bind (row-id description location-info) row
+          ;; Always clear the inline column, even when the content is empty
+          ;; and produces no blob (hash NULL): leaving it set would match
+          ;; the migration scan again on every init-db, forever (cloodoo-1bf)
           (when (and description (not (eql description :null)))
-            (let ((hash (store-blob db description)))
-              (when hash
-                (sqlite:execute-non-query db
-                  "UPDATE todos SET description = NULL, description_hash = ? WHERE row_id = ?"
-                  hash row-id))))
+            (sqlite:execute-non-query db
+              "UPDATE todos SET description = NULL, description_hash = ? WHERE row_id = ?"
+              (store-blob db description) row-id))
           (when (and location-info (not (eql location-info :null)))
-            (let ((hash (store-blob db location-info)))
-              (when hash
-                (sqlite:execute-non-query db
-                  "UPDATE todos SET location_info = NULL, location_info_hash = ? WHERE row_id = ?"
-                  hash row-id))))))
-      ;; Recurse if there are more rows (batched to avoid huge transactions)
-      (when (= (length rows) 1000)
-        (migrate-inline-to-blobs db)))))
+            (sqlite:execute-non-query db
+              "UPDATE todos SET location_info = NULL, location_info_hash = ? WHERE row_id = ?"
+              (store-blob db location-info) row-id))))
+      ;; Batched to avoid huge transactions; the scan shrinks every pass
+      (when (< (length rows) 1000)
+        (return)))))
 
 ;;── Content-Addressed Attachment Storage ──────────────────────────────────────
 
@@ -812,23 +818,38 @@
     (let ((now (or valid-from (now-iso)))
           (values (todo-to-db-values todo))
           (committed nil))
-      ;; Check for timestamp conflict - reject if incoming is older than current
-      (let ((current-timestamp (sqlite:execute-single db
-                                  "SELECT valid_from FROM todos WHERE id = ? AND valid_to IS NULL"
-                                  (todo-id todo))))
+      ;; Check for timestamp conflict - reject if incoming is older than
+      ;; current.  All three pre-write checks and the close-out are scoped by
+      ;; USER-ID so an id collision can't touch another user's row (cloodoo-ab0).
+      (let ((current-timestamp
+              (if user-id
+                  (sqlite:execute-single db
+                    "SELECT valid_from FROM todos WHERE id = ? AND valid_to IS NULL AND user_id = ?"
+                    (todo-id todo) user-id)
+                  (sqlite:execute-single db
+                    "SELECT valid_from FROM todos WHERE id = ? AND valid_to IS NULL"
+                    (todo-id todo)))))
         (when (and current-timestamp valid-from
                    (timestamp-string< valid-from current-timestamp))
           (llog:warn "Rejecting stale update" :id (todo-id todo)
                      :incoming valid-from :current current-timestamp)
           (return-from db-save-todo nil)))
       ;; Skip if data is unchanged
-      (let ((current (sqlite:execute-to-list db
-                       "SELECT title, description_hash, priority, status, scheduled_date,
-                               due_date, tags, location_info_hash, url,
-                               completed_at, repeat_interval, repeat_unit,
-                               enriching_p, attachment_hashes
-                        FROM todos WHERE id = ? AND valid_to IS NULL"
-                       (todo-id todo))))
+      (let ((current (if user-id
+                         (sqlite:execute-to-list db
+                           "SELECT title, description_hash, priority, status, scheduled_date,
+                                   due_date, tags, location_info_hash, url,
+                                   completed_at, repeat_interval, repeat_unit,
+                                   enriching_p, attachment_hashes
+                            FROM todos WHERE id = ? AND valid_to IS NULL AND user_id = ?"
+                           (todo-id todo) user-id)
+                         (sqlite:execute-to-list db
+                           "SELECT title, description_hash, priority, status, scheduled_date,
+                                   due_date, tags, location_info_hash, url,
+                                   completed_at, repeat_interval, repeat_unit,
+                                   enriching_p, attachment_hashes
+                            FROM todos WHERE id = ? AND valid_to IS NULL"
+                           (todo-id todo)))))
         (when (and current (= (length current) 1))
           (let* ((cur (first current))
                  (desc-hash (store-blob db (third values)))
@@ -856,10 +877,15 @@
         (unwind-protect
              (progn
                ;; Mark any existing current version as superseded
-               (sqlite:execute-non-query db "
-                 UPDATE todos SET valid_to = ?
-                 WHERE id = ? AND valid_to IS NULL"
-                 now (todo-id todo))
+               (if user-id
+                   (sqlite:execute-non-query db "
+                     UPDATE todos SET valid_to = ?
+                     WHERE id = ? AND valid_to IS NULL AND user_id = ?"
+                     now (todo-id todo) user-id)
+                   (sqlite:execute-non-query db "
+                     UPDATE todos SET valid_to = ?
+                     WHERE id = ? AND valid_to IS NULL"
+                     now (todo-id todo)))
                ;; Insert the new version (description/location_info as hashes)
                (apply #'sqlite:execute-non-query db
                  (if user-id
@@ -1041,9 +1067,15 @@
 (defvar *db-initializing* nil
   "Guard against re-entrant calls to ensure-db-initialized.")
 
+(defvar *db-initialized* nil
+  "T once ensure-db-initialized has completed for this process.  Memoized:
+   re-running the whole migration battery on every DB call cost real time
+   per keystroke (cloodoo-g8m).")
+
 (defun ensure-db-initialized ()
-  "Ensure the database is initialized, migrating from JSON if needed."
-  (when (and *use-sqlite* (not *db-initializing*))
+  "Ensure the database is initialized, migrating from JSON if needed.
+   Runs once per process; afterwards a cached connection is kept open."
+  (when (and *use-sqlite* (not *db-initializing*) (not *db-initialized*))
     (let ((*db-initializing* t))
       (let ((db-exists (probe-file (db-file)))
             (json-exists (probe-file (todos-file))))
@@ -1062,7 +1094,12 @@
       ;; Ensure the built-in Groceries list exists (ensure-default-lists is defined
       ;; in lists.lisp, loaded after db.lisp, but this runs lazily at first use)
       (when (fboundp 'ensure-default-lists)
-        (ensure-default-lists)))))
+        (ensure-default-lists)))
+    ;; Keep one connection open for the life of the process (WAL mode;
+    ;; all access serializes through *db-lock*)
+    (unless *db*
+      (setf *db* (open-db)))
+    (setf *db-initialized* t)))
 
 ;;── Redefine Storage Functions to Use SQLite ──────────────────────────────────
 
@@ -1449,32 +1486,46 @@
   (with-db (db)
     (let ((rows (sqlite:execute-to-list db "
       SELECT row_id, id, list_id, title, section, checked, notes,
-             created_at, device_id, valid_from, valid_to
+             created_at, device_id, valid_from, valid_to, user_id
       FROM list_items
       WHERE id = ? AND valid_to IS NULL"
       item-id)))
       (when rows
-        (let* ((item (row-to-list-item (first rows)))
-               (now (now-iso)))
-          ;; Close out old row
-          (sqlite:execute-non-query db "
-            UPDATE list_items SET valid_to = ?
-            WHERE id = ? AND valid_to IS NULL"
-            now item-id)
-          ;; Insert updated row
-          (sqlite:execute-non-query db "
-            INSERT INTO list_items (id, list_id, title, section, checked, notes,
-                                    created_at, device_id, valid_from)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
-            (list-item-id item)
-            (list-item-list-id item)
-            (list-item-title item)
-            (or (list-item-section item) "")
-            (if checked 1 0)
-            (or (list-item-notes item) "")
-            (lt:format-rfc3339-timestring nil (list-item-created-at item))
-            (or (list-item-device-id item) "")
-            now)
+        (let* ((row (first rows))
+               (item (row-to-list-item (subseq row 0 11)))
+               (user-id (nth 11 row))
+               (now (now-iso))
+               (committed nil))
+          ;; Close-out + insert atomically: a crash between the two would
+          ;; otherwise lose the item entirely (cloodoo-0v9)
+          (sqlite:execute-non-query db "BEGIN IMMEDIATE")
+          (unwind-protect
+               (progn
+                 (sqlite:execute-non-query db "
+                   UPDATE list_items SET valid_to = ?
+                   WHERE id = ? AND valid_to IS NULL"
+                   now item-id)
+                 ;; Preserve NULL section/notes and the row's own device_id
+                 ;; and user_id instead of coercing to '' (cloodoo-0v9)
+                 (sqlite:execute-non-query db "
+                   INSERT INTO list_items (id, list_id, title, section, checked, notes,
+                                           created_at, device_id, valid_from, user_id)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+                   (list-item-id item)
+                   (list-item-list-id item)
+                   (list-item-title item)
+                   (list-item-section item)
+                   (if checked 1 0)
+                   (list-item-notes item)
+                   (lt:format-rfc3339-timestring nil (list-item-created-at item)
+                                                 :timezone lt:+utc-zone+)
+                   (list-item-device-id item)
+                   now
+                   user-id)
+                 (sqlite:execute-non-query db "COMMIT")
+                 (setf committed t))
+            (unless committed
+              (ignore-errors (sqlite:execute-non-query db "ROLLBACK"))))
           ;; Notify sync
           (setf (list-item-checked item) checked)
           (when (and *list-item-change-hook* (not *suppress-change-notifications*))

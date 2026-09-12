@@ -269,7 +269,10 @@ button:hover{background:#0d47a1}
 ;;── Self-Service Registration Routes ─────────────────────────────────────────
 
 (easy-routes:defroute register-page ("/register" :method :get) (invite)
-  "Self-service registration page gated by invite code."
+  "Self-service registration page gated by invite code.
+   GET only validates and shows a confirmation form: it must not mutate —
+   link prefetchers and mail scanners would consume invites and create
+   accounts just by following the URL (cloodoo-phh)."
   (setf (hunchentoot:content-type*) "text/html; charset=utf-8")
   (cond
     ;; No invite code provided
@@ -278,7 +281,25 @@ button:hover{background:#0d47a1}
     ;; Invalid or expired invite code
     ((null (db-validate-invite-code invite))
      (html-page "Cloodoo" "<p class='error'>Invalid or expired invite code.</p>"))
-    ;; Valid invite — perform registration
+    ;; Valid invite — confirm before consuming it
+    (t
+     (html-page "Cloodoo Registration"
+                (format nil "
+<p>Your invite code is valid. Create your account:</p>
+<form method='post' action='/register'>
+<input type='hidden' name='invite' value='~A'>
+<p><button type='submit'>Create account</button></p>
+</form>"
+                        (hunchentoot:escape-for-html invite))))))
+
+(easy-routes:defroute register-submit ("/register" :method :post) (invite)
+  "Perform the registration a confirmed GET /register form submits."
+  (setf (hunchentoot:content-type*) "text/html; charset=utf-8")
+  (cond
+    ((or (null invite) (zerop (length invite)))
+     (html-page "Cloodoo" "<p class='error'>An invite code is required to register.</p>"))
+    ((null (db-validate-invite-code invite))
+     (html-page "Cloodoo" "<p class='error'>Invalid or expired invite code.</p>"))
     (t
      (handler-case
          (let* ((user-id (generate-device-id))
