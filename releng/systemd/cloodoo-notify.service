@@ -1,0 +1,7 @@
+# Runs `cloodoo notify` once; started by cloodoo-notify.timer (cloodoo-6he).
+[Unit]
+Description=Cloodoo due/overdue TODO notifications
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/cloodoo notify

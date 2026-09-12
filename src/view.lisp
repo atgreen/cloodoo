@@ -167,8 +167,15 @@
         text
         (format nil "~A~A" text (make-string (- width visible-len) :initial-element #\Space)))))
 
+(defvar *marked-sidebar-zones* 0
+  "How many sidebar zones the previous frame marked (cloodoo-bi2).")
+
 (defun render-sidebar (model sidebar-width height)
-  "Render the tag sidebar. Returns a list of lines, each padded to sidebar-width."
+  "Render the tag sidebar. Returns a list of lines, each padded to
+   sidebar-width and wrapped in mouse zones for click hit-testing."
+  (loop for i from 0 below *marked-sidebar-zones*
+        do (tui:zone-clear (sidebar-zone-id i)))
+  (setf *marked-sidebar-zones* 0)
   (let* ((tags (model-all-tags-cache model))
          (selected (model-selected-tags model))
          (cursor (model-sidebar-cursor model))
@@ -185,9 +192,12 @@
            (checkbox (if all-selected "[x]" "[ ]"))
            (text (format nil "~A All" checkbox))
            (padded (pad-to-width text w)))
-      (push (if is-cursor
-                (tui:colored padded :bg (theme-bg :cyan) :fg (theme-fg :black))
-                padded)
+      (incf *marked-sidebar-zones*)
+      (push (tui:zone-mark
+             (sidebar-zone-id 0)
+             (if is-cursor
+                 (tui:colored padded :bg (theme-bg :cyan) :fg (theme-fg :black))
+                 padded))
             lines))
 
     ;; Tag rows
@@ -200,12 +210,15 @@
                     (display-tag (tui:truncate-text tag (max 0 (- w 5)) :ellipsis ".."))
                     (text (format nil "~A ~A" checkbox display-tag))
                     (padded (pad-to-width text w)))
-               (push (cond
-                       (is-cursor
-                        (tui:colored padded :bg (theme-bg :cyan) :fg (theme-fg :black)))
-                       (is-selected
-                        (tui:colored padded :fg (theme-fg :cyan)))
-                       (t padded))
+               (incf *marked-sidebar-zones*)
+               (push (tui:zone-mark
+                      (sidebar-zone-id idx)
+                      (cond
+                        (is-cursor
+                         (tui:colored padded :bg (theme-bg :cyan) :fg (theme-fg :black)))
+                        (is-selected
+                         (tui:colored padded :fg (theme-fg :cyan)))
+                        (t padded)))
                      lines)))
 
     ;; Pad to height with empty lines
@@ -215,8 +228,16 @@
     ;; Return lines in correct order (reversed since we pushed)
     (nreverse lines)))
 
+(defvar *marked-row-zones* 0
+  "How many todo-row zones the previous frame marked, so stale ones can be
+   cleared before re-marking (cloodoo-bi2).")
+
 (defun render-list-content (model list-width)
-  "Render just the list content (without sidebar) for the given width."
+  "Render just the list content (without sidebar) for the given width.
+   Each todo row is wrapped in a mouse zone for click hit-testing."
+  (loop for i from 0 below *marked-row-zones*
+        do (tui:zone-clear (row-zone-id i)))
+  (setf *marked-row-zones* 0)
   (let ((groups (get-visible-todos-grouped model)))
     (with-output-to-string (c)
       (if (null groups)
@@ -281,18 +302,21 @@
                                                      tags-str))
                                ;; Use dimmer colors for completed/cancelled items
                                (is-done (member (todo-status todo) '(:completed :cancelled))))
+                          (incf *marked-row-zones*)
                           (format c "~A"
-                                  (if is-done
-                                      ;; Dimmed selection for done items — use cyan bg
-                                      ;; but with dim foreground to distinguish from active
-                                      (tui:colored line-content
-                                                   :bg (theme-bg :cyan)
-                                                   :fg (theme-fg :bright-black))
-                                      ;; Normal bright selection
-                                      (tui:bold
+                                  (tui:zone-mark
+                                   (row-zone-id current-idx)
+                                   (if is-done
+                                       ;; Dimmed selection for done items — use cyan bg
+                                       ;; but with dim foreground to distinguish from active
                                        (tui:colored line-content
                                                     :bg (theme-bg :cyan)
-                                                    :fg (theme-fg :black))))))
+                                                    :fg (theme-fg :bright-black))
+                                       ;; Normal bright selection
+                                       (tui:bold
+                                        (tui:colored line-content
+                                                     :bg (theme-bg :cyan)
+                                                     :fg (theme-fg :black)))))))
                         ;; NOT SELECTED: Normal colored rendering
                         (let* ((status-indicator (if (todo-enriching-p todo)
                                                      (tui:colored
@@ -329,7 +353,9 @@
                                                          tags-colored)
                                                  base))
                                (clamped-content (fit-visible-to-width line-content list-width)))
-                          (format c "~A" clamped-content))))
+                          (incf *marked-row-zones*)
+                          (format c "~A" (tui:zone-mark (row-zone-id current-idx)
+                                                        clamped-content)))))
                   (incf current-idx)))))))))
 
 (defun render-filter-banner (model term-width)
@@ -408,7 +434,13 @@
                                     (make-list available-height :initial-element " ")))
                (sidebar-lines (if sidebar-visible-effective
                                   (render-sidebar model sidebar-width available-height)
-                                  (make-list available-height :initial-element nil))))
+                                  ;; No sidebar rendered: clear its zones so
+                                  ;; list clicks can't hit stale ones
+                                  (progn
+                                    (loop for i from 0 below *marked-sidebar-zones*
+                                          do (tui:zone-clear (sidebar-zone-id i)))
+                                    (setf *marked-sidebar-zones* 0)
+                                    (make-list available-height :initial-element nil)))))
           (loop for sidebar-line in sidebar-lines
                 for list-line in list-lines
                 for bar-line in scrollbar-lines
@@ -522,19 +554,26 @@
                                      (tui:colored (getf loc :phone) :fg (theme-fg :green))))
                            (when (getf loc :map-url)
                              (format s "~%  ~A"
-                                     (tui:wrap-text (tui:colored (getf loc :map-url) :fg (theme-fg :blue))
-                                                    content-width :indent 2 :continuation-indent 4)))
+                                     (tui:zone-mark
+                                      (url-zone-id (getf loc :map-url))
+                                      (tui:wrap-text (tui:colored (getf loc :map-url) :fg (theme-fg :blue))
+                                                     content-width :indent 2 :continuation-indent 4))))
                            (when (getf loc :website)
                              (format s "~%  ~A"
-                                     (tui:wrap-text (tui:colored (getf loc :website) :fg (theme-fg :blue))
-                                                    content-width :indent 2 :continuation-indent 4)))))
+                                     (tui:zone-mark
+                                      (url-zone-id (getf loc :website))
+                                      (tui:wrap-text (tui:colored (getf loc :website) :fg (theme-fg :blue))
+                                                     content-width :indent 2 :continuation-indent 4))))))
 
-                       ;; URL (wrapped)
+                       ;; URL (wrapped); zone-marked so clicks open THIS url
+                       ;; rather than a y>=8 guess (cloodoo-owf)
                        (when (todo-url todo)
                          (format s "~%~%~A~%  ~A"
                                  (tui:bold (tui:colored "Link:" :fg (theme-fg :cyan)))
-                                 (tui:wrap-text (tui:colored (todo-url todo) :fg (theme-fg :blue))
-                                                content-width :indent 2 :continuation-indent 4)))
+                                 (tui:zone-mark
+                                  (url-zone-id (todo-url todo))
+                                  (tui:wrap-text (tui:colored (todo-url todo) :fg (theme-fg :blue))
+                                                 content-width :indent 2 :continuation-indent 4))))
 
                        ;; Attachments
                        (when (todo-attachment-hashes todo)
@@ -1382,6 +1421,9 @@
                      :alt-screen t
                      :mouse-mode :cell-motion)))
   (tui:make-view
+   ;; zone-scan strips the invisible zone markers and records each zone's
+   ;; on-screen bounds for mouse hit-testing (cloodoo-bi2)
+   (tui:zone-scan
    (case (model-view-state model)
      (:list (render-list-view model))
      (:detail (render-detail-view model))
@@ -1402,6 +1444,6 @@
      ((:list-create :list-edit) (render-list-form-view model))
      (:list-item-add (render-list-item-add-view model))
      (:list-delete-confirm (render-list-delete-confirm-view model))
-     (otherwise (render-list-view model)))
+     (otherwise (render-list-view model))))
    :alt-screen t
    :mouse-mode :cell-motion))

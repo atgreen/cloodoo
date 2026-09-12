@@ -30,6 +30,8 @@
    Auto-connects to a paired sync server if a sync config exists."
   ;; Initialize LLM enrichment
   (init-enrichment)
+  ;; Mouse hit-testing via render zones (cloodoo-bi2)
+  (tui:init-global-zone-manager)
   ;; Run with error handling that logs backtraces
   (handler-bind ((error (lambda (e)
                           (log-error-with-backtrace e)

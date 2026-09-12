@@ -34,6 +34,29 @@
       (error (e)
         (llog:warn "Failed to force full redraw" :error e)))))
 
+;;── Mouse Zones ────────────────────────────────────────────────────────────────
+;;; Clickable regions are marked during render with invisible tuition zone
+;;; markers and hit-tested here, replacing hand-derived layout math that had
+;;; to mirror the renderer and drifted repeatedly (cloodoo-bi2, cloodoo-owf).
+
+(defun row-zone-id (index)
+  "Zone id for the INDEXth visible todo row."
+  (format nil "todo-row-~D" index))
+
+(defun sidebar-zone-id (item)
+  "Zone id for sidebar row ITEM (0 = All, 1+ = tags)."
+  (format nil "sidebar-item-~D" item))
+
+(defun url-zone-id (url)
+  "Zone id for a rendered URL in the detail view."
+  (format nil "detail-url:~A" url))
+
+(defun zone-hit-p (id msg)
+  "True when MSG's mouse position falls inside zone ID, as recorded by the
+   zone-scan of the most recently rendered frame."
+  (let ((zone (tui:zone-get id)))
+    (and zone (tui:zone-in-bounds-p zone msg))))
+
 ;;── Undo Entry ─────────────────────────────────────────────────────────────────
 
 (defstruct undo-entry
@@ -2496,87 +2519,64 @@
   (let ((view-state (model-view-state model))
         (button (tui:mouse-event-button msg)))
     (cond
-      ;; List view click handling
+      ;; List view click handling: hit-test the zones the renderer marked
+      ;; (cloodoo-bi2) — no more hand-mirrored layout math
       ((eql view-state :list)
-       (let* ((screen-x (1- (tui:mouse-event-x msg)))  ; Convert to 0-based
-              ;; Account for filter banner height (same as render-list-view)
-              (filter-banner-height (if (has-active-filters-p model) 1 0))
+       (let* ((filter-banner-height (if (has-active-filters-p model) 1 0))
+              (screen-x (1- (tui:mouse-event-x msg)))  ; Convert to 0-based
               (screen-line (- (tui:mouse-event-y msg) 2))
               (list-line (- screen-line filter-banner-height))
               (available-height (list-viewport-height model))
-              (term-width (model-term-width model))
-              (scrollbar-col (1- term-width))  ; Rightmost column
-              ;; Calculate sidebar width (same logic as render-list-view)
-              (sidebar-visible (model-sidebar-visible model))
-              (min-list-width 20)
-              (raw-sidebar-width (if sidebar-visible 14 0))
-              (sidebar-width (if sidebar-visible
-                                 (max 0 (min raw-sidebar-width (- term-width min-list-width 2)))
-                                 0))
-              (sidebar-visible-effective (> sidebar-width 0)))
+              (scrollbar-col (1- (model-term-width model)))
+              (sidebar-item
+                (when (and (eql button :left) (model-sidebar-visible model))
+                  (loop for i from 0 to (length (model-all-tags-cache model))
+                        when (zone-hit-p (sidebar-zone-id i) msg)
+                          return i)))
+              (row (unless sidebar-item
+                     (loop for i from 0 below (length (get-visible-todos model))
+                           when (zone-hit-p (row-zone-id i) msg)
+                             return i))))
          (cond
-           ;; Click in sidebar area
-           ((and sidebar-visible-effective (< screen-x sidebar-width)
-                 (eql button :left))
-            ;; Sidebar rows: 0=header, 1=separator, 2="All", 3+=tags.
-            ;; list-line accounts for the filter banner; raw screen-line
-            ;; would be off by one when it's visible (cloodoo-wkb)
-            (let* ((sidebar-item (- list-line 2))
-                   (tags (model-all-tags-cache model))
-                   (max-cursor (length tags)))
-              (when (and (>= sidebar-item 0) (<= sidebar-item max-cursor))
-                ;; Focus sidebar, set cursor, and toggle the tag
-                (setf (model-sidebar-focused model) t
-                      (model-sidebar-cursor model) sidebar-item)
-                (let ((selected (model-selected-tags model)))
-                  (if (zerop sidebar-item)
-                      ;; "All" - clear all filters
-                      (clrhash selected)
-                      ;; Toggle specific tag
-                      (let ((tag (nth (1- sidebar-item) tags)))
-                        (when tag
-                          (if (gethash tag selected)
-                              (remhash tag selected)
-                              (setf (gethash tag selected) t))))))
-                (invalidate-visible-todos-cache model)
-                (setf (model-cursor model) 0))))
-           ;; Left-click on scrollbar: start dragging
+           ;; Click on a sidebar row: focus, set cursor, toggle the tag
+           (sidebar-item
+            (setf (model-sidebar-focused model) t
+                  (model-sidebar-cursor model) sidebar-item)
+            (let ((selected (model-selected-tags model)))
+              (if (zerop sidebar-item)
+                  ;; "All" - clear all filters
+                  (clrhash selected)
+                  ;; Toggle specific tag
+                  (let ((tag (nth (1- sidebar-item) (model-all-tags-cache model))))
+                    (when tag
+                      (if (gethash tag selected)
+                          (remhash tag selected)
+                          (setf (gethash tag selected) t))))))
+            (invalidate-visible-todos-cache model)
+            (setf (model-cursor model) 0))
+           ;; Left-click on scrollbar column: start dragging (the scrollbar
+           ;; is a plain column strip, so simple geometry is exact here)
            ((and (>= list-line 0) (< list-line available-height)
                  (eql button :left) (= screen-x scrollbar-col))
             (setf (model-scrollbar-dragging model) t)
             (scroll-to-y-position model list-line available-height))
-           ;; Left-click on list: select item
-           ((and (>= list-line 0) (< list-line available-height)
-                 (eql button :left))
-            (let* ((line-idx (+ (model-scroll-offset model) list-line))
-                   (groups (get-visible-todos-grouped model))
-                   (cursor (cursor-index-for-line groups line-idx)))
-              (when cursor
-                (setf (model-cursor model) cursor
-                      (model-sidebar-focused model) nil))))
-           ;; Right-click on list: select item and show details
-           ((and (>= list-line 0) (< list-line available-height)
-                 (eql button :right))
-            (let* ((line-idx (+ (model-scroll-offset model) list-line))
-                   (groups (get-visible-todos-grouped model))
-                   (cursor (cursor-index-for-line groups line-idx)))
-              (when cursor
-                (setf (model-cursor model) cursor
-                      (model-sidebar-focused model) nil
-                      (model-view-state model) :detail)))))))
-      ;; Detail view: click on URL to open it
-      ;; URLs appear in the lower section; we check Y position and URL presence
+           ;; Click on a todo row: select (left) or open details (right)
+           ((and row (eql button :left))
+            (setf (model-cursor model) row
+                  (model-sidebar-focused model) nil))
+           ((and row (eql button :right))
+            (setf (model-cursor model) row
+                  (model-sidebar-focused model) nil
+                  (model-view-state model) :detail)))))
+      ;; Detail view: click on a URL opens exactly that URL (cloodoo-owf)
       ((eql view-state :detail)
        (when (eql button :left)
-         (let* ((screen-y (- (tui:mouse-event-y msg) 2))
-                (todos (get-visible-todos model))
-                (todo (cursor-todo model todos)))
+         (let ((todo (cursor-todo model)))
            (when todo
-             (let ((urls (get-todo-urls todo)))
-               ;; Only respond to clicks in the lower portion where URLs appear
-               ;; (roughly after the basic info section, line 8+)
-               (when (and urls (>= screen-y 8))
-                 (open-url (first urls))))))))))
+             (let ((url (find-if (lambda (u) (zone-hit-p (url-zone-id u) msg))
+                                 (get-todo-urls todo))))
+               (when url
+                 (open-url url)))))))))
   (values model nil))
 
 (defmethod tui:update-message ((model app-model) (msg tui:mouse-motion-msg))

@@ -54,6 +54,11 @@ Weekly review from the temporal history: TODOs completed in the last
 seven days, scheduled items that slipped, and the current daily
 completion streak.
 .TP
+.B notify
+Send desktop notifications (via notify\-send) for due and overdue
+TODOs.  Packaged with a systemd user timer: enable it with
+.I systemctl \-\-user enable \-\-now cloodoo\-notify.timer
+.TP
 .B export
 Export TODOs in org-agenda format.
 .B \-\-pdf

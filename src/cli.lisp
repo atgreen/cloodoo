@@ -1751,6 +1751,49 @@ URL format: http[s]://HOST[:PORT]/pair/TOKEN"
 
 ;;── Export Command ─────────────────────────────────────────────────────────────
 
+(defun make-notify-command ()
+  "Create the 'notify' subcommand: desktop notifications for due and
+   overdue TODOs, meant to run from the packaged systemd user timer
+   (cloodoo-6he)."
+  (clingon:make-command
+   :name "notify"
+   :description "Send desktop notifications for due and overdue TODOs"
+   :handler
+   (lambda (cmd)
+     (declare (ignore cmd))
+     (let* ((todos (load-todos))
+            (today (local-today))
+            (tomorrow (lt:timestamp+ today 1 :day))
+            (notify-send (ignore-errors
+                           (string-trim '(#\Newline #\Space)
+                                        (uiop:run-program '("which" "notify-send")
+                                                          :output :string))))
+            (actionable
+              (remove-if-not
+               (lambda (todo)
+                 (and (member (todo-status todo) '(:pending :in-progress))
+                      (or (and (todo-due-date todo)
+                               (lt:timestamp< (todo-due-date todo) tomorrow))
+                          (and (todo-scheduled-date todo)
+                               (lt:timestamp< (todo-scheduled-date todo) tomorrow)))))
+               todos)))
+       (dolist (todo actionable)
+         (let* ((due (todo-due-date todo))
+                (overdue (and due (lt:timestamp< due today)))
+                (summary (format nil "~A~A"
+                                 (if overdue "OVERDUE: " "")
+                                 (todo-title todo))))
+           (if (and notify-send (plusp (length notify-send)))
+               (ignore-errors
+                 (uiop:run-program
+                  (list "notify-send"
+                        "--app-name=cloodoo"
+                        (format nil "--urgency=~A" (if overdue "critical" "normal"))
+                        summary)))
+               (format t "~A~%" summary))))
+       (when (and actionable notify-send (plusp (length notify-send)))
+         (format t "Notified ~D TODO~:P~%" (length actionable)))))))
+
 (defun make-review-command ()
   "Create the 'review' subcommand: weekly review from temporal history
    (cloodoo-n9n)."
@@ -2702,6 +2745,7 @@ URL format: http[s]://HOST[:PORT]/pair/TOKEN"
                        (make-done-command)
                        (make-stats-command)
                        (make-review-command)
+                       (make-notify-command)
                        (make-export-command)
                        (make-dump-command)
                        (make-compact-command)

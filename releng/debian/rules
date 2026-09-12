@@ -12,3 +12,7 @@ override_dh_auto_build:
 override_dh_auto_install:
 	mkdir -p debian/cloodoo/usr/bin
 	install -m 755 cloodoo debian/cloodoo/usr/bin/cloodoo
+	# Systemd user units for due/overdue notifications (cloodoo-6he)
+	mkdir -p debian/cloodoo/usr/lib/systemd/user
+	install -m 644 releng/systemd/cloodoo-notify.service debian/cloodoo/usr/lib/systemd/user/
+	install -m 644 releng/systemd/cloodoo-notify.timer debian/cloodoo/usr/lib/systemd/user/

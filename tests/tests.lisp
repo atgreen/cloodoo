@@ -1037,6 +1037,32 @@
     (is-false (cloodoo::db-attachment-owned-p "hash-1" :user-id "bob"))
     (is-false (cloodoo::db-attachment-owned-p "hash-2" :user-id "alice"))))
 
+;;── Mouse Zone Hit-Testing ─────────────────────────────────────────────────────
+
+(test mouse-zone-click-selects-row-test
+  "Clicking a rendered todo row selects it via zone hit-testing, end to
+   end: render marks zones, zone-scan records bounds, the click handler
+   hit-tests them (cloodoo-bi2)."
+  (with-test-db
+    (tuition:init-global-zone-manager)
+    (let ((model (make-instance 'cloodoo::app-model)))
+      (dolist (title '("First" "Second" "Third"))
+        (let ((todo (cloodoo:make-todo title)))
+          (cloodoo::save-todo todo)
+          (push todo (cloodoo::model-todos model))))
+      (cloodoo::invalidate-visible-todos-cache model)
+      ;; Render the frame; zone-scan inside tui:view records row bounds
+      (tuition:view model)
+      (let ((zone (tuition:zone-get (cloodoo::row-zone-id 1))))
+        (is (not (null zone)))
+        (when zone
+          (let ((click (make-instance 'tuition:mouse-click-msg
+                                      :button :left
+                                      :x (1+ (tuition::zone-info-start-x zone))
+                                      :y (+ (tuition::zone-info-start-y zone) 2))))
+            (tuition:update-message model click)
+            (is (= 1 (cloodoo::model-cursor model)))))))))
+
 ;;── Run Tests ──────────────────────────────────────────────────────────────────
 
 (defun run-tests ()
