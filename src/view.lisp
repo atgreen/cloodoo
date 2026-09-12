@@ -569,18 +569,19 @@
                                                      content-width :indent 2 :continuation-indent 4))))))
 
                        ;; URL (wrapped); zone-marked so clicks open THIS url
-                       ;; (cloodoo-owf) and OSC 8 hyperlinked so supporting
-                       ;; terminals make it natively clickable (cloodoo-jmo)
+                       ;; (cloodoo-owf). OSC 8 hyperlinking (cloodoo-jmo) is
+                       ;; temporarily disabled: the pinned tuition's width
+                       ;; scanners count OSC payloads as visible text, which
+                       ;; breaks modal sizing/compositing (cloodoo-usj).
+                       ;; Restore the :hyperlink style once the tuition pin
+                       ;; includes upstream afaa51f (cloodoo bead: restore-osc8).
                        (when (todo-url todo)
                          (format s "~%~%~A~%  ~A"
                                  (tui:bold (tui:colored "Link:" :fg (theme-fg :cyan)))
                                  (tui:zone-mark
                                   (url-zone-id (todo-url todo))
                                   (tui:wrap-text
-                                   (tui:render-styled
-                                    (tui:make-style :foreground (theme-fg :blue)
-                                                    :hyperlink (todo-url todo))
-                                    (todo-url todo))
+                                   (tui:colored (todo-url todo) :fg (theme-fg :blue))
                                    content-width :indent 2 :continuation-indent 4))))
 
                        ;; Attachments
