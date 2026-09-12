@@ -366,6 +366,12 @@
 
 ;;── Tag Filtering ─────────────────────────────────────────────────────────────
 
+(defun single-selected-tag (selected-tags)
+  "Return the sole selected filter tag, or NIL when zero or several
+   tags are selected."
+  (when (= 1 (hash-table-count selected-tags))
+    (loop for tag being the hash-keys of selected-tags return tag)))
+
 (defun filter-todos-by-tags (todos selected-tags)
   "Filter todos to those matching ANY selected tag.
    Empty selection = show all."
@@ -1215,8 +1221,10 @@
        (setf (model-edit-due-date model) nil)
        (setf (model-edit-repeat-interval model) nil)
        (setf (model-edit-repeat-unit model) nil)
-       ;; Clear tags fields
-       (setf (model-edit-tags model) nil)
+       ;; Reset tags fields; when filtering on exactly one tag, default
+       ;; the new task to it
+       (let ((filter-tag (single-selected-tag (model-selected-tags model))))
+         (setf (model-edit-tags model) (when filter-tag (list filter-tag))))
        (tui.textinput:textinput-set-value (model-tags-input model) "")
        (setf (model-tag-dropdown-visible model) nil)
        (setf (model-tag-dropdown-cursor model) 0)

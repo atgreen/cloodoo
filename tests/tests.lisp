@@ -1107,6 +1107,17 @@
         (is (member "A" targets :key (function cloodoo:todo-title) :test (function string=)))
         (is (member "C" targets :key (function cloodoo:todo-title) :test (function string=)))))))
 
+(test single-selected-tag-test
+  "Exactly one selected filter tag is returned; zero or several yield NIL.
+   Drives the add-form defaulting: filtering on one tag pre-fills it
+   on new tasks (cloodoo-agn)."
+  (let ((selected (make-hash-table :test #'equal)))
+    (is (null (cloodoo::single-selected-tag selected)))
+    (setf (gethash "work" selected) t)
+    (is (string= "work" (cloodoo::single-selected-tag selected)))
+    (setf (gethash "home" selected) t)
+    (is (null (cloodoo::single-selected-tag selected)))))
+
 ;;── Run Tests ──────────────────────────────────────────────────────────────────
 
 (defun run-tests ()
