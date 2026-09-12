@@ -318,13 +318,6 @@
                           (format c "~A" clamped-content))))
                   (incf current-idx)))))))))
 
-(defun has-active-filters-p (model)
-  "Check if any filters are currently active."
-  (or (plusp (length (model-search-query model)))
-      (model-filter-status model)
-      (model-filter-priority model)
-      (plusp (hash-table-count (model-selected-tags model)))))
-
 (defun render-filter-banner (model term-width)
   "Render a banner showing active filters."
   (let ((search (model-search-query model))
@@ -356,8 +349,7 @@
 
 (defun render-list-view (model)
   "Render the main agenda view."
-  (let* ((term-height (model-term-height model))
-         (term-width (model-term-width model))
+  (let* ((term-width (model-term-width model))
          (sidebar-visible (model-sidebar-visible model))
          (min-list-width 20)
          (raw-sidebar-width (if sidebar-visible 14 0))
@@ -368,8 +360,7 @@
          (divider-width (if sidebar-visible-effective 1 0))
          (list-width (- term-width sidebar-width divider-width))
          (has-filters (has-active-filters-p model))
-         (filter-banner-height (if has-filters 1 0))
-         (available-height (max 5 (- term-height 3 filter-banner-height))))
+         (available-height (list-viewport-height model)))
 
     (adjust-scroll model available-height)
 

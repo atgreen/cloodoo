@@ -387,6 +387,22 @@
   (when (model-edit-tags model)
     (setf (model-edit-tags model) (butlast (model-edit-tags model)))))
 
+(defun pending-tag-completion-p (model)
+  "True when the tags field has a dropdown selection or raw input to add."
+  (or (and (model-tag-dropdown-visible model)
+           (plusp (length (model-tag-dropdown-filtered model))))
+      (plusp (length (tui.textinput:textinput-value (model-tags-input model))))))
+
+(defun complete-pending-tag (model)
+  "Add the highlighted dropdown tag, or failing that the raw input, to the
+   edit tags.  Callers gate on PENDING-TAG-COMPLETION-P."
+  (let ((filtered (model-tag-dropdown-filtered model))
+        (query (tui.textinput:textinput-value (model-tags-input model))))
+    (cond ((and (model-tag-dropdown-visible model) (plusp (length filtered)))
+           (add-tag-to-edit-tags model (nth (model-tag-dropdown-cursor model) filtered)))
+          ((plusp (length query))
+           (add-tag-to-edit-tags model query)))))
+
 ;;── Filtering and Sorting ─────────────────────────────────────────────────────
 
 (defun filter-todos (todos &key status priority search-query)
@@ -493,6 +509,50 @@
   (let ((groups (get-visible-todos-grouped model)))
     (loop for (category . todos) in groups
           append todos)))
+
+(defun cursor-todo (model &optional (todos (get-visible-todos model)))
+  "Return the todo under the cursor in TODOS (default: the visible list), or NIL."
+  (when (< (model-cursor model) (length todos))
+    (nth (model-cursor model) todos)))
+
+(defun clamp-cursor (model)
+  "Keep the cursor on the last visible todo after items disappear."
+  (setf (model-cursor model)
+        (min (model-cursor model)
+             (max 0 (1- (length (get-visible-todos model)))))))
+
+(defun find-todo (model id)
+  "Return the todo with ID from the model, or NIL."
+  (find id (model-todos model) :key #'todo-id :test #'string=))
+
+(defun has-active-filters-p (model)
+  "Check if any filters are currently active."
+  (or (plusp (length (model-search-query model)))
+      (model-filter-status model)
+      (model-filter-priority model)
+      (plusp (hash-table-count (model-selected-tags model)))))
+
+(defun list-viewport-height (model)
+  "Rows available to the todo list below the header and above the help bar."
+  (max 5 (- (model-term-height model) 3 (if (has-active-filters-p model) 1 0))))
+
+(defun seed-date-picker (picker timestamp)
+  "Focus PICKER on TIMESTAMP with it selected, or on today with none selected."
+  (if timestamp
+      (let ((utime (lt:timestamp-to-universal timestamp)))
+        (tui.datepicker:datepicker-set-time picker utime)
+        (setf (tui.datepicker:datepicker-selected picker) utime))
+      (progn
+        (tui.datepicker:datepicker-set-time picker (get-universal-time))
+        (tui.datepicker:datepicker-unselect picker)))
+  (tui.datepicker:datepicker-focus picker))
+
+(defmacro feed-textinput (place msg)
+  "Forward MSG to the textinput stored in PLACE, storing the updated input back."
+  (let ((new (gensym "INPUT")) (cmd (gensym "CMD")))
+    `(multiple-value-bind (,new ,cmd) (tui.textinput:textinput-update ,place ,msg)
+       (declare (ignore ,cmd))
+       (setf ,place ,new))))
 
 (defun reorder-todos (todos sort-by descending)
   "Reorder todos by date category, then sort within each group."
@@ -816,6 +876,14 @@
   (record-undo model todo)
   (save-todo todo))
 
+(defun commit-todo-edit (model todo &key retag)
+  "Persist a user edit to TODO so it can be undone, and re-group the display.
+   RETAG also recomputes the tag sidebar, for edits that may change tags."
+  (invalidate-visible-todos-cache model)
+  (save-todo-recording-undo model todo)
+  (when retag
+    (refresh-tags-cache model)))
+
 (defun apply-restored-version (model todo)
   "Install a historical TODO version as the new current version, updating
    the database (which notifies sync as a normal change) and the model."
@@ -827,9 +895,7 @@
         (push todo (model-todos model))))
   (invalidate-visible-todos-cache model)
   (refresh-tags-cache model)
-  (setf (model-cursor model)
-        (min (model-cursor model)
-             (max 0 (1- (length (get-visible-todos model)))))))
+  (clamp-cursor model))
 
 (defun undo-last-change (model)
   "Undo the most recent recorded change.  Returns the restored todo or NIL."
@@ -961,28 +1027,26 @@
 
       ;; Increase priority (Shift+Up)
       ((eql key :shift-up)
-       (when (< (model-cursor model) (length todos))
-         (let ((todo (nth (model-cursor model) todos)))
+       (let ((todo (cursor-todo model todos)))
+         (when todo
            (setf (todo-priority todo)
                  (case (todo-priority todo)
                    (:low :medium)
                    (:medium :high)
                    (:high :high)))  ; Already at max
-           (invalidate-visible-todos-cache model)
-           (save-todo-recording-undo model todo)))
+           (commit-todo-edit model todo)))
        (values model nil))
 
       ;; Decrease priority (Shift+Down)
       ((eql key :shift-down)
-       (when (< (model-cursor model) (length todos))
-         (let ((todo (nth (model-cursor model) todos)))
+       (let ((todo (cursor-todo model todos)))
+         (when todo
            (setf (todo-priority todo)
                  (case (todo-priority todo)
                    (:high :medium)
                    (:medium :low)
                    (:low :low)))  ; Already at min
-           (invalidate-visible-todos-cache model)
-           (save-todo-recording-undo model todo)))
+           (commit-todo-edit model todo)))
        (values model nil))
 
       ;; Go to top
@@ -998,8 +1062,8 @@
       ;; Toggle status (Space): TODO -> DONE -> WAITING -> CANCELLED -> TODO
       ;; For repeating tasks, completing reschedules to next occurrence
       ((and (characterp key) (char= key #\Space))
-       (when (< (model-cursor model) (length todos))
-         (let ((todo (nth (model-cursor model) todos)))
+       (let ((todo (cursor-todo model todos)))
+         (when todo
            (case (todo-status todo)
              ((:pending :in-progress)
               ;; Check if this is a repeating task
@@ -1050,7 +1114,7 @@
 
       ;; View details (Enter)
       ((eql key :enter)
-       (when (< (model-cursor model) (length todos))
+       (when (cursor-todo model todos)
          (setf (model-view-state model) :detail))
        (values model nil))
 
@@ -1081,8 +1145,8 @@
 
       ;; Edit selected TODO
       ((and (characterp key) (char= key #\e))
-       (when (< (model-cursor model) (length todos))
-         (let ((todo (nth (model-cursor model) todos)))
+       (let ((todo (cursor-todo model todos)))
+         (when todo
            ;; Don't allow editing while enriching
            (when (todo-enriching-p todo)
              (setf (model-status-message model) "Cannot edit while enriching")
@@ -1110,7 +1174,7 @@
 
       ;; Delete selected TODO (DEL key)
       ((eql key :delete)
-       (when (< (model-cursor model) (length todos))
+       (when (cursor-todo model todos)
          (setf (model-view-state model) :delete-confirm))
        (values model nil))
 
@@ -1158,44 +1222,26 @@
 
       ;; Set scheduled date (Shift+S) - opens modal datepicker
       ((and (characterp key) (char= key #\S))
-       (when (< (model-cursor model) (length todos))
-         (let* ((todo (nth (model-cursor model) todos))
-                (scheduled (todo-scheduled-date todo))
-                (picker (model-date-picker model)))
-           ;; Initialize datepicker with current scheduled date or today
-           (cond (scheduled (let ((utime (lt:timestamp-to-universal scheduled)))
-                 (tui.datepicker:datepicker-set-time picker utime)
-                 (setf (tui.datepicker:datepicker-selected picker) utime)))
-      (t
-                 (tui.datepicker:datepicker-set-time picker (get-universal-time))
-                 (tui.datepicker:datepicker-unselect picker)))
-           (tui.datepicker:datepicker-focus picker)
+       (let ((todo (cursor-todo model todos)))
+         (when todo
+           (seed-date-picker (model-date-picker model) (todo-scheduled-date todo))
            (setf (model-editing-date-type model) :scheduled)
            (setf (model-view-state model) :list-set-date)))
        (values model nil))
 
       ;; Set deadline date (Shift+L) - opens modal datepicker
       ((and (characterp key) (char= key #\L))
-       (when (< (model-cursor model) (length todos))
-         (let* ((todo (nth (model-cursor model) todos))
-                (deadline (todo-due-date todo))
-                (picker (model-date-picker model)))
-           ;; Initialize datepicker with current deadline or today
-           (cond (deadline (let ((utime (lt:timestamp-to-universal deadline)))
-                 (tui.datepicker:datepicker-set-time picker utime)
-                 (setf (tui.datepicker:datepicker-selected picker) utime)))
-      (t
-                 (tui.datepicker:datepicker-set-time picker (get-universal-time))
-                 (tui.datepicker:datepicker-unselect picker)))
-           (tui.datepicker:datepicker-focus picker)
+       (let ((todo (cursor-todo model todos)))
+         (when todo
+           (seed-date-picker (model-date-picker model) (todo-due-date todo))
            (setf (model-editing-date-type model) :deadline)
            (setf (model-view-state model) :list-set-date)))
        (values model nil))
 
       ;; Refresh (r) - reload from database to pick up external changes, then reorder
       ((and (characterp key) (char= key #\r))
-       (let* ((selected-id (when (< (model-cursor model) (length todos))
-                             (todo-id (nth (model-cursor model) todos)))))
+       (let* ((selected-todo (cursor-todo model todos))
+              (selected-id (and selected-todo (todo-id selected-todo))))
          ;; Reload from database to pick up externally added todos
          (setf (model-todos model) (load-todos))
          ;; Reorder after reload
@@ -1239,8 +1285,8 @@
 
       ;; Inline tag editor (t)
       ((and (characterp key) (char= key #\t))
-       (when (< (model-cursor model) (length todos))
-         (let ((todo (nth (model-cursor model) todos)))
+       (let ((todo (cursor-todo model todos)))
+         (when todo
            (setf (model-edit-todo-id model) (todo-id todo))
            (setf (model-edit-tags model) (copy-list (todo-tags todo)))
            (tui.textinput:textinput-set-value (model-tags-input model) "")
@@ -1289,8 +1335,8 @@
 
       ;; Re-enrich selected TODO (&)
       ((and (characterp key) (char= key #\&))
-       (when (< (model-cursor model) (length todos))
-         (let ((todo (nth (model-cursor model) todos)))
+       (let ((todo (cursor-todo model todos)))
+         (when todo
            (unless (todo-enriching-p todo)
              (llog:info "Re-triggering enrichment"
                         :todo-id (todo-id todo)
@@ -1369,24 +1415,15 @@
           (update-tag-dropdown model))
          (:tags
           ;; Tab in tags field: complete tag if input present, else move to next field
-          (let* ((query (tui.textinput:textinput-value (model-tags-input model)))
-                 (filtered (model-tag-dropdown-filtered model))
-                 (cursor (model-tag-dropdown-cursor model))
-                 (has-completion (or (and (model-tag-dropdown-visible model)
-                                          (> (length filtered) 0))
-                                     (> (length query) 0))))
-            (cond (has-completion
-                  (cond
-                    ((and (model-tag-dropdown-visible model) (> (length filtered) 0))
-                     (add-tag-to-edit-tags model (nth cursor filtered)))
-                    ((> (length query) 0)
-                     (add-tag-to-edit-tags model query)))
-                  (update-tag-dropdown model))
-      (t
-                  (setf (model-active-field model) :title)
-                  (tui.textinput:textinput-blur (model-tags-input model))
-                  (setf (model-tag-dropdown-visible model) nil)
-                  (tui.textinput:textinput-focus (model-title-input model)))))))
+          (if (pending-tag-completion-p model)
+              (progn
+                (complete-pending-tag model)
+                (update-tag-dropdown model))
+              (progn
+                (setf (model-active-field model) :title)
+                (tui.textinput:textinput-blur (model-tags-input model))
+                (setf (model-tag-dropdown-visible model) nil)
+                (tui.textinput:textinput-focus (model-title-input model))))))
        (values model nil))
 
       ;; Shift+Tab to previous field
@@ -1431,33 +1468,17 @@
       ;; Space to open datepicker for scheduled date
       ((and (eql (model-active-field model) :scheduled)
             (characterp key) (char= key #\Space))
-       (let ((picker (model-date-picker model))
-             (current (model-edit-scheduled-date model)))
-         (cond (current (let ((utime (lt:timestamp-to-universal current)))
-               (tui.datepicker:datepicker-set-time picker utime)
-               (setf (tui.datepicker:datepicker-selected picker) utime)))
-      (t
-               (tui.datepicker:datepicker-set-time picker (get-universal-time))
-               (tui.datepicker:datepicker-unselect picker)))
-         (tui.datepicker:datepicker-focus picker)
-         (setf (model-editing-date-type model) :scheduled)
-         (setf (model-view-state model) :add-scheduled-date))
+       (seed-date-picker (model-date-picker model) (model-edit-scheduled-date model))
+       (setf (model-editing-date-type model) :scheduled)
+       (setf (model-view-state model) :add-scheduled-date)
        (values model nil))
 
       ;; Space to open datepicker for due date
       ((and (eql (model-active-field model) :due)
             (characterp key) (char= key #\Space))
-       (let ((picker (model-date-picker model))
-             (current (model-edit-due-date model)))
-         (cond (current (let ((utime (lt:timestamp-to-universal current)))
-               (tui.datepicker:datepicker-set-time picker utime)
-               (setf (tui.datepicker:datepicker-selected picker) utime)))
-      (t
-               (tui.datepicker:datepicker-set-time picker (get-universal-time))
-               (tui.datepicker:datepicker-unselect picker)))
-         (tui.datepicker:datepicker-focus picker)
-         (setf (model-editing-date-type model) :due)
-         (setf (model-view-state model) :add-due-date))
+       (seed-date-picker (model-date-picker model) (model-edit-due-date model))
+       (setf (model-editing-date-type model) :due)
+       (setf (model-view-state model) :add-due-date)
        (values model nil))
 
       ;; Backspace to clear dates
@@ -1511,21 +1532,9 @@
       ;; If nothing to complete, fall through to form submit
       ((and (eql (model-active-field model) :tags)
             (eql key :enter)
-            (let ((query (tui.textinput:textinput-value (model-tags-input model)))
-                  (filtered (model-tag-dropdown-filtered model)))
-              (or (and (model-tag-dropdown-visible model) (> (length filtered) 0))
-                  (> (length query) 0))))
-       (let* ((query (tui.textinput:textinput-value (model-tags-input model)))
-              (filtered (model-tag-dropdown-filtered model))
-              (cursor (model-tag-dropdown-cursor model)))
-         (cond
-           ;; Dropdown visible with selection - add selected tag
-           ((and (model-tag-dropdown-visible model) (> (length filtered) 0))
-            (add-tag-to-edit-tags model (nth cursor filtered)))
-           ;; No dropdown but has input - create new tag
-           ((> (length query) 0)
-            (add-tag-to-edit-tags model query)))
-         (update-tag-dropdown model))
+            (pending-tag-completion-p model))
+       (complete-pending-tag model)
+       (update-tag-dropdown model)
        (values model nil))
 
       ;; Tags field: Backspace with empty input removes last tag
@@ -1536,20 +1545,15 @@
              ;; Empty input - remove last tag
              (remove-last-tag-from-edit-tags model)
              ;; Non-empty - pass to text input
-             (multiple-value-bind (new-input cmd)
-                 (tui.textinput:textinput-update (model-tags-input model) msg)
-               (declare (ignore cmd))
-               (setf (model-tags-input model) new-input)
+             (progn
+               (feed-textinput (model-tags-input model) msg)
                (update-tag-dropdown model))))
        (values model nil))
 
       ;; Tags field: Other keys pass to text input
       ((eql (model-active-field model) :tags)
-       (multiple-value-bind (new-input cmd)
-           (tui.textinput:textinput-update (model-tags-input model) msg)
-         (declare (ignore cmd))
-         (setf (model-tags-input model) new-input)
-         (update-tag-dropdown model))
+       (feed-textinput (model-tags-input model) msg)
+       (update-tag-dropdown model)
        (values model nil))
 
       ;; Save on Enter (when not in text field or when in priority field)
@@ -1558,8 +1562,7 @@
          (when (> (length title) 0)
            (if (model-edit-todo-id model)
                ;; Update existing TODO (no enrichment for edits)
-               (let ((todo (find (model-edit-todo-id model) (model-todos model)
-                                :key #'todo-id :test #'string=)))
+               (let ((todo (find-todo model (model-edit-todo-id model))))
                  (when todo
                    (setf (todo-title todo) title)
                    (setf (todo-description todo)
@@ -1574,10 +1577,7 @@
                    (setf (todo-repeat-unit todo) (model-edit-repeat-unit model))
                    ;; Save tags
                    (setf (todo-tags todo) (reverse (model-edit-tags model)))
-                   (invalidate-visible-todos-cache model)
-                   (save-todo-recording-undo model todo)
-                   ;; Refresh tags cache since tags may have changed
-                   (refresh-tags-cache model))
+                   (commit-todo-edit model todo :retag t))
                  (setf (model-view-state model) :list)
                  (return-from handle-add-edit-keys (values model nil)))
                ;; Create new TODO with async LLM enrichment
@@ -1629,16 +1629,8 @@
       ;; Pass key to active text input
       (t
        (case (model-active-field model)
-         (:title
-          (multiple-value-bind (new-input cmd)
-              (tui.textinput:textinput-update (model-title-input model) msg)
-            (declare (ignore cmd))
-            (setf (model-title-input model) new-input)))
-         (:description
-          (multiple-value-bind (new-input cmd)
-              (tui.textinput:textinput-update (model-description-input model) msg)
-            (declare (ignore cmd))
-            (setf (model-description-input model) new-input))))
+         (:title (feed-textinput (model-title-input model) msg))
+         (:description (feed-textinput (model-description-input model) msg)))
        (values model nil)))))
 
 ;;── Search View Key Handling ───────────────────────────────────────────────────
@@ -1663,15 +1655,12 @@
 
       ;; Pass key to search input
       (t
-       (multiple-value-bind (new-input cmd)
-           (tui.textinput:textinput-update (model-search-input model) msg)
-         (declare (ignore cmd))
-         (setf (model-search-input model) new-input)
-         ;; Live search as you type
-         (setf (model-search-query model)
-               (tui.textinput:textinput-value (model-search-input model)))
-         (invalidate-visible-todos-cache model)
-         (setf (model-cursor model) 0))
+       (feed-textinput (model-search-input model) msg)
+       ;; Live search as you type
+       (setf (model-search-query model)
+             (tui.textinput:textinput-value (model-search-input model)))
+       (invalidate-visible-todos-cache model)
+       (setf (model-cursor model) 0)
        (values model nil)))))
 
 ;;── Inline Tags Editor Key Handling ────────────────────────────────────────────
@@ -1682,13 +1671,10 @@
     (cond
       ;; Escape - save tags and close
       ((eql key :escape)
-       (let ((todo (find (model-edit-todo-id model) (model-todos model)
-                        :key #'todo-id :test #'string=)))
+       (let ((todo (find-todo model (model-edit-todo-id model))))
          (when todo
            (setf (todo-tags todo) (reverse (model-edit-tags model)))
-           (invalidate-visible-todos-cache model)
-           (save-todo-recording-undo model todo)
-           (refresh-tags-cache model)))
+           (commit-todo-edit model todo :retag t)))
        (setf (model-view-state model) :list)
        (setf (model-edit-todo-id model) nil)
        (values model nil))
@@ -1707,52 +1693,33 @@
 
       ;; Enter - add tag from dropdown or input, or save and close if empty
       ((eql key :enter)
-       (let* ((query (tui.textinput:textinput-value (model-tags-input model)))
-              (filtered (model-tag-dropdown-filtered model))
-              (cursor (model-tag-dropdown-cursor model)))
-         (cond
-           ;; Dropdown visible with selection - add selected tag
-           ((and (model-tag-dropdown-visible model) (> (length filtered) 0))
-            (add-tag-to-edit-tags model (nth cursor filtered))
-            (update-tag-dropdown model)
-            (values model nil))
-           ;; No dropdown but has input - create new tag
-           ((> (length query) 0)
-            (add-tag-to-edit-tags model query)
-            (update-tag-dropdown model)
-            (values model nil))
+       (if (pending-tag-completion-p model)
+           (progn
+             (complete-pending-tag model)
+             (update-tag-dropdown model))
            ;; Empty input and no dropdown - save and close
-           (t
-            (let ((todo (find (model-edit-todo-id model) (model-todos model)
-                             :key #'todo-id :test #'string=)))
-              (when todo
-                (setf (todo-tags todo) (reverse (model-edit-tags model)))
-                (invalidate-visible-todos-cache model)
-                (save-todo-recording-undo model todo)
-                (refresh-tags-cache model)))
-            (setf (model-view-state model) :list)
-            (setf (model-edit-todo-id model) nil)
-            (values model nil)))))
+           (let ((todo (find-todo model (model-edit-todo-id model))))
+             (when todo
+               (setf (todo-tags todo) (reverse (model-edit-tags model)))
+               (commit-todo-edit model todo :retag t))
+             (setf (model-view-state model) :list)
+             (setf (model-edit-todo-id model) nil)))
+       (values model nil))
 
       ;; Backspace - remove last tag if input empty, else pass to input
       ((eql key :backspace)
        (let ((query (tui.textinput:textinput-value (model-tags-input model))))
          (if (zerop (length query))
              (remove-last-tag-from-edit-tags model)
-             (multiple-value-bind (new-input cmd)
-                 (tui.textinput:textinput-update (model-tags-input model) msg)
-               (declare (ignore cmd))
-               (setf (model-tags-input model) new-input)
+             (progn
+               (feed-textinput (model-tags-input model) msg)
                (update-tag-dropdown model))))
        (values model nil))
 
       ;; Other keys - pass to text input
       (t
-       (multiple-value-bind (new-input cmd)
-           (tui.textinput:textinput-update (model-tags-input model) msg)
-         (declare (ignore cmd))
-         (setf (model-tags-input model) new-input)
-         (update-tag-dropdown model))
+       (feed-textinput (model-tags-input model) msg)
+       (update-tag-dropdown model)
        (values model nil)))))
 
 ;;── Import View Key Handling ───────────────────────────────────────────────────
@@ -1784,10 +1751,7 @@
 
       ;; Pass key to import input
       (t
-       (multiple-value-bind (new-input cmd)
-           (tui.textinput:textinput-update (model-import-input model) msg)
-         (declare (ignore cmd))
-         (setf (model-import-input model) new-input))
+       (feed-textinput (model-import-input model) msg)
        (values model nil)))))
 
 ;;── Delete Confirm Key Handling ────────────────────────────────────────────────
@@ -1800,16 +1764,13 @@
     (cond
       ;; Confirm delete with y
       ((and (characterp key) (char-equal key #\y))
-       (when (< (model-cursor model) (length todos))
-         (let ((todo (nth (model-cursor model) todos)))
+       (let ((todo (cursor-todo model todos)))
+         (when todo
            ;; Mark item as deleted instead of removing
            (setf (todo-status todo) :deleted)
            (setf (todo-completed-at todo) (lt:now))
-           (save-todo-recording-undo model todo)
-           ;; Invalidate cache so deleted items disappear
-           (invalidate-visible-todos-cache model)
-           (setf (model-cursor model)
-                 (min (model-cursor model) (max 0 (1- (length (get-visible-todos model))))))))
+           (commit-todo-edit model todo)
+           (clamp-cursor model)))
        (setf (model-view-state model) :list)
        (values model nil))
 
@@ -1835,8 +1796,7 @@
              (save-todo-recording-undo model todo))))
        ;; Invalidate cache so deleted items disappear
        (invalidate-visible-todos-cache model)
-       (setf (model-cursor model)
-             (min (model-cursor model) (max 0 (1- (length (get-visible-todos model))))))
+       (clamp-cursor model)
        (setf (model-view-state model) :list)
        (values model nil))
 
@@ -1896,8 +1856,8 @@
 
       ;; Edit from detail view
       ((and (characterp key) (char= key #\e))
-       (when (< (model-cursor model) (length todos))
-         (let ((todo (nth (model-cursor model) todos)))
+       (let ((todo (cursor-todo model todos)))
+         (when todo
            (setf (model-view-state model) :edit)
            (setf (model-edit-todo-id model) (todo-id todo))
            (setf (model-edit-priority model) (todo-priority todo))
@@ -1921,66 +1881,48 @@
 
       ;; Edit scheduled date (s)
       ((and (characterp key) (char= key #\s))
-       (when (< (model-cursor model) (length todos))
-         (let* ((todo (nth (model-cursor model) todos))
-                (scheduled (todo-scheduled-date todo))
-                (picker (model-date-picker model)))
-           ;; Initialize datepicker with current scheduled date or today
-           (cond (scheduled (let ((utime (lt:timestamp-to-universal scheduled)))
-                 (tui.datepicker:datepicker-set-time picker utime)
-                 (setf (tui.datepicker:datepicker-selected picker) utime)))
-      (t
-                 (tui.datepicker:datepicker-set-time picker (get-universal-time))
-                 (tui.datepicker:datepicker-unselect picker)))
-           (tui.datepicker:datepicker-focus picker)
+       (let ((todo (cursor-todo model todos)))
+         (when todo
+           (seed-date-picker (model-date-picker model) (todo-scheduled-date todo))
            (setf (model-editing-date-type model) :scheduled)
            (setf (model-view-state model) :edit-date)))
        (values model nil))
 
       ;; Edit deadline date (d)
       ((and (characterp key) (char= key #\d))
-       (when (< (model-cursor model) (length todos))
-         (let* ((todo (nth (model-cursor model) todos))
-                (deadline (todo-due-date todo))
-                (picker (model-date-picker model)))
-           ;; Initialize datepicker with current deadline or today
-           (cond (deadline (let ((utime (lt:timestamp-to-universal deadline)))
-                 (tui.datepicker:datepicker-set-time picker utime)
-                 (setf (tui.datepicker:datepicker-selected picker) utime)))
-      (t
-                 (tui.datepicker:datepicker-set-time picker (get-universal-time))
-                 (tui.datepicker:datepicker-unselect picker)))
-           (tui.datepicker:datepicker-focus picker)
+       (let ((todo (cursor-todo model todos)))
+         (when todo
+           (seed-date-picker (model-date-picker model) (todo-due-date todo))
            (setf (model-editing-date-type model) :deadline)
            (setf (model-view-state model) :edit-date)))
        (values model nil))
 
       ;; Open URL with 'o'
       ((and (characterp key) (char= key #\o))
-       (when (< (model-cursor model) (length todos))
-         (let* ((todo (nth (model-cursor model) todos))
-                (urls (get-todo-urls todo)))
-           (when urls
-             (open-url (first urls)))))
+       (let ((todo (cursor-todo model todos)))
+         (when todo
+           (let ((urls (get-todo-urls todo)))
+             (when urls
+               (open-url (first urls))))))
        (values model nil))
 
       ;; Open photo/attachment with 'p'
       ((and (characterp key) (char= key #\p))
-       (when (< (model-cursor model) (length todos))
-         (let* ((todo (nth (model-cursor model) todos))
-                (hashes (todo-attachment-hashes todo)))
-           (when hashes
-             (open-attachment (first hashes)))))
+       (let ((todo (cursor-todo model todos)))
+         (when todo
+           (let ((hashes (todo-attachment-hashes todo)))
+             (when hashes
+               (open-attachment (first hashes))))))
        (values model nil))
 
       ;; Edit notes with 'n' - opens external editor
       ((and (characterp key) (char= key #\n))
-       (when (< (model-cursor model) (length todos))
-         (let* ((todo (nth (model-cursor model) todos))
-                (current-notes (or (todo-description todo) "")))
-           ;; Store the todo id so we know which todo to update
-           (setf (model-edit-todo-id model) (todo-id todo))
-           (values model (make-detail-notes-editor-cmd (todo-id todo) current-notes))))
+       (let ((todo (cursor-todo model todos)))
+         (when todo
+           (let ((current-notes (or (todo-description todo) "")))
+             ;; Store the todo id so we know which todo to update
+             (setf (model-edit-todo-id model) (todo-id todo))
+             (values model (make-detail-notes-editor-cmd (todo-id todo) current-notes)))))
        (values model nil))
 
       (t (values model nil)))))
@@ -2002,36 +1944,32 @@
 
       ;; Confirm with Enter - save the current cursor date and go back to list
       ((eql key :enter)
-       (when (< (model-cursor model) (length todos))
-         (let* ((todo (nth (model-cursor model) todos))
-                ;; Use cursor position (datepicker-time), not selection
-                (current-date (tui.datepicker:datepicker-time picker))
-                (timestamp (when current-date
-                             (lt:universal-to-timestamp current-date))))
-           ;; Save the date based on which type we're editing
-           (case (model-editing-date-type model)
-             (:scheduled
-              (setf (todo-scheduled-date todo) timestamp))
-             (:deadline
-              (setf (todo-due-date todo) timestamp)))
-           (save-todo-recording-undo model todo)
-           ;; Invalidate cache since dates affect grouping
-           (invalidate-visible-todos-cache model)))
+       (let ((todo (cursor-todo model todos)))
+         (when todo
+           ;; Use cursor position (datepicker-time), not selection
+           (let* ((current-date (tui.datepicker:datepicker-time picker))
+                  (timestamp (when current-date
+                               (lt:universal-to-timestamp current-date))))
+             ;; Save the date based on which type we're editing
+             (case (model-editing-date-type model)
+               (:scheduled
+                (setf (todo-scheduled-date todo) timestamp))
+               (:deadline
+                (setf (todo-due-date todo) timestamp)))
+             (commit-todo-edit model todo))))
        (setf (model-view-state model) :list)
        (values model nil))
 
       ;; Clear date with Backspace or Delete
       ((or (eql key :backspace) (eql key :delete))
-       (when (< (model-cursor model) (length todos))
-         (let ((todo (nth (model-cursor model) todos)))
+       (let ((todo (cursor-todo model todos)))
+         (when todo
            (case (model-editing-date-type model)
              (:scheduled
               (setf (todo-scheduled-date todo) nil))
              (:deadline
               (setf (todo-due-date todo) nil)))
-           (save-todo-recording-undo model todo)
-           ;; Invalidate cache since dates affect grouping
-           (invalidate-visible-todos-cache model)))
+           (commit-todo-edit model todo)))
        (setf (model-view-state model) :list)
        (values model nil))
 
@@ -2059,33 +1997,31 @@
 
       ;; Confirm with Enter - save the cursor date and go back
       ((eql key :enter)
-       (when (< (model-cursor model) (length todos))
-         (let* ((todo (nth (model-cursor model) todos))
-                (current-date (tui.datepicker:datepicker-time picker))
-                (timestamp (when current-date
-                             (lt:universal-to-timestamp current-date))))
-           ;; Save the date based on which type we're editing
-           (case (model-editing-date-type model)
-             (:scheduled
-              (setf (todo-scheduled-date todo) timestamp))
-             (:deadline
-              (setf (todo-due-date todo) timestamp)))
-           (invalidate-visible-todos-cache model)
-           (save-todo-recording-undo model todo)))
+       (let ((todo (cursor-todo model todos)))
+         (when todo
+           (let* ((current-date (tui.datepicker:datepicker-time picker))
+                  (timestamp (when current-date
+                               (lt:universal-to-timestamp current-date))))
+             ;; Save the date based on which type we're editing
+             (case (model-editing-date-type model)
+               (:scheduled
+                (setf (todo-scheduled-date todo) timestamp))
+               (:deadline
+                (setf (todo-due-date todo) timestamp)))
+             (commit-todo-edit model todo))))
        (setf (model-view-state model) :detail)
        (values model nil))
 
       ;; Clear date with Backspace or Delete
       ((or (eql key :backspace) (eql key :delete))
-       (when (< (model-cursor model) (length todos))
-         (let ((todo (nth (model-cursor model) todos)))
+       (let ((todo (cursor-todo model todos)))
+         (when todo
            (case (model-editing-date-type model)
              (:scheduled
               (setf (todo-scheduled-date todo) nil))
              (:deadline
               (setf (todo-due-date todo) nil)))
-           (invalidate-visible-todos-cache model)
-           (save-todo-recording-undo model todo)))
+           (commit-todo-edit model todo)))
        (setf (model-view-state model) :detail)
        (values model nil))
 
@@ -2520,10 +2456,7 @@
            (todos (get-visible-todos model))
            (groups (group-todos-by-date todos))
            (num-lines (max 1 (+ (length todos) (* (length groups) +header-lines+))))
-           ;; Account for filter banner height
-           (has-filters (has-active-filters-p model))
-           (filter-banner-height (if has-filters 1 0))
-           (viewport-height (max 5 (- (model-term-height model) 3 filter-banner-height)))
+           (viewport-height (list-viewport-height model))
            (max-offset (max 0 (- num-lines viewport-height)))
            (offset (model-scroll-offset model))
            (new-offset (case direction
@@ -2558,11 +2491,10 @@
       ((eql view-state :list)
        (let* ((screen-x (1- (tui:mouse-event-x msg)))  ; Convert to 0-based
               ;; Account for filter banner height (same as render-list-view)
-              (has-filters (has-active-filters-p model))
-              (filter-banner-height (if has-filters 1 0))
+              (filter-banner-height (if (has-active-filters-p model) 1 0))
               (screen-line (- (tui:mouse-event-y msg) 2))
               (list-line (- screen-line filter-banner-height))
-              (available-height (max 5 (- (model-term-height model) 3 filter-banner-height)))
+              (available-height (list-viewport-height model))
               (term-width (model-term-width model))
               (scrollbar-col (1- term-width))  ; Rightmost column
               ;; Calculate sidebar width (same logic as render-list-view)
@@ -2627,8 +2559,7 @@
        (when (eql button :left)
          (let* ((screen-y (- (tui:mouse-event-y msg) 2))
                 (todos (get-visible-todos model))
-                (todo (when (< (model-cursor model) (length todos))
-                        (nth (model-cursor model) todos))))
+                (todo (cursor-todo model todos)))
            (when todo
              (let ((urls (get-todo-urls todo)))
                ;; Only respond to clicks in the lower portion where URLs appear
@@ -2641,11 +2572,10 @@
   "Handle mouse drag for scrollbar."
   (when (and (eql (model-view-state model) :list)
              (model-scrollbar-dragging model))
-    (let* ((has-filters (has-active-filters-p model))
-           (filter-banner-height (if has-filters 1 0))
+    (let* ((filter-banner-height (if (has-active-filters-p model) 1 0))
            (screen-line (- (tui:mouse-event-y msg) 2))
            (list-line (- screen-line filter-banner-height))
-           (available-height (max 5 (- (model-term-height model) 3 filter-banner-height))))
+           (available-height (list-viewport-height model)))
       (scroll-to-y-position model (max 0 (min (1- available-height) list-line)) available-height)))
   (values model nil))
 
@@ -2683,7 +2613,7 @@
   "Handle enrichment completion by updating the TODO with enriched data."
   (let* ((todo-id (enrichment-msg-todo-id msg))
          (data (enrichment-msg-data msg))
-         (todo (find todo-id (model-todos model) :key #'todo-id :test #'string=)))
+         (todo (find-todo model todo-id)))
     (llog:info "Enrichment complete message received"
                :todo-id todo-id
                :has-data (if data "yes" "no")
@@ -2970,11 +2900,10 @@
         (new-text (notes-editor-msg-new-text msg)))
     (when new-text
       ;; Find and update the todo
-      (let ((todo (find todo-id (model-todos model) :key #'todo-id :test #'string=)))
+      (let ((todo (find-todo model todo-id)))
         (when todo
           (setf (todo-description todo) (if (string= new-text "") nil new-text))
-          (invalidate-visible-todos-cache model)
-          (save-todo-recording-undo model todo)
+          (commit-todo-edit model todo)
           (llog:info "Updated todo notes" :todo-id todo-id))))
     (values model nil)))
 
