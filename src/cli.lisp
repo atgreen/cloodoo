@@ -1751,6 +1751,66 @@ URL format: http[s]://HOST[:PORT]/pair/TOKEN"
 
 ;;── Export Command ─────────────────────────────────────────────────────────────
 
+(defun make-review-command ()
+  "Create the 'review' subcommand: weekly review from temporal history
+   (cloodoo-n9n)."
+  (clingon:make-command
+   :name "review"
+   :description "Weekly review: completed, slipped, and completion streak"
+   :handler
+   (lambda (cmd)
+     (declare (ignore cmd))
+     (let* ((todos (load-todos))
+            (today (local-today))
+            (week-ago (lt:timestamp- today 7 :day))
+            (completed-this-week
+              (remove-if-not
+               (lambda (todo)
+                 (and (eql (todo-status todo) :completed)
+                      (todo-completed-at todo)
+                      (lt:timestamp>= (todo-completed-at todo) week-ago)))
+               todos))
+            (slipped
+              (remove-if-not
+               (lambda (todo)
+                 (and (member (todo-status todo) '(:pending :in-progress))
+                      (todo-scheduled-date todo)
+                      (lt:timestamp< (todo-scheduled-date todo) today)))
+               todos))
+            ;; Completion streak from full temporal history: distinct local
+            ;; dates with at least one completion, counted back from today
+            (completion-days (db-completion-dates))
+            (streak (loop for offset from 0
+                          for day = (lt:format-timestring
+                                     nil (lt:timestamp- today offset :day)
+                                     :format '(:year "-" (:month 2) "-" (:day 2)))
+                          while (member day completion-days :test #'string=)
+                          count t)))
+       (format t "~%~A~%~%"
+               (tui:bold (tui:colored "  WEEKLY REVIEW  "
+                                      :fg (theme-fg :black) :bg (theme-bg :cyan))))
+       (format t "  ~A completed in the last 7 days:~%"
+               (tui:colored (format nil "~D" (length completed-this-week))
+                            :fg (theme-fg :green)))
+       (dolist (todo completed-this-week)
+         (format t "    ~A ~A~%"
+                 (tui:colored "✓" :fg (theme-fg :green))
+                 (todo-title todo)))
+       (format t "~%  ~A slipped (scheduled but not done):~%"
+               (tui:colored (format nil "~D" (length slipped))
+                            :fg (theme-fg :yellow)))
+       (dolist (todo slipped)
+         (format t "    ~A ~A ~A~%"
+                 (tui:colored "!" :fg (theme-fg :yellow))
+                 (todo-title todo)
+                 (tui:colored
+                  (lt:format-timestring nil (todo-scheduled-date todo)
+                                        :format '("(" :short-month " " :day ")"))
+                  :fg (theme-fg :bright-black))))
+       (format t "~%  Completion streak: ~A~%~%"
+               (tui:colored (format nil "~D day~:P" streak)
+                            :fg (theme-fg :cyan)))))))
+
 (defun make-export-command ()
   "Create the 'export' subcommand for exporting TODOs to text or PDF."
   (let ((output-opt (clingon:make-option
@@ -1759,6 +1819,11 @@ URL format: http[s]://HOST[:PORT]/pair/TOKEN"
                      :long-name "output"
                      :key :output
                      :description "Output file path (default: agenda.txt or agenda.pdf)"))
+        (org-opt (clingon:make-option
+                  :flag
+                  :long-name "org"
+                  :key :org
+                  :description "Export as a true org-mode file (round-trips with import)"))
         (pdf-opt (clingon:make-option
                   :flag
                   :long-name "pdf"
@@ -1797,9 +1862,10 @@ URL format: http[s]://HOST[:PORT]/pair/TOKEN"
     (clingon:make-command
      :name "export"
      :description "Export TODOs in org-agenda format (text or PDF)"
-     :options (list output-opt pdf-opt by-tag-opt title-opt status-opt priority-opt all-opt)
+     :options (list output-opt org-opt pdf-opt by-tag-opt title-opt status-opt priority-opt all-opt)
      :handler (lambda (cmd)
                 (let* ((output (clingon:getopt cmd :output))
+                       (org-mode-output (clingon:getopt cmd :org))
                        (pdf-mode (clingon:getopt cmd :pdf))
                        (by-tag (clingon:getopt cmd :by-tag))
                        (title (clingon:getopt cmd :title))
@@ -1829,10 +1895,20 @@ URL format: http[s]://HOST[:PORT]/pair/TOKEN"
 
                   ;; Determine output file
                   (let ((output-file (or output
-                                       (if pdf-mode "agenda.pdf" "agenda.txt"))))
+                                       (cond (pdf-mode "agenda.pdf")
+                                             (org-mode-output "agenda.org")
+                                             (t "agenda.txt")))))
 
                     ;; Export
                     (cond
+                      (org-mode-output
+                       ;; True org-mode export (cloodoo-16h)
+                       (with-open-file (stream output-file :direction :output :if-exists :supersede)
+                         (export-todos-org filtered :stream stream))
+                       (format t "~A Exported ~D TODO~:P to ~A~%"
+                              (tui:colored "✓" :fg (theme-fg :green))
+                              (length filtered)
+                              output-file))
                       (pdf-mode
                        ;; PDF export
                        (cond
@@ -2625,6 +2701,7 @@ URL format: http[s]://HOST[:PORT]/pair/TOKEN"
                        (make-list-command)
                        (make-done-command)
                        (make-stats-command)
+                       (make-review-command)
                        (make-export-command)
                        (make-dump-command)
                        (make-compact-command)

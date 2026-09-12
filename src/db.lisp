@@ -179,6 +179,15 @@
         created_at TEXT NOT NULL
       )")
 
+    ;; Which users uploaded/own which content-addressed blobs; content is
+    ;; deduplicated across users, ownership is per-user (cloodoo-75q)
+    (sqlite:execute-non-query db "
+      CREATE TABLE IF NOT EXISTS attachment_owners (
+        hash TEXT NOT NULL,
+        user_id TEXT,
+        UNIQUE(hash, user_id)
+      )")
+
     ;; Migration: add description_hash column
     (handler-case
         (sqlite:execute-non-query db "
@@ -543,6 +552,38 @@
          VALUES (?, ?, ?, ?, ?, ?)"
         hash content filename mime-type size created-at)
       hash)))
+
+(defun db-completion-dates ()
+  "Distinct local calendar dates (YYYY-MM-DD) with at least one completion,
+   drawn from the full temporal history (cloodoo-n9n)."
+  (ensure-db-initialized)
+  (with-db (db)
+    (let ((dates '()))
+      (dolist (row (sqlite:execute-to-list db
+                     "SELECT DISTINCT completed_at FROM todos WHERE completed_at IS NOT NULL"))
+        (let ((ts (parse-timestamp (first row))))
+          (when ts
+            (pushnew (lt:format-timestring nil ts
+                                           :format '(:year "-" (:month 2) "-" (:day 2)))
+                     dates :test #'string=))))
+      dates)))
+
+(defun db-record-attachment-owner (hash &key user-id)
+  "Record that USER-ID uploaded attachment HASH (cloodoo-75q)."
+  (ensure-db-initialized)
+  (with-db (db)
+    (sqlite:execute-non-query db
+      "INSERT OR IGNORE INTO attachment_owners (hash, user_id) VALUES (?, ?)"
+      hash user-id)))
+
+(defun db-attachment-owned-p (hash &key user-id)
+  "True when USER-ID has uploaded attachment HASH (cloodoo-75q)."
+  (ensure-db-initialized)
+  (with-db (db)
+    (plusp (or (sqlite:execute-single db
+                 "SELECT COUNT(*) FROM attachment_owners WHERE hash = ? AND user_id = ?"
+                 hash user-id)
+               0))))
 
 (defun db-attachment-referenced-by-user-p (hash &key user-id)
   "True when a current todo owned by USER-ID references attachment HASH.

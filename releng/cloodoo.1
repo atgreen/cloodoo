@@ -49,10 +49,17 @@ Mark a TODO as completed.
 .B stats
 Show TODO statistics.
 .TP
+.B review
+Weekly review from the temporal history: TODOs completed in the last
+seven days, scheduled items that slipped, and the current daily
+completion streak.
+.TP
 .B export
 Export TODOs in org-agenda format.
 .B \-\-pdf
 produces PDF (requires pandoc, wkhtmltopdf, or enscript),
+.B \-\-org
+produces a true org\-mode file that round\-trips with the importer,
 .B \-o
 sets the output path,
 .B \-t

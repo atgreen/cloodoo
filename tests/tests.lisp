@@ -1010,6 +1010,33 @@
     (is (string= "buy milk" title))
     (is (null date))))
 
+;;── Org Export & Attachment Ownership ──────────────────────────────────────────
+
+(test export-todos-org-test
+  "True org-mode export: keyword declaration, headings, planning, tags
+   (cloodoo-16h)."
+  (let* ((todo (cloodoo:make-todo "Write report"
+                 :priority :high
+                 :description (format nil "Two lines~%of notes")
+                 :tags '("work")))
+         (out (with-output-to-string (s)
+                (setf (cloodoo::todo-scheduled-date todo)
+                      (encode-date 2026 9 14))
+                (cloodoo::export-todos-org (list todo) :stream s))))
+    (is (search "#+TODO: TODO STRT WAIT | DONE CNCL" out))
+    (is (search "* TODO [#A] Write report :work:" out))
+    (is (search "SCHEDULED: <2026-09-14" out))
+    (is (search "  Two lines" out))
+    (is (search "  of notes" out))))
+
+(test attachment-owner-scoping-test
+  "Attachment ownership is per user (cloodoo-75q)."
+  (with-test-db
+    (cloodoo::db-record-attachment-owner "hash-1" :user-id "alice")
+    (is-true (cloodoo::db-attachment-owned-p "hash-1" :user-id "alice"))
+    (is-false (cloodoo::db-attachment-owned-p "hash-1" :user-id "bob"))
+    (is-false (cloodoo::db-attachment-owned-p "hash-2" :user-id "alice"))))
+
 ;;── Run Tests ──────────────────────────────────────────────────────────────────
 
 (defun run-tests ()

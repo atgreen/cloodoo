@@ -1932,6 +1932,10 @@ Keep small to avoid exhausting HTTP/2 flow control window.")
                 (proto-attachment-meta-mime-type metadata)
                 (proto-attachment-meta-size metadata)
                 (now-iso)))
+            ;; Record who uploaded it so downloads can be scoped (cloodoo-75q)
+            (let ((username (extract-username-from-ctx ctx)))
+              (when username
+                (db-record-attachment-owner received-hash :user-id username)))
 
             (llog:info "Attachment stored" :hash received-hash :size total-size)
 
@@ -1947,10 +1951,9 @@ Keep small to avoid exhausting HTTP/2 flow control window.")
 (defun handle-download-attachment (request ctx stream)
   "Handler for AttachmentService.DownloadAttachment RPC.
    Streams attachment content to client in chunks.  Authenticated users may
-   only fetch hashes referenced by one of their own todos (cloodoo-th6).
-   Note this stops blind hash probing, not a user who already knows a hash
-   and upserts a todo referencing it: real ownership needs an owner column
-   on the attachments table."
+   only fetch hashes they uploaded (attachment_owners, cloodoo-75q) or that
+   one of their own todos references (back-compat for attachments uploaded
+   before the owners table existed; cloodoo-th6)."
   (declare (ignore request))
 
   ;; For server-streaming, ag-grpc passes nil as request parameter
@@ -1970,9 +1973,11 @@ Keep small to avoid exhausting HTTP/2 flow control window.")
                                  :error "Certificate has been revoked")))
         (ag-grpc:stream-send stream resp))
       (return-from handle-download-attachment))
-    ;; Authenticated users may only fetch attachments their todos reference;
-    ;; report the same error as a missing attachment to avoid probing.
+    ;; Authenticated users may only fetch attachments they uploaded or that
+    ;; their todos reference; report the same error as a missing attachment
+    ;; to avoid probing (cloodoo-th6, cloodoo-75q).
     (when (and username
+               (not (db-attachment-owned-p hash :user-id username))
                (not (db-attachment-referenced-by-user-p hash :user-id username)))
       (llog:warn "Rejected attachment download not owned by user"
                  :username username :hash hash)

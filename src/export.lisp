@@ -294,6 +294,54 @@
     ;; Clean up PostScript
     (delete-file ps-file)))
 
+;;── True Org-Mode Export ──────────────────────────────────────────────────────
+
+(defun org-status-keyword-for-export (status)
+  "Org TODO keyword for STATUS, matching the #+TODO declaration below."
+  (case status
+    (:completed "DONE")
+    (:in-progress "STRT")
+    (:waiting "WAIT")
+    (:cancelled "CNCL")
+    (otherwise "TODO")))
+
+(defun org-timestamp (ts)
+  "Format TS as an active org timestamp like <2026-09-15 Tue>."
+  (lt:format-timestring nil ts
+                        :format '("<" :year "-" (:month 2) "-" (:day 2)
+                                  " " :short-weekday ">")))
+
+(defun export-todos-org (todos &key (stream *standard-output*))
+  "Export TODOS as a real org-mode file (cloodoo-16h): a #+TODO keyword
+   declaration, then one '* KEYWORD [#P] Title :tags:' heading per todo
+   with SCHEDULED/DEADLINE planning lines and the description as body.
+   Loads cleanly in Emacs org-mode and round-trips through the org import."
+  (format stream "#+TITLE: Cloodoo export~%")
+  (format stream "#+TODO: TODO STRT WAIT | DONE CNCL~%~%")
+  (dolist (todo todos)
+    (let ((priority-cookie (case (todo-priority todo)
+                             (:high "[#A] ")
+                             (:medium "[#B] ")
+                             (:low "[#C] ")
+                             (otherwise "")))
+          (tags (todo-tags todo)))
+      (format stream "* ~A ~A~A~@[ ~A~]~%"
+              (org-status-keyword-for-export (todo-status todo))
+              priority-cookie
+              (todo-title todo)
+              (when tags (org-tags-string tags)))
+      (let ((sched (todo-scheduled-date todo))
+            (due (todo-due-date todo)))
+        (when (or sched due)
+          (format stream " ")
+          (when sched (format stream " SCHEDULED: ~A" (org-timestamp sched)))
+          (when due (format stream " DEADLINE: ~A" (org-timestamp due)))
+          (terpri stream)))
+      (when (todo-description todo)
+        (dolist (line (uiop:split-string (todo-description todo)
+                                         :separator '(#\Newline)))
+          (format stream "  ~A~%" line))))))
+
 (defun escape-html (text)
   "Escape HTML special characters."
   (let ((result text))
