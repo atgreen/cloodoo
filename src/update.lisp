@@ -90,6 +90,14 @@
    :initform :list
    :accessor model-view-state
     :documentation "Current view: :list, :detail, :add, :edit, :help, :search, :delete-confirm, :delete-done-confirm, :import, :edit-date, :add-scheduled-date, :add-due-date.") ; lint:suppress max-line-length
+   (trash-cursor
+    :initform 0
+    :accessor model-trash-cursor
+    :documentation "Cursor index in the trash view (cloodoo-4d8).")
+   (marked-ids
+    :initform (make-hash-table :test #'equal)
+    :accessor model-marked-ids
+    :documentation "Set of todo ids marked for batch operations (cloodoo-woa).")
    (edit-return-view
     :initform :list
     :accessor model-edit-return-view
@@ -962,6 +970,59 @@
 
 ;;── List View Key Handling ─────────────────────────────────────────────────────
 
+(defun trashed-todos (model)
+  "Soft-deleted todos, newest deletion first (cloodoo-4d8)."
+  (sort (remove-if-not (lambda (todo) (eql (todo-status todo) :deleted))
+                       (copy-list (model-todos model)))
+        (lambda (a b)
+          (let ((ca (todo-completed-at a))
+                (cb (todo-completed-at b)))
+            (cond ((and ca cb) (lt:timestamp> ca cb))
+                  (ca t)
+                  (t nil))))))
+
+(defun batch-target-todos (model &optional (todos (get-visible-todos model)))
+  "The todos a batch-capable operation applies to: every marked todo when
+   any marks exist, else just the todo under the cursor (cloodoo-woa)."
+  (let ((marked (model-marked-ids model)))
+    (if (plusp (hash-table-count marked))
+        (remove-if-not (lambda (todo) (gethash (todo-id todo) marked))
+                       (model-todos model))
+        (let ((todo (cursor-todo model todos)))
+          (when todo (list todo))))))
+
+(defun cycle-todo-status (model todo)
+  "Advance TODO through TODO -> DONE -> WAIT -> CNCL -> TODO, rescheduling
+   repeating tasks instead of completing them.  Saves without regrouping so
+   the item stays in place."
+  (case (todo-status todo)
+    ((:pending :in-progress)
+     ;; Completing a repeating task reschedules it instead
+     (if (and (todo-repeat-interval todo) (todo-repeat-unit todo))
+         (advance-repeating-todo model todo)
+         (progn
+           (setf (todo-status todo) +status-completed+)
+           (setf (todo-completed-at todo) (lt:now))
+           (setf (model-status-message model) "→ DONE"))))
+    (:completed
+     (setf (todo-status todo) +status-waiting+)
+     (setf (todo-completed-at todo) nil)
+     (setf (model-status-message model) "→ WAIT"))
+    (:waiting
+     (setf (todo-status todo) +status-cancelled+)
+     (setf (todo-completed-at todo) nil)
+     (setf (model-status-message model) "→ CNCL"))
+    (:cancelled
+     (setf (todo-status todo) +status-pending+)
+     (setf (todo-completed-at todo) nil)
+     (setf (model-status-message model) "→ TODO"))
+    (otherwise
+     (setf (todo-status todo) +status-pending+)
+     (setf (todo-completed-at todo) nil)
+     (setf (model-status-message model) "→ TODO")))
+  ;; Save but don't invalidate cache - item stays in place
+  (save-todo-recording-undo model todo))
+
 (defun advance-repeating-todo (model todo)
   "Reschedule a completed repeating TODO to its next occurrence instead of
    marking it done, shifting any due date by the same interval."
@@ -1104,37 +1165,35 @@
        (values model nil))
 
       ;; Toggle status (Space): TODO -> DONE -> WAITING -> CANCELLED -> TODO
-      ;; For repeating tasks, completing reschedules to next occurrence
+      ;; For repeating tasks, completing reschedules to next occurrence.
+      ;; With marks active, cycles every marked todo (cloodoo-woa)
       ((and (characterp key) (char= key #\Space))
+       (dolist (todo (batch-target-todos model todos))
+         (cycle-todo-status model todo))
+       (values model nil))
+
+      ;; Mark/unmark for batch operations (m); M clears all marks
+      ;; (cloodoo-woa)
+      ((and (characterp key) (char= key #\m))
        (let ((todo (cursor-todo model todos)))
          (when todo
-           (case (todo-status todo)
-             ((:pending :in-progress)
-              ;; Completing a repeating task reschedules it instead
-              (if (and (todo-repeat-interval todo) (todo-repeat-unit todo))
-                  (advance-repeating-todo model todo)
-                  (progn
-                    (setf (todo-status todo) +status-completed+)
-                    (setf (todo-completed-at todo) (lt:now))
-                    (setf (model-status-message model) "→ DONE"))))
-             (:completed
-              (setf (todo-status todo) +status-waiting+)
-              (setf (todo-completed-at todo) nil)
-              (setf (model-status-message model) "→ WAIT"))
-             (:waiting
-              (setf (todo-status todo) +status-cancelled+)
-              (setf (todo-completed-at todo) nil)
-              (setf (model-status-message model) "→ CNCL"))
-             (:cancelled
-              (setf (todo-status todo) +status-pending+)
-              (setf (todo-completed-at todo) nil)
-              (setf (model-status-message model) "→ TODO"))
-             (otherwise
-              (setf (todo-status todo) +status-pending+)
-              (setf (todo-completed-at todo) nil)
-              (setf (model-status-message model) "→ TODO")))
-           ;; Save but don't invalidate cache - item stays in place
-           (save-todo-recording-undo model todo)))
+           (let ((marked (model-marked-ids model)))
+             (if (gethash (todo-id todo) marked)
+                 (remhash (todo-id todo) marked)
+                 (setf (gethash (todo-id todo) marked) t))
+             (setf (model-status-message model)
+                   (format nil "~D marked" (hash-table-count marked))))))
+       (values model nil))
+
+      ((and (characterp key) (char= key #\M))
+       (clrhash (model-marked-ids model))
+       (setf (model-status-message model) "Marks cleared")
+       (values model nil))
+
+      ;; Trash view (x): browse and restore soft-deleted todos (cloodoo-4d8)
+      ((and (characterp key) (char= key #\x))
+       (setf (model-trash-cursor model) 0)
+       (setf (model-view-state model) :trash)
        (values model nil))
 
       ;; View details (Enter)
@@ -1199,9 +1258,10 @@
            (tui.textinput:textinput-blur (model-description-input model))))
        (values model nil))
 
-      ;; Delete selected TODO (DEL key)
+      ;; Delete selected TODO (DEL key); with marks, deletes all marked
       ((eql key :delete)
-       (when (cursor-todo model todos)
+       (when (or (plusp (hash-table-count (model-marked-ids model)))
+                 (cursor-todo model todos))
          (setf (model-view-state model) :delete-confirm))
        (values model nil))
 
@@ -1681,14 +1741,15 @@
 ;;── Search View Key Handling ───────────────────────────────────────────────────
 
 (defun handle-defer-keys (model msg)
-  "One-key defer for the todo under the cursor, entered with '>':
-   t=tomorrow, w=weekend (next Saturday), n=next week (next Monday),
-   m=next month.  Any other key cancels (cloodoo-d5g)."
+  "One-key defer for the todo under the cursor — or every marked todo
+   (cloodoo-woa) — entered with '>': t=tomorrow, w=weekend (next
+   Saturday), n=next week (next Monday), m=next month.  Any other key
+   cancels (cloodoo-d5g)."
   (let* ((key (tui:key-event-code msg))
-         (todo (cursor-todo model))
+         (targets (batch-target-todos model))
          (today (local-today))
          (dow (lt:timestamp-day-of-week today))  ; 0=Sunday .. 6=Saturday
-         (target (and (characterp key) todo
+         (target (and (characterp key) targets
                       (flet ((days-to (target-dow)
                                (let ((d (mod (- target-dow dow) 7)))
                                  (if (zerop d) 7 d))))
@@ -1700,15 +1761,55 @@
                           (otherwise nil))))))
     (setf (model-view-state model) :list)
     (cond (target
-           (setf (todo-scheduled-date todo) target)
-           (commit-todo-edit model todo)
+           (dolist (todo targets)
+             (setf (todo-scheduled-date todo) target)
+             (commit-todo-edit model todo))
            (setf (model-status-message model)
-                 (format nil "Deferred to ~A"
+                 (format nil "Deferred ~D item~:P to ~A"
+                         (length targets)
                          (lt:format-timestring nil target
                                                :format '(:short-weekday " " :short-month " " :day)))))
           (t
            (setf (model-status-message model) nil)))
     (values model nil)))
+
+(defun handle-trash-keys (model msg)
+  "Trash view (cloodoo-4d8): j/k navigate soft-deleted todos, Enter or r
+   restores the selected one, Esc/q/x returns to the list."
+  (let ((key (tui:key-event-code msg))
+        (trashed (trashed-todos model)))
+    (cond
+      ((or (eql key :escape)
+           (and (characterp key) (member key '(#\q #\x) :test #'char=)))
+       (setf (model-view-state model) :list)
+       (values model nil))
+
+      ((or (eql key :down) (and (characterp key) (char= key #\j)))
+       (setf (model-trash-cursor model)
+             (min (max 0 (1- (length trashed)))
+                  (1+ (model-trash-cursor model))))
+       (values model nil))
+
+      ((or (eql key :up) (and (characterp key) (char= key #\k)))
+       (setf (model-trash-cursor model)
+             (max 0 (1- (model-trash-cursor model))))
+       (values model nil))
+
+      ((or (eql key :enter) (and (characterp key) (char= key #\r)))
+       (let ((todo (nth (model-trash-cursor model) trashed)))
+         (when todo
+           (setf (todo-status todo) +status-pending+)
+           (setf (todo-completed-at todo) nil)
+           (commit-todo-edit model todo :retag t)
+           (setf (model-status-message model)
+                 (format nil "Restored: ~A"
+                         (sanitize-title-for-display (todo-title todo))))
+           (setf (model-trash-cursor model)
+                 (min (model-trash-cursor model)
+                      (max 0 (- (length trashed) 2))))))
+       (values model nil))
+
+      (t (values model nil)))))
 
 (defun handle-search-keys (model msg)
   "Handle keyboard input in search view."
@@ -1837,15 +1938,21 @@
   (let ((key (tui:key-event-code msg))
         (todos (get-visible-todos model)))
     (cond
-      ;; Confirm delete with y
+      ;; Confirm delete with y — deletes every marked todo when marks
+      ;; exist, else the cursor todo (cloodoo-woa)
       ((and (characterp key) (char-equal key #\y))
-       (let ((todo (cursor-todo model todos)))
-         (when todo
+       (let ((targets (batch-target-todos model todos))
+             (marked (model-marked-ids model)))
+         (dolist (todo targets)
            ;; Mark item as deleted instead of removing
            (setf (todo-status todo) :deleted)
            (setf (todo-completed-at todo) (lt:now))
            (commit-todo-edit model todo)
-           (clamp-cursor model)))
+           (remhash (todo-id todo) marked))
+         (clamp-cursor model)
+         (when targets
+           (setf (model-status-message model)
+                 (format nil "Deleted ~D item~:P" (length targets)))))
        (setf (model-view-state model) :list)
        (values model nil))
 
@@ -1983,6 +2090,18 @@
            (let ((urls (get-todo-urls todo)))
              (when urls
                (open-url (first urls))))))
+       (values model nil))
+
+      ;; Yank URL to clipboard with 'y' via OSC 52 (cloodoo-jmo)
+      ((and (characterp key) (char= key #\y))
+       (let ((todo (cursor-todo model todos)))
+         (when todo
+           (let ((urls (get-todo-urls todo)))
+             (if urls
+                 (progn
+                   (tui:set-clipboard (first urls))
+                   (setf (model-status-message model) "URL copied to clipboard"))
+                 (setf (model-status-message model) "No URL to copy")))))
        (values model nil))
 
       ;; Open photo/attachment with 'p'
@@ -2443,6 +2562,7 @@
     ((:add :edit) (handle-add-edit-keys model msg))
     (:search (handle-search-keys model msg))
     (:defer (handle-defer-keys model msg))
+    (:trash (handle-trash-keys model msg))
     (:inline-tags (handle-inline-tags-keys model msg))
     (:import (handle-import-keys model msg))
     (:delete-confirm (handle-delete-confirm-keys model msg))

@@ -1063,6 +1063,50 @@
             (tuition:update-message model click)
             (is (= 1 (cloodoo::model-cursor model)))))))))
 
+;;── Trash & Batch Marks ────────────────────────────────────────────────────────
+
+(test trash-restore-test
+  "Soft-deleted todos appear in the trash and restore to :pending
+   (cloodoo-4d8)."
+  (with-test-db
+    (let ((model (make-instance 'cloodoo::app-model))
+          (todo (cloodoo:make-todo "Doomed")))
+      (cloodoo::save-todo todo)
+      (push todo (cloodoo::model-todos model))
+      (setf (cloodoo:todo-status todo) :deleted
+            (cloodoo::todo-completed-at todo) (local-time:now))
+      (cloodoo::save-todo todo)
+      (let ((trashed (cloodoo::trashed-todos model)))
+        (is (= 1 (length trashed)))
+        (let ((restored (first trashed)))
+          (setf (cloodoo:todo-status restored) cloodoo:+status-pending+
+                (cloodoo::todo-completed-at restored) nil)
+          (cloodoo::commit-todo-edit model restored)
+          (is (zerop (length (cloodoo::trashed-todos model))))
+          (is (eq :pending (cloodoo:todo-status restored))))))))
+
+(test batch-target-todos-test
+  "Batch operations target the marked todos when marks exist, else the
+   cursor todo (cloodoo-woa)."
+  (with-test-db
+    (let ((model (make-instance 'cloodoo::app-model))
+          (a (cloodoo:make-todo "A"))
+          (b (cloodoo:make-todo "B"))
+          (c (cloodoo:make-todo "C")))
+      (dolist (todo (list a b c))
+        (cloodoo::save-todo todo)
+        (push todo (cloodoo::model-todos model)))
+      (cloodoo::invalidate-visible-todos-cache model)
+      ;; No marks: the cursor todo
+      (is (= 1 (length (cloodoo::batch-target-todos model))))
+      ;; Marks win over the cursor
+      (setf (gethash (cloodoo:todo-id a) (cloodoo::model-marked-ids model)) t
+            (gethash (cloodoo:todo-id c) (cloodoo::model-marked-ids model)) t)
+      (let ((targets (cloodoo::batch-target-todos model)))
+        (is (= 2 (length targets)))
+        (is (member "A" targets :key (function cloodoo:todo-title) :test (function string=)))
+        (is (member "C" targets :key (function cloodoo:todo-title) :test (function string=)))))))
+
 ;;── Run Tests ──────────────────────────────────────────────────────────────────
 
 (defun run-tests ()

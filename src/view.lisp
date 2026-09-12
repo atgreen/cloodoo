@@ -261,7 +261,10 @@
                   (format c "~%")
                   (let* ((selected-p (and (not (model-sidebar-focused model))
                                           (= current-idx (model-cursor model))))
-                         (indent "  ")
+                         ;; Marked-for-batch rows get a * gutter (cloodoo-woa)
+                         (indent (if (gethash (todo-id todo) (model-marked-ids model))
+                                     "* "
+                                     "  "))
                          (tags-str (org-tags-string (todo-tags todo))))
                     ;; Build line differently based on selection state
                     (if selected-p
@@ -566,14 +569,19 @@
                                                      content-width :indent 2 :continuation-indent 4))))))
 
                        ;; URL (wrapped); zone-marked so clicks open THIS url
-                       ;; rather than a y>=8 guess (cloodoo-owf)
+                       ;; (cloodoo-owf) and OSC 8 hyperlinked so supporting
+                       ;; terminals make it natively clickable (cloodoo-jmo)
                        (when (todo-url todo)
                          (format s "~%~%~A~%  ~A"
                                  (tui:bold (tui:colored "Link:" :fg (theme-fg :cyan)))
                                  (tui:zone-mark
                                   (url-zone-id (todo-url todo))
-                                  (tui:wrap-text (tui:colored (todo-url todo) :fg (theme-fg :blue))
-                                                 content-width :indent 2 :continuation-indent 4))))
+                                  (tui:wrap-text
+                                   (tui:render-styled
+                                    (tui:make-style :foreground (theme-fg :blue)
+                                                    :hyperlink (todo-url todo))
+                                    (todo-url todo))
+                                   content-width :indent 2 :continuation-indent 4))))
 
                        ;; Attachments
                        (when (todo-attachment-hashes todo)
@@ -602,7 +610,7 @@
 
                        ;; Help line at bottom
                        (format s "~%~%~A"
-                               (tui:colored "q:back  e:edit │ s:sched  d:deadline │ n:notes  o:url  p:photo"
+                               (tui:colored "q:back  e:edit │ s:sched  d:deadline │ n:notes  o:url  y:yank  p:photo"
                                            :fg (theme-fg :bright-black)))))
                    (modal (render-box-with-title "ITEM DETAILS" content :min-width modal-width)))
               (overlay-modal modal background))))
@@ -778,25 +786,78 @@
     (overlay-modal modal background)))
 
 (defun render-delete-confirm-view (model)
-  "Render the delete confirmation dialog as an overlay."
+  "Render the delete confirmation dialog as an overlay.  With batch marks
+   active it confirms deleting all of them (cloodoo-woa)."
   (let* ((term-width (model-term-width model))
          (todos (get-visible-todos model))
+         (marked-count (hash-table-count (model-marked-ids model)))
          (todo (when (< (model-cursor model) (length todos))
                  (nth (model-cursor model) todos)))
          (background (render-list-view model))
          (max-width (max 20 (- term-width 2)))
          (modal-width (min 50 max-width))
-         (content (if todo
-                      (with-output-to-string (c)
-                        (format c "~A~%~%"
-                                (tui:bold "Delete this item?"))
-                        (format c "~A~%~%"
-                                (sanitize-title-for-display (todo-title todo)))
-                        (format c "~A"
-                                (tui:colored "y:confirm  any other key:cancel"
-                                            :fg (theme-fg :bright-black))))
-                      "No item selected"))
+         (content (cond
+                    ((plusp marked-count)
+                     (with-output-to-string (c)
+                       (format c "~A~%~%"
+                               (tui:bold (format nil "Delete ~D marked item~:P?"
+                                                 marked-count)))
+                       (format c "~A"
+                               (tui:colored "y:confirm  any other key:cancel"
+                                           :fg (theme-fg :bright-black)))))
+                    (todo
+                     (with-output-to-string (c)
+                       (format c "~A~%~%"
+                               (tui:bold "Delete this item?"))
+                       (format c "~A~%~%"
+                               (sanitize-title-for-display (todo-title todo)))
+                       (format c "~A"
+                               (tui:colored "y:confirm  any other key:cancel"
+                                           :fg (theme-fg :bright-black)))))
+                    (t "No item selected")))
          (modal (render-box-with-title "DELETE ITEM" content :min-width modal-width)))
+    (overlay-modal modal background)))
+
+(defun render-trash-view (model)
+  "Render the trash as a modal overlay: soft-deleted todos, restorable
+   with Enter/r (cloodoo-4d8)."
+  (let* ((background (render-list-view model))
+         (term-width (model-term-width model))
+         (term-height (model-term-height model))
+         (trashed (trashed-todos model))
+         (cursor (model-trash-cursor model))
+         (modal-width (min 60 (max 40 (- term-width 10))))
+         (content-width (- modal-width 6))
+         (max-visible (max 5 (- term-height 10)))
+         (content
+           (with-output-to-string (c)
+             (if (null trashed)
+                 (format c "~A"
+                         (tui:colored "Trash is empty." :fg (theme-fg :bright-black)))
+                 (loop for todo in trashed
+                       for idx from 0
+                       while (< idx max-visible)
+                       do (let* ((title (sanitize-title-for-display (todo-title todo)))
+                                 (deleted-at (todo-completed-at todo))
+                                 (when-str (if deleted-at
+                                               (lt:format-timestring
+                                                nil deleted-at
+                                                :format '(:short-month " " :day))
+                                               ""))
+                                 (line (fit-visible-to-width
+                                        (format nil "~A  ~A"
+                                                (pad-to-width when-str 7)
+                                                title)
+                                        content-width)))
+                            (if (= idx cursor)
+                                (format c "~A~%"
+                                        (tui:colored line :bg (theme-bg :cyan)
+                                                          :fg (theme-fg :black)))
+                                (format c "~A~%" (struck line))))))
+             (format c "~%~A"
+                     (tui:colored "jk:nav  Enter/r:restore  Esc:back"
+                                 :fg (theme-fg :bright-black)))))
+         (modal (render-box-with-title "TRASH" content :min-width modal-width)))
     (overlay-modal modal background)))
 
 (defun render-delete-done-confirm-view (model)
@@ -952,14 +1013,14 @@
          (col3 (render-help-column "SIDEBAR"
                 '(("l" . "Toggle sidebar")
                   ("Tab" . "Focus sidebar")
-                  ("" . "When focused:")
                   ("j/k" . "Navigate tags")
                   ("Space" . "Toggle tag")
                   ("a" . "Select all")
                   ("Esc" . "Return to list")
                   ("" . "")
-                  ("" . "")
-                  ("" . "")
+                  ("" . "Batch & trash:")
+                  ("m/M" . "Mark/clear marks")
+                  ("x" . "Trash view")
                   ("" . ""))))
          (col4 (render-help-column "OTHER"
                 '(("W" . "Lists view")
@@ -1433,6 +1494,7 @@
      (:search (render-search-view model))
      (:import (render-import-view model))
      (:delete-confirm (render-delete-confirm-view model))
+     (:trash (render-trash-view model))
      (:delete-done-confirm (render-delete-done-confirm-view model))
      (:delete-tag-confirm (render-delete-tag-confirm-view model))
      ((:edit-date :list-set-date) (render-date-picker-overlay model))
