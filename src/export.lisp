@@ -8,20 +8,49 @@
 
 ;;── Date Utilities for Export ────────────────────────────────────────────────
 
-(defun format-week-range (timestamp)
-  "Format week number range for the given timestamp (e.g., 'W03-W04')."
+(defun leap-year-p (year)
+  "True for Gregorian leap years (mod-4 alone is wrong for 1900, 2100...)."
+  (and (zerop (mod year 4))
+       (or (plusp (mod year 100)) (zerop (mod year 400)))))
+
+(defun day-of-year (year month day)
+  "Ordinal day of the year for the given date, 1-based."
+  (+ day (loop for m from 1 below month
+               sum (case m
+                     ((1 3 5 7 8 10 12) 31)
+                     ((4 6 9 11) 30)
+                     (2 (if (leap-year-p year) 29 28))))))
+
+(defun iso-weeks-in-year (year)
+  "Number of ISO 8601 weeks in YEAR: 53 iff Jan 1 falls on Thursday, or on
+   Wednesday in a leap year; else 52."
+  (let ((jan1-dow (lt:timestamp-day-of-week
+                   (lt:encode-timestamp 0 0 0 0 1 1 year))))
+    (if (or (= jan1-dow 4)
+            (and (leap-year-p year) (= jan1-dow 3)))
+        53
+        52)))
+
+(defun iso-week-number (timestamp)
+  "ISO 8601 week number for TIMESTAMP's calendar date (cloodoo-t39).
+   Weeks start Monday; week 1 is the week containing the year's first
+   Thursday, so early January can be week 52/53 of the previous year."
   (let* ((year (lt:timestamp-year timestamp))
-         (month (lt:timestamp-month timestamp))
-         (day (lt:timestamp-day timestamp))
-         ;; Calculate ISO week number
-         (day-of-year (+ day
-                        (loop for m from 1 below month
-                              sum (case m
-                                    ((1 3 5 7 8 10 12) 31)
-                                    ((4 6 9 11) 30)
-                                    (2 (if (zerop (mod year 4)) 29 28))))))
-         (week-num (ceiling day-of-year 7)))
-    (format nil "W~2,'0D-W~2,'0D" week-num (1+ week-num))))
+         (doy (day-of-year year
+                           (lt:timestamp-month timestamp)
+                           (lt:timestamp-day timestamp)))
+         (dow (lt:timestamp-day-of-week timestamp))
+         (iso-dow (if (zerop dow) 7 dow))     ; Monday=1 .. Sunday=7
+         (week (floor (+ (- doy iso-dow) 10) 7)))
+    (cond ((< week 1) (iso-weeks-in-year (1- year)))
+          ((> week (iso-weeks-in-year year)) 1)
+          (t week))))
+
+(defun format-week-range (timestamp)
+  "Format ISO week number range for the given timestamp (e.g., 'W03-W04')."
+  (format nil "W~2,'0D-W~2,'0D"
+          (iso-week-number timestamp)
+          (iso-week-number (lt:timestamp+ timestamp 7 :day))))
 
 (defun days-until (timestamp)
   "Return number of days from today until TIMESTAMP. Negative if overdue."
@@ -217,7 +246,8 @@
 (defun text-to-pdf-wkhtmltopdf (text-file pdf-file)
   "Convert text file to PDF using wkhtmltopdf."
   ;; First convert to HTML with proper formatting
-  (let ((html-file (format nil "~A.html" (pathname-name text-file))))
+  ;; Keep intermediates next to the input, not in the CWD (cloodoo-t39)
+  (let ((html-file (namestring (make-pathname :type "html" :defaults (pathname text-file)))))
     (with-open-file (in text-file :direction :input)
       (with-open-file (out html-file :direction :output :if-exists :supersede)
         (format out "<!DOCTYPE html>~%<html><head>~%")
@@ -250,7 +280,8 @@
 
 (defun text-to-pdf-enscript (text-file pdf-file)
   "Convert text file to PDF using enscript and ps2pdf."
-  (let ((ps-file (format nil "~A.ps" (pathname-name text-file))))
+  ;; Keep intermediates next to the input, not in the CWD (cloodoo-t39)
+  (let ((ps-file (namestring (make-pathname :type "ps" :defaults (pathname text-file)))))
     ;; Convert to PostScript
     (uiop:run-program (list "enscript" "-B" "-p" ps-file (namestring text-file)))
     ;; Convert PostScript to PDF
@@ -273,7 +304,8 @@
       (return-from export-todos-pdf nil))
 
     ;; First export to text
-    (let ((text-file (format nil "~A.txt" (pathname-name output-file))))
+    ;; Intermediate text goes next to the output file, not the CWD (cloodoo-t39)
+    (let ((text-file (namestring (make-pathname :type "txt" :defaults (pathname output-file)))))
       (with-open-file (stream text-file :direction :output :if-exists :supersede)
         (export-todos-text todos :stream stream :title title :by-tag by-tag))
 

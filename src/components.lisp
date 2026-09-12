@@ -31,6 +31,15 @@
                          (lt:timestamp-year now)
                          :timezone lt:*default-timezone*)))
 
+(defvar *week-start* :sunday
+  "First day of the week for date grouping: :sunday or :monday (cloodoo-022).
+   Set the 'week-start' setting to \"monday\" to change it.")
+
+(defun load-week-start-setting ()
+  "Load the persisted week-start preference into *week-start*."
+  (let ((s (ignore-errors (db-load-setting "week-start"))))
+    (setf *week-start* (if (and s (string-equal s "monday")) :monday :sunday))))
+
 ;;; Date categorization for grouping
 (defun categorize-by-date (todo)
   "Categorize a TODO by its scheduled date and due date.
@@ -45,11 +54,14 @@
         (completed-at (todo-completed-at todo)))
     (let* ((today (local-today))
            (tomorrow (lt:timestamp+ today 1 :day))
-           ;; Calculate end of current calendar week (Sunday)
+           ;; End of the current calendar week (exclusive bound), honoring
+           ;; the configured week start (cloodoo-022).
            ;; day-of-week: 0=Sunday, 1=Monday, ..., 6=Saturday
            (day-of-week (lt:timestamp-day-of-week today))
-           (days-to-sunday (if (zerop day-of-week) 0 (- 7 day-of-week)))
-           (week-end (lt:timestamp+ today days-to-sunday :day)))
+           (days-to-week-end (if (eql *week-start* :monday)
+                                 (if (zerop day-of-week) 1 (- 8 day-of-week))
+                                 (if (zerop day-of-week) 0 (- 7 day-of-week))))
+           (week-end (lt:timestamp+ today days-to-week-end :day)))
       ;; Deleted items are never shown
       (when (eql status :deleted)
         (return-from categorize-by-date nil))

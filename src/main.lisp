@@ -105,6 +105,7 @@
     (setup-thread-dump-signal))
   ;; Activate the saved colour theme for TUI and CLI output alike
   (load-theme-setting)
+  (load-week-start-setting)
   (handler-bind ((error (lambda (e)
                           (format *error-output* "~%Error: ~A~%~%" e)
                           #+sbcl (sb-debug:print-backtrace :stream *error-output* :count 20)
