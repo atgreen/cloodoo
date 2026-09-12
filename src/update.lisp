@@ -1112,7 +1112,7 @@
          (setf (model-view-state model) :detail))
        (values model nil))
 
-      ;; Add new TODO (sibling at current level)
+      ;; Add new TODO
       ((and (characterp key) (char= key #\a))
        (llog:info "Add TODO triggered" :key key)
        (setf (model-view-state model) :add)
@@ -1424,7 +1424,6 @@
       ((eql key :backtab)
        (case (model-active-field model)
          (:title
-          ;; Skip tags for child tasks (they inherit from parent)
           (tui.textinput:textinput-blur (model-title-input model))
           (setf (model-active-field model) :tags)
           (tui.textinput:textinput-focus (model-tags-input model))

@@ -234,7 +234,7 @@
                     (group-todos (rest group)))
                 (unless first-line (format c "~%"))
                 (setf first-line nil)
-                ;; Render pager-style section header (multi-line)
+                ;; Single-line group header: ─┤ LABEL ├───
                 (format c "~A" (render-category-header category list-width))
                 (dolist (todo group-todos)
                   (format c "~%")
