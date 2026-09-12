@@ -987,6 +987,29 @@
     (is (search "My Agenda (W" output))
     (is (search "Total: 0  Completed: 0  Overdue: 0" output))))
 
+;;── Natural-Language Title Dates ───────────────────────────────────────────────
+
+(test extract-title-date-test
+  "Trailing date words schedule quick captures offline (cloodoo-zig)."
+  ;; Trailing day name is extracted
+  (multiple-value-bind (title date) (cloodoo::extract-title-date "renew passport friday")
+    (is (string= "renew passport" title))
+    (is (not (null date)))
+    (is (= 5 (local-time:timestamp-day-of-week date))))
+  ;; Tomorrow
+  (multiple-value-bind (title date) (cloodoo::extract-title-date "pay rent tomorrow")
+    (is (string= "pay rent" title))
+    (is (local-time:timestamp= date
+                               (local-time:timestamp+ (cloodoo::local-today) 1 :day))))
+  ;; A bare date word is a title, not a date
+  (multiple-value-bind (title date) (cloodoo::extract-title-date "friday")
+    (is (string= "friday" title))
+    (is (null date)))
+  ;; No date word: unchanged
+  (multiple-value-bind (title date) (cloodoo::extract-title-date "buy milk")
+    (is (string= "buy milk" title))
+    (is (null date))))
+
 ;;── Run Tests ──────────────────────────────────────────────────────────────────
 
 (defun run-tests ()

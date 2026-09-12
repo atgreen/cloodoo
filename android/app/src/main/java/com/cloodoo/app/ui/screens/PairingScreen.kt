@@ -31,6 +31,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import com.cloodoo.app.data.security.CertificateManager
+import com.cloodoo.app.ui.util.pairingPassphraseProof
 import com.google.mlkit.vision.barcode.BarcodeScanning
 import com.google.mlkit.vision.barcode.common.Barcode
 import com.google.mlkit.vision.common.InputImage
@@ -403,6 +404,36 @@ private fun decryptPayload(
     return String(plaintext, Charsets.UTF_8)
 }
 
+private class PairingHttpResponse(val code: Int, val body: String?)
+
+/**
+ * POST a JSON body to the pairing PEM endpoint and read the response.
+ * Returns the response code and body (error body for non-200 responses).
+ */
+private fun postPairingJson(pemUrl: java.net.URL, jsonBody: String): PairingHttpResponse {
+    val connection = pemUrl.openConnection() as java.net.HttpURLConnection
+    try {
+        connection.requestMethod = "POST"
+        connection.connectTimeout = 10000
+        connection.readTimeout = 10000
+        connection.doInput = true
+        connection.doOutput = true
+        connection.setRequestProperty("Content-Type", "application/json")
+        connection.outputStream.use { os ->
+            os.write(jsonBody.toByteArray())
+        }
+        val code = connection.responseCode
+        val body = if (code == 200) {
+            connection.inputStream.bufferedReader().readText()
+        } else {
+            connection.errorStream?.bufferedReader()?.readText()
+        }
+        return PairingHttpResponse(code, body)
+    } finally {
+        connection.disconnect()
+    }
+}
+
 /**
  * Download the certificate from the pairing URL using the PEM endpoint.
  * The response is encrypted with AES-256-GCM using a key derived from the passphrase.
@@ -419,38 +450,34 @@ private suspend fun downloadCertificate(
             val pemUrl = java.net.URL("$url/pem")
             Log.d("PairingScreen", "Connecting to $pemUrl")
 
-            val connection = pemUrl.openConnection() as java.net.HttpURLConnection
-            connection.requestMethod = "POST"
-            connection.connectTimeout = 10000
-            connection.readTimeout = 10000
-            connection.doInput = true
-            connection.doOutput = true
-            connection.setRequestProperty("Content-Type", "application/json")
-
-            val jsonBody = org.json.JSONObject().apply {
-                put("passphrase", passphrase)
+            // Send a hashed proof of the passphrase instead of the passphrase
+            // itself, so pairing over plain HTTP doesn't hand an eavesdropper
+            // the bundle decryption secret. Older servers only understand the
+            // raw passphrase, so retry once with the legacy body on 403.
+            val proofBody = org.json.JSONObject().apply {
+                put("passphrase_proof", pairingPassphraseProof(passphrase))
             }.toString()
-            connection.outputStream.use { os ->
-                os.write(jsonBody.toByteArray())
-            }
-
             Log.d("PairingScreen", "Sending POST request...")
-            val responseCode = connection.responseCode
-            Log.d("PairingScreen", "Response code: $responseCode")
+            var response = postPairingJson(pemUrl, proofBody)
+            if (response.code == 403) {
+                Log.d("PairingScreen", "Proof rejected (403), retrying with legacy passphrase body")
+                val legacyBody = org.json.JSONObject().apply {
+                    put("passphrase", passphrase)
+                }.toString()
+                response = postPairingJson(pemUrl, legacyBody)
+            }
+            Log.d("PairingScreen", "Response code: ${response.code}")
 
-            if (responseCode != 200) {
-                val errorStream = connection.errorStream?.bufferedReader()?.readText()
-                Log.e("PairingScreen", "Error response: $errorStream")
+            if (response.code != 200) {
+                val errorBody = response.body
+                Log.e("PairingScreen", "Error response: $errorBody")
                 val errorMsg = try {
-                    org.json.JSONObject(errorStream ?: "").optString("error", "Unknown error")
-                } catch (_: Exception) { errorStream ?: "Server returned $responseCode" }
+                    org.json.JSONObject(errorBody ?: "").optString("error", "Unknown error")
+                } catch (_: Exception) { errorBody ?: "Server returned ${response.code}" }
                 return@withContext Result.failure(Exception(errorMsg))
             }
 
-            val responseBody = connection.inputStream.bufferedReader().readText()
-            connection.disconnect()
-
-            val json = org.json.JSONObject(responseBody)
+            val json = org.json.JSONObject(response.body ?: "")
 
             // Response is encrypted: {encrypted: base64, iv: base64, salt: base64}
             val encryptedB64 = json.getString("encrypted")

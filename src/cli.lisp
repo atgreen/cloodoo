@@ -21,103 +21,8 @@
       (error "Invalid status ~S — expected pending, in-progress, completed, ~
               waiting, or cancelled" string)))
 
-(defun parse-due-date (date-string)
-  "Parse a due date string. Supports:
-   - 'today' or 'tod'
-   - 'tomorrow' or 'tom'
-   - 'next week' or 'nextweek'
-   - Day names: 'monday', 'tuesday', etc.
-   - ISO format: 'YYYY-MM-DD'
-   - Short format: 'MM-DD' or 'M/D'"
-  (when (and date-string (> (length date-string) 0))
-    (let ((lower (string-downcase (str:trim date-string))))
-      (cond
-        ;; Today
-        ((or (string= lower "today") (string= lower "tod"))
-         (local-today))
-
-        ;; Tomorrow
-        ((or (string= lower "tomorrow") (string= lower "tom"))
-         (lt:timestamp+ (local-today) 1 :day))
-
-        ;; Next week
-        ((or (string= lower "next week") (string= lower "nextweek"))
-         (lt:timestamp+ (local-today) 7 :day))
-
-        ;; Day names
-        ((member lower '("sunday" "sun") :test #'string=)
-         (next-weekday 0))
-        ((member lower '("monday" "mon") :test #'string=)
-         (next-weekday 1))
-        ((member lower '("tuesday" "tue") :test #'string=)
-         (next-weekday 2))
-        ((member lower '("wednesday" "wed") :test #'string=)
-         (next-weekday 3))
-        ((member lower '("thursday" "thu") :test #'string=)
-         (next-weekday 4))
-        ((member lower '("friday" "fri") :test #'string=)
-         (next-weekday 5))
-        ((member lower '("saturday" "sat") :test #'string=)
-         (next-weekday 6))
-
-        ;; ISO format YYYY-MM-DD
-        ((and (= (length lower) 10)
-              (char= (char lower 4) #\-)
-              (char= (char lower 7) #\-))
-         (handler-case
-             (lt:parse-timestring date-string)
-           (error () nil)))
-
-        ;; Try various date formats
-        (t
-         (handler-case
-             (parse-flexible-date date-string)
-           (error () nil)))))))
-
-(defun next-weekday (target-day)
-  "Return the next occurrence of TARGET-DAY (0=Sunday, 1=Monday, etc.)."
-  (let* ((today (local-today))
-         (current-day (lt:timestamp-day-of-week today))
-         (days-ahead (mod (- target-day current-day) 7)))
-    ;; If it's the same day, go to next week
-    (when (zerop days-ahead)
-      (setf days-ahead 7))
-    (lt:timestamp+ today days-ahead :day)))
-
-(defun parse-flexible-date (date-string)
-  "Try to parse various date formats."
-  (let* ((parts (or (str:split #\- date-string)
-                    (str:split #\/ date-string)))
-         (now (lt:now)))
-    (cond
-      ;; MM-DD or M/D format
-      ((= (length parts) 2)
-       (let ((month (parse-integer (first parts) :junk-allowed t))
-             (day (parse-integer (second parts) :junk-allowed t)))
-         (when (and month day
-                    (>= month 1) (<= month 12)
-                    (>= day 1) (<= day 31))
-           (let ((year (lt:timestamp-year now)))
-             ;; If the date has passed this year, use next year
-             (let ((result (lt:encode-timestamp 0 0 0 0 day month year)))
-               (if (lt:timestamp< result now)
-                   (lt:encode-timestamp 0 0 0 0 day month (1+ year))
-                   result))))))
-
-      ;; MM-DD-YYYY or M/D/YYYY format
-      ((= (length parts) 3)
-       (let ((month (parse-integer (first parts) :junk-allowed t))
-             (day (parse-integer (second parts) :junk-allowed t))
-             (year (parse-integer (third parts) :junk-allowed t)))
-         (when (and month day year
-                    (>= month 1) (<= month 12)
-                    (>= day 1) (<= day 31))
-           ;; Handle 2-digit years
-           (when (< year 100)
-             (incf year 2000))
-           (lt:encode-timestamp 0 0 0 0 day month year))))
-
-      (t nil))))
+;;; parse-due-date / next-weekday / parse-flexible-date moved to
+;;; components.lisp so the TUI can use them too (cloodoo-zig).
 
 ;;── CLI Commands using clingon ─────────────────────────────────────────────────
 
@@ -174,9 +79,20 @@
                       (note (clingon:getopt cmd :note))
                       (attachment-path (clingon:getopt cmd :attachment)))
                   (if args
-                      (let* ((title (format nil "~{~A~^ ~}" args))
+                      (let* ((raw-title (format nil "~{~A~^ ~}" args))
                              (due-date (when due (parse-due-date due)))
-                             (scheduled-date (when schedule (parse-due-date schedule)))
+                             (explicit-scheduled (when schedule (parse-due-date schedule)))
+                             ;; 'cloodoo add renew passport friday' schedules
+                             ;; itself unless dates were given (cloodoo-zig)
+                             (title raw-title)
+                             (scheduled-date explicit-scheduled))
+                        (unless (or schedule due)
+                          (multiple-value-bind (clean-title title-date)
+                              (extract-title-date raw-title)
+                            (when title-date
+                              (setf title clean-title
+                                    scheduled-date title-date))))
+                        (let* (
                              (todo (progn
                                      ;; Warn on dates that silently parsed to
                                      ;; nothing instead of saving without them
@@ -223,7 +139,7 @@
                           (error (e)
                             (declare (ignore e))
                             (format t "  ~A Could not sync to server~%"
-                                    (tui:colored "⚠" :fg (theme-fg :yellow))))))
+                                    (tui:colored "⚠" :fg (theme-fg :yellow)))))))
                       (format t "Error: Please provide a title for the TODO~%")))))))
 
 (defun make-list-command ()

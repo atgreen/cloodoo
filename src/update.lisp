@@ -1324,6 +1324,14 @@
                    "Nothing to redo")))
        (values model nil))
 
+      ;; Defer/snooze (>) then one key picks the new date (cloodoo-d5g)
+      ((and (characterp key) (char= key #\>))
+       (when (cursor-todo model todos)
+         (setf (model-view-state model) :defer)
+         (setf (model-status-message model)
+               "Defer to: t:tomorrow  w:weekend  n:next week  m:next month  (any other key cancels)"))
+       (values model nil))
+
       ;; Cycle colour theme (T)
       ((and (characterp key) (char= key #\T))
        (let ((theme (cycle-theme)))
@@ -1588,14 +1596,21 @@
                  (setf (model-view-state model) (model-edit-return-view model))
                  (return-from handle-add-edit-keys (values model nil)))
                ;; Create new TODO with async LLM enrichment
+               (multiple-value-bind (clean-title title-date)
+                   ;; A trailing date word in the title schedules the todo
+                   ;; offline unless a date was set explicitly (cloodoo-zig)
+                   (if (model-edit-scheduled-date model)
+                       (values title nil)
+                       (extract-title-date title))
                (let* ((desc-input (tui.textinput:textinput-value (model-description-input model)))
                       (desc-value (when (> (length desc-input) 0) desc-input))
                       (tags (reverse (model-edit-tags model)))
                       ;; Create todo immediately with raw data, mark as enriching
-                      (new-todo (make-todo title
+                      (new-todo (make-todo clean-title
                                           :description desc-value
                                           :priority (model-edit-priority model)
-                                          :scheduled-date (model-edit-scheduled-date model)
+                                          :scheduled-date (or (model-edit-scheduled-date model)
+                                                              title-date)
                                           :due-date (model-edit-due-date model)
                                           :repeat-interval (model-edit-repeat-interval model)
                                           :repeat-unit (model-edit-repeat-unit model))))
@@ -1630,7 +1645,7 @@
                                                                title
                                                                desc-input)
                                           (make-spinner-start-cmd
-                                           (model-enrichment-spinner model)))))))))))
+                                           (model-enrichment-spinner model))))))))))))
        (values model nil))
 
       ;; Pass key to active text input
@@ -1641,6 +1656,36 @@
        (values model nil)))))
 
 ;;── Search View Key Handling ───────────────────────────────────────────────────
+
+(defun handle-defer-keys (model msg)
+  "One-key defer for the todo under the cursor, entered with '>':
+   t=tomorrow, w=weekend (next Saturday), n=next week (next Monday),
+   m=next month.  Any other key cancels (cloodoo-d5g)."
+  (let* ((key (tui:key-event-code msg))
+         (todo (cursor-todo model))
+         (today (local-today))
+         (dow (lt:timestamp-day-of-week today))  ; 0=Sunday .. 6=Saturday
+         (target (and (characterp key) todo
+                      (flet ((days-to (target-dow)
+                               (let ((d (mod (- target-dow dow) 7)))
+                                 (if (zerop d) 7 d))))
+                        (case (char-downcase key)
+                          (#\t (lt:timestamp+ today 1 :day))
+                          (#\w (lt:timestamp+ today (days-to 6) :day))
+                          (#\n (lt:timestamp+ today (days-to 1) :day))
+                          (#\m (lt:timestamp+ today 1 :month))
+                          (otherwise nil))))))
+    (setf (model-view-state model) :list)
+    (cond (target
+           (setf (todo-scheduled-date todo) target)
+           (commit-todo-edit model todo)
+           (setf (model-status-message model)
+                 (format nil "Deferred to ~A"
+                         (lt:format-timestring nil target
+                                               :format '(:short-weekday " " :short-month " " :day)))))
+          (t
+           (setf (model-status-message model) nil)))
+    (values model nil)))
 
 (defun handle-search-keys (model msg)
   "Handle keyboard input in search view."
@@ -1940,35 +1985,38 @@
 
 ;;── List Date Modal Key Handling ───────────────────────────────────────────────
 
-(defun handle-date-keys-from-list (model msg)
-  "Handle keyboard input in list view date modal."
+(defun handle-todo-date-picker-keys (model msg return-view)
+  "Shared handler for the datepicker modal that edits the cursor todo's
+   scheduled or due date.  RETURN-VIEW is where closing the modal lands:
+   :list when opened from the list view, :detail from the detail view.
+   Was two byte-identical handlers that had already drifted once
+   (cloodoo-j8y)."
   (let ((key (tui:key-event-code msg))
         (ctrl (tui:mod-contains (tui:key-event-mod msg) tui:+mod-ctrl+))
         (todos (get-visible-todos model))
         (picker (model-date-picker model)))
     (cond
-      ;; Cancel with Escape or Ctrl+C - go back to list view
+      ;; Cancel with Escape or Ctrl+C
       ((or (eql key :escape)
            (and ctrl (characterp key) (char= key #\c)))
-       (setf (model-view-state model) :list)
+       (setf (model-view-state model) return-view)
        (values model nil))
 
-      ;; Confirm with Enter - save the current cursor date and go back to list
+      ;; Confirm with Enter - save the cursor date (datepicker-time, not
+      ;; selection) and go back
       ((eql key :enter)
        (let ((todo (cursor-todo model todos)))
          (when todo
-           ;; Use cursor position (datepicker-time), not selection
            (let* ((current-date (tui.datepicker:datepicker-time picker))
                   (timestamp (when current-date
                                (lt:universal-to-timestamp current-date))))
-             ;; Save the date based on which type we're editing
              (case (model-editing-date-type model)
                (:scheduled
                 (setf (todo-scheduled-date todo) timestamp))
                (:deadline
                 (setf (todo-due-date todo) timestamp)))
              (commit-todo-edit model todo))))
-       (setf (model-view-state model) :list)
+       (setf (model-view-state model) return-view)
        (values model nil))
 
       ;; Clear date with Backspace or Delete
@@ -1981,59 +2029,7 @@
              (:deadline
               (setf (todo-due-date todo) nil)))
            (commit-todo-edit model todo)))
-       (setf (model-view-state model) :list)
-       (values model nil))
-
-      ;; Pass other keys to datepicker
-      (t
-       (multiple-value-bind (new-picker cmd)
-           (tui.datepicker:datepicker-update picker msg)
-         (setf (model-date-picker model) new-picker)
-         (values model cmd))))))
-
-;;── Date Edit View Key Handling ────────────────────────────────────────────────
-
-(defun handle-date-keys-from-detail (model msg)
-  "Handle keyboard input in date editing view."
-  (let ((key (tui:key-event-code msg))
-        (ctrl (tui:mod-contains (tui:key-event-mod msg) tui:+mod-ctrl+))
-        (todos (get-visible-todos model))
-        (picker (model-date-picker model)))
-    (cond
-      ;; Cancel with Escape or Ctrl+C - go back to detail view
-      ((or (eql key :escape)
-           (and ctrl (characterp key) (char= key #\c)))
-       (setf (model-view-state model) :detail)
-       (values model nil))
-
-      ;; Confirm with Enter - save the cursor date and go back
-      ((eql key :enter)
-       (let ((todo (cursor-todo model todos)))
-         (when todo
-           (let* ((current-date (tui.datepicker:datepicker-time picker))
-                  (timestamp (when current-date
-                               (lt:universal-to-timestamp current-date))))
-             ;; Save the date based on which type we're editing
-             (case (model-editing-date-type model)
-               (:scheduled
-                (setf (todo-scheduled-date todo) timestamp))
-               (:deadline
-                (setf (todo-due-date todo) timestamp)))
-             (commit-todo-edit model todo))))
-       (setf (model-view-state model) :detail)
-       (values model nil))
-
-      ;; Clear date with Backspace or Delete
-      ((or (eql key :backspace) (eql key :delete))
-       (let ((todo (cursor-todo model todos)))
-         (when todo
-           (case (model-editing-date-type model)
-             (:scheduled
-              (setf (todo-scheduled-date todo) nil))
-             (:deadline
-              (setf (todo-due-date todo) nil)))
-           (commit-todo-edit model todo)))
-       (setf (model-view-state model) :detail)
+       (setf (model-view-state model) return-view)
        (values model nil))
 
       ;; Pass other keys to datepicker
@@ -2423,14 +2419,15 @@
     (:list (handle-list-keys model msg))
     ((:add :edit) (handle-add-edit-keys model msg))
     (:search (handle-search-keys model msg))
+    (:defer (handle-defer-keys model msg))
     (:inline-tags (handle-inline-tags-keys model msg))
     (:import (handle-import-keys model msg))
     (:delete-confirm (handle-delete-confirm-keys model msg))
     (:delete-done-confirm (handle-delete-done-confirm-keys model msg))
     (:delete-tag-confirm (handle-delete-tag-confirm-keys model msg))
     (:detail (handle-detail-keys model msg))
-    (:edit-date (handle-date-keys-from-detail model msg))
-    (:list-set-date (handle-date-keys-from-list model msg))
+    (:edit-date (handle-todo-date-picker-keys model msg :detail))
+    (:list-set-date (handle-todo-date-picker-keys model msg :list))
     ((:add-scheduled-date :add-due-date) (handle-date-keys-from-form model msg))
     (:help (handle-help-keys model msg))
     (:lists-overview (handle-lists-overview-keys model msg))

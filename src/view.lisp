@@ -909,7 +909,7 @@
                   ("&" . "Re-enrich")
                   ("T" . "Cycle theme")
                   ("z/Z" . "Undo/redo")
-                  ("" . ""))))
+                  (">" . "Defer/snooze"))))
          (col3 (render-help-column "SIDEBAR"
                 '(("l" . "Toggle sidebar")
                   ("Tab" . "Focus sidebar")
