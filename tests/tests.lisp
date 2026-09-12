@@ -552,6 +552,24 @@
         (is (not (null restored)))
         (is (eq :pending (cloodoo:todo-status restored)))))))
 
+;;── ID Generation ──────────────────────────────────────────────────────────────
+
+(test generate-id-ignores-random-state-test
+  "IDs must not depend on *random-state*: a dumped image bakes the state, so
+   RANDOM-based ids repeat across process invocations (cloodoo-b1g)."
+  (let* ((state (make-random-state nil))
+         (suffix (lambda (id) (subseq id (1+ (position #\- id :from-end t)))))
+         (id1 (let ((*random-state* (make-random-state state)))
+                (cloodoo::generate-id)))
+         (id2 (let ((*random-state* (make-random-state state)))
+                (cloodoo::generate-id))))
+    (is (string/= (funcall suffix id1) (funcall suffix id2)))))
+
+(test generate-id-unique-burst-test
+  "Rapidly generated IDs are all distinct."
+  (let ((ids (loop repeat 200 collect (cloodoo::generate-id))))
+    (is (= (length ids) (length (remove-duplicates ids :test #'string=))))))
+
 ;;── Run Tests ──────────────────────────────────────────────────────────────────
 
 (defun run-tests ()

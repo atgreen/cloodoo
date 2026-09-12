@@ -6,6 +6,26 @@
 
 (in-package #:cloodoo)
 
+;;── Cryptographically Secure Random ────────────────────────────────────────────
+
+(defun secure-random-bytes (n)
+  "Return N cryptographically random bytes using ironclad's portable CSPRNG."
+  (ironclad:random-data n))
+
+(defun secure-random (limit)
+  "Return a cryptographically random non-negative integer below LIMIT.
+   Applies rejection sampling to avoid modulo bias."
+  (let* ((byte-count (max 1 (ceiling (integer-length limit) 8)))
+         (mask (1- (ash 1 (* byte-count 8)))))
+    (loop
+      (let* ((bytes (secure-random-bytes byte-count))
+             (value (loop for byte across bytes
+                          for shift from 0 by 8
+                          sum (ash byte shift))))
+        (let ((candidate (logand value mask)))
+          (when (< candidate limit)
+            (return candidate)))))))
+
 ;;── Constants ──────────────────────────────────────────────────────────────────
 
 (defconstant +priority-high+ :high)
@@ -124,12 +144,13 @@
   (:documentation "A TODO item."))
 
 (defun generate-id ()
-  "Generate a unique ID with millisecond precision and strong randomness.
-   Uses internal-real-time (millisecond resolution) plus a large random number
-   to minimize collision probability even under rapid concurrent creation."
+  "Generate a unique ID from wall-clock time and CSPRNG randomness.
+   internal-real-time is process-relative and RANDOM's state is baked into a
+   dumped image, so neither is unique across process invocations; universal
+   time plus a cryptographically random suffix is."
   (format nil "~A-~A"
-          (get-internal-real-time)
-          (random 1000000000)))
+          (get-universal-time)
+          (secure-random 1000000000)))
 
 (defun parse-tags (input)
   "Parse tags from INPUT, splitting on whitespace and commas.

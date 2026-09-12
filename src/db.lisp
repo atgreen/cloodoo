@@ -12,26 +12,6 @@
   "Return the path to the SQLite database file."
   (merge-pathnames "cloodoo.db" (data-directory)))
 
-;;── Cryptographically Secure Random ──────────────────────────────────────────
-
-(defun secure-random-bytes (n)
-  "Return N cryptographically random bytes using ironclad's portable CSPRNG."
-  (ironclad:random-data n))
-
-(defun secure-random (limit)
-  "Return a cryptographically random non-negative integer below LIMIT.
-   Uses /dev/urandom. Applies rejection sampling to avoid modulo bias."
-  (let* ((byte-count (max 1 (ceiling (integer-length limit) 8)))
-         (mask (1- (ash 1 (* byte-count 8)))))
-    (loop
-      (let* ((bytes (secure-random-bytes byte-count))
-             (value (loop for byte across bytes
-                          for shift from 0 by 8
-                          sum (ash byte shift))))
-        (let ((candidate (logand value mask)))
-          (when (< candidate limit)
-            (return candidate)))))))
-
 ;;── Device ID Management ─────────────────────────────────────────────────────
 
 (defvar *device-id* nil
