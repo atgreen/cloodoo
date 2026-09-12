@@ -15,55 +15,6 @@
    (str:replace-all (string #\Newline) " "
     (str:replace-all (string #\Return) " " title))))
 
-;;; Priority formatting
-(defun priority-string (priority)
-  "Return priority indicator."
-  (case priority
-    (:high "!!!")
-    (:medium "!! ")
-    (:low "!  ")
-    (otherwise "   ")))
-
-(defun priority-colored (priority)
-  "Return colored priority indicator."
-  (let ((str (priority-string priority)))
-    (case priority
-      (:high (tui:bold (tui:colored str :fg (theme-fg :red))))
-      (:medium (tui:colored str :fg (theme-fg :yellow)))
-      (:low (tui:colored str :fg (theme-fg :green)))
-      (otherwise str))))
-
-;;; Status formatting
-(defun status-char (status)
-  "Return status character."
-  (case status
-    (:completed "✓")
-    (:in-progress "◐")
-    (:pending "○")
-    (:waiting "W")
-    (:cancelled "✗")
-    (:deleted "D")
-    (otherwise " ")))
-
-(defun status-colored (status)
-  "Return colored status character."
-  (let ((ch (status-char status)))
-    (case status
-      (:completed (tui:colored ch :fg (theme-fg :green)))
-      (:in-progress (tui:colored ch :fg (theme-fg :cyan)))
-      (:pending (tui:colored ch :fg (theme-fg :white)))
-      (:waiting (tui:colored ch :fg (theme-fg :yellow)))
-      (:cancelled (tui:colored ch :fg (theme-fg :bright-black)))
-      (:deleted (tui:colored ch :fg (theme-fg :bright-black)))
-      (otherwise ch))))
-
-;;; Tags formatting
-(defun format-tags (tags)
-  "Format tags for display."
-  (if (and tags (> (length tags) 0))
-      (tui:colored (format nil "[~{~A~^,~}]" tags) :fg (theme-fg :magenta))
-      ""))
-
 ;;; Local timezone-aware "today" calculation
 ;;; Note: lt:today returns midnight UTC, which when converted to local time
 ;;; shows the previous day (e.g., 7pm EST on the 18th for midnight UTC on the 19th).
@@ -79,30 +30,6 @@
                          (lt:timestamp-month now)
                          (lt:timestamp-year now)
                          :timezone lt:*default-timezone*)))
-
-;;; Due date formatting
-(defun format-due-date (due-date)
-  "Format due date for display with coloring."
-  (when due-date
-    (let* ((today (local-today))
-           (tomorrow (lt:timestamp+ today 1 :day)))
-      (cond
-        ;; Overdue
-        ((lt:timestamp< due-date today)
-         (tui:bold (tui:colored
-                   (format nil "OVERDUE ~A"
-                          (lt:format-timestring nil due-date :format '(:short-month " " :day)))
-                   :fg (theme-fg :red))))
-        ;; Today
-        ((lt:timestamp< due-date tomorrow)
-         (tui:bold (tui:colored "TODAY" :fg (theme-fg :yellow))))
-        ;; Tomorrow
-        ((lt:timestamp< due-date (lt:timestamp+ tomorrow 1 :day))
-         (tui:colored "Tomorrow" :fg (theme-fg :cyan)))
-        ;; Future
-        (t
-         (tui:colored (lt:format-timestring nil due-date :format '(:short-month " " :day))
-                     :fg (theme-fg :bright-black)))))))
 
 ;;; Date categorization for grouping
 (defun categorize-by-date (todo)
@@ -254,7 +181,6 @@
   "Format schedule/deadline info as plain text (no colors).
    Returns fixed-width string like '262 d. ago: ' or 'Sched.137x: '."
   (let* ((today (local-today))
-         (tomorrow (lt:timestamp+ today 1 :day))
          (today-day (lt:timestamp-day today))
          (today-month (lt:timestamp-month today))
          (today-year (lt:timestamp-year today)))
@@ -322,19 +248,6 @@
         ;; No date info
         (t "            ")))))
 
-(defun render-filter-status (status priority search)
-  "Render the current filter status for display."
-  (let ((parts nil))
-    (when search
-      (push (tui:colored (format nil "Search:~A" search) :fg (theme-fg :cyan)) parts))
-    (when priority
-      (push (tui:colored (format nil "Priority:~A" priority) :fg (theme-fg :yellow)) parts))
-    (when (and status (not (eql status :all)))
-      (push (tui:colored (format nil "Status:~A" status) :fg (theme-fg :green)) parts))
-    (if parts
-        (format nil "[~{~A~^ ~}]" (nreverse parts))
-        "")))
-
 (defun format-due-date-cli (due-date)
   "Format due date for CLI output."
   (when due-date
@@ -350,5 +263,3 @@
         (t
          (tui:colored (lt:format-timestring nil due-date :format '(:short-month " " :day))
                      :fg (theme-fg :bright-black)))))))
-
-;;── Subtask Progress Formatting ───────────────────────────────────────────────

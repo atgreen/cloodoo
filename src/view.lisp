@@ -107,13 +107,6 @@
      :fg (theme-fg :white) :bg (theme-bg :blue))))
 
 
-(defun fit-to-width (text width)
-  "Truncate or pad text to exactly width characters."
-  (let ((safe-width (max 0 width)))
-    (if (> (length text) safe-width)
-        (subseq text 0 safe-width)
-        (format nil "~A~A" text (make-string (- safe-width (length text)) :initial-element #\Space)))))
-
 (defun fit-visible-to-width (text width)
   "Truncate or pad text to exactly width characters using visible length."
   (let* ((safe-width (max 0 width))
@@ -123,20 +116,24 @@
          (pad (max 0 (- safe-width (tui:visible-length trimmed)))))
     (format nil "~A~A" trimmed (make-string pad :initial-element #\Space))))
 
-(defun render-help-line (text width &key (fg (theme-fg :yellow)) bg)
-  "Render a help bar line with truncation and padding."
-  (tui:colored (fit-to-width text width) :fg fg :bg bg))
+(defun render-help-line (text width &key fg)
+  "Render a help bar line truncated or padded to exactly WIDTH characters."
+  (let ((width (max 0 width)))
+    (tui:colored (if (> (length text) width)
+                     (subseq text 0 width)
+                     (format nil "~A~A" text
+                             (make-string (- width (length text)) :initial-element #\Space)))
+                 :fg fg)))
 
 (defun render-scrollbar-lines (viewport height)
   "Render a 1-column scrollbar for a viewport."
-  (let* ((total (tui.viewport:viewport-total-lines viewport))
-         (visible height))
-    (if (<= total visible)
+  (let ((total (tui.viewport:viewport-total-lines viewport)))
+    (if (<= total height)
         (make-list height :initial-element " ")
         (let* ((track "│")
                (thumb "█")
-               (thumb-size (max 1 (floor (* visible (/ (float visible) total)))))
-               (max-top (max 0 (- visible thumb-size)))
+               (thumb-size (max 1 (floor (* height (/ (float height) total)))))
+               (max-top (max 0 (- height thumb-size)))
                (top (if (> max-top 0)
                         (floor (* max-top (tui.viewport:viewport-scroll-percent viewport)))
                         0)))
@@ -202,10 +199,9 @@
 
 (defun render-list-content (model list-width)
   "Render just the list content (without sidebar) for the given width."
-  (let* ((groups (get-visible-todos-grouped model))
-         (todos (loop for (cat . ts) in groups append ts)))
+  (let ((groups (get-visible-todos-grouped model)))
     (with-output-to-string (c)
-      (if (null todos)
+      (if (null groups)
           (let ((welcome (format nil "~A~%~%~A~%~A~%~A"
                                     (tui:bold "Welcome to cloodoo!")
                                     "  Press 'a' to add your first task"
@@ -253,36 +249,30 @@
                                                indent schedule-text status-text priority-text))
                                (prefix-len (tui:visible-length prefix))
                                (tags-len (tui:visible-length tags-str))
-                               (suffix-len tags-len)
                                (avail (max 0 (- list-width prefix-len
-                                                (if (> suffix-len 0) (1+ suffix-len) 0))))
+                                                (if (> tags-len 0) (1+ tags-len) 0))))
                                (title-text (sanitize-title-for-display (todo-title todo)))
                                (trunc-title (tui:truncate-text title-text avail :ellipsis ".."))
                                (base (format nil "~A~A" prefix trunc-title))
                                (base-len (tui:visible-length base))
-                               (suffix (if (> tags-len 0) tags-str ""))
-                               (suffix-actual-len (tui:visible-length suffix))
-                               (pad (max 0 (- list-width base-len suffix-actual-len)))
+                               ;; Pad tags to the right edge; a full-width row
+                               ;; makes the selection highlight span the line
+                               (pad (max 0 (- list-width base-len tags-len)))
                                (line-content (format nil "~A~A~A" base
                                                      (make-string pad :initial-element #\Space)
-                                                     suffix))
-                               ;; Pad to exact width for full-row highlight
-                               (final-len (tui:visible-length line-content))
-                               (final-pad (max 0 (- list-width final-len)))
-                               (padded-line (format nil "~A~A" line-content
-                                                    (make-string final-pad :initial-element #\Space)))
+                                                     tags-str))
                                ;; Use dimmer colors for completed/cancelled items
                                (is-done (member (todo-status todo) '(:completed :cancelled))))
                           (format c "~A"
                                   (if is-done
                                       ;; Dimmed selection for done items — use cyan bg
                                       ;; but with dim foreground to distinguish from active
-                                      (tui:colored padded-line
+                                      (tui:colored line-content
                                                    :bg (theme-bg :cyan)
                                                    :fg (theme-fg :bright-black))
                                       ;; Normal bright selection
                                       (tui:bold
-                                       (tui:colored padded-line
+                                       (tui:colored line-content
                                                     :bg (theme-bg :cyan)
                                                     :fg (theme-fg :black))))))
                         ;; NOT SELECTED: Normal colored rendering
@@ -303,9 +293,8 @@
                                                indent schedule-info status-indicator priority-str))
                                (prefix-len (tui:visible-length prefix))
                                (tags-len (tui:visible-length tags-colored))
-                               (suffix-len tags-len)
                                (avail (max 0 (- list-width prefix-len
-                                                (if (> suffix-len 0) (1+ suffix-len) 0))))
+                                                (if (> tags-len 0) (1+ tags-len) 0))))
                                (title-text (sanitize-title-for-display (todo-title todo)))
                                (trunc-title (tui:truncate-text title-text avail :ellipsis ".."))
                                ;; Dim and strikethrough title for completed/cancelled items
@@ -317,15 +306,13 @@
                                                  trunc-title))
                                (base (format nil "~A~A" prefix styled-title))
                                (base-len (tui:visible-length base))
-                               (suffix (if (> tags-len 0) tags-colored ""))
-                               (suffix-actual-len (tui:visible-length suffix))
-                               (pad (if (> suffix-actual-len 0)
-                                        (max 1 (- list-width base-len suffix-actual-len))
+                               (pad (if (> tags-len 0)
+                                        (max 1 (- list-width base-len tags-len))
                                         0))
-                               (line-content (if (> suffix-actual-len 0)
+                               (line-content (if (> tags-len 0)
                                                  (format nil "~A~A~A" base
                                                          (make-string pad :initial-element #\Space)
-                                                         suffix)
+                                                         tags-colored)
                                                  base))
                                (clamped-content (fit-visible-to-width line-content list-width)))
                           (format c "~A" clamped-content))))
@@ -835,37 +822,6 @@
                                :x-position tui:+center+
                                :y-position tui:+middle+)))
 
-(defun render-context-info-view (model)
-  "Render the context info view as an overlay showing where to edit user context."
-  (let* ((term-width (model-term-width model))
-         (context-file (namestring (user-context-file)))
-         (has-context (load-user-context))
-         (background (render-list-view model))
-         (modal-width (min 65 (max 50 (- term-width 6))))
-         (content
-           (with-output-to-string (c)
-             (format c "User context provides personal information to help~%")
-             (format c "the AI better understand and enrich your TODOs.~%~%")
-             (format c "~A~%"
-                     (tui:colored "Context File:" :fg (theme-fg :cyan)))
-             (format c "  ~A~%~%"
-                     (tui:colored context-file :fg (theme-fg :yellow)))
-             (format c "~A~%"
-                     (tui:colored "To edit, open in your editor:" :fg (theme-fg :cyan)))
-             (format c "  ~A~%~%"
-                     (tui:colored (format nil "$EDITOR ~A" context-file) :fg (theme-fg :green)))
-             (if has-context
-                 (format c "~A~%"
-                         (tui:colored "✓ Context file has content" :fg (theme-fg :green)))
-                 (format c "~A~%"
-                         (tui:colored "○ Context file is empty - add your info!" :fg (theme-fg :yellow))))
-             (format c "~%~A"
-                     (tui:colored "Press any key to close" :fg (theme-fg :bright-black)))))
-         (modal (render-box-with-title "USER CONTEXT" content :min-width modal-width)))
-    (tui:composite-with-shadow modal background
-                               :x-position tui:+center+
-                               :y-position tui:+middle+)))
-
 (defun render-import-view (model)
   "Render the org-mode import view as a modal overlay on the list view."
   (let* ((background (render-list-view model))
@@ -897,71 +853,7 @@
                                :x-position tui:+center+
                                :y-position tui:+middle+)))
 
-(defun render-date-edit-view (model)
-  "Render the date picker view for editing scheduled/deadline dates as an overlay."
-  (let* ((term-width (model-term-width model))
-         (picker (model-date-picker model))
-         (date-type (model-editing-date-type model))
-         (todos (get-visible-todos model))
-         (todo (when (< (model-cursor model) (length todos))
-                 (nth (model-cursor model) todos)))
-         (background (render-list-view model))
-         (title (if (eql date-type :scheduled) "SET SCHEDULED DATE" "SET DEADLINE"))
-         (current-date (case date-type
-                         (:scheduled (when todo (todo-scheduled-date todo)))
-                         (:deadline (when todo (todo-due-date todo)))))
-         (selected (tui.datepicker:datepicker-selected picker))
-         (modal-width (min 56 (max 44 (- term-width 8))))
-         (content
-           (with-output-to-string (c)
-             ;; Show todo title context
-             (when todo
-               (let ((todo-title (sanitize-title-for-display (todo-title todo))))
-                 (format c "~A~%~%"
-                         (tui:colored
-                          (if (> (length todo-title) (- modal-width 6))
-                              (concatenate 'string (subseq todo-title 0 (- modal-width 8)) "..")
-                              todo-title)
-                          :fg (theme-fg :bright-black)))))
-
-             ;; Current date status
-             (format c "~A ~A~%"
-                     (tui:bold (if (eql date-type :scheduled) "Current:" "Current:"))
-                     (if current-date
-                         (tui:colored
-                          (lt:format-timestring nil current-date
-                                               :format '(:short-month " " :day ", " :year))
-                          :fg (theme-fg :cyan))
-                         (tui:colored "Not set" :fg (theme-fg :bright-black))))
-
-             ;; Datepicker calendar
-             (format c "~%~A~%" (tui.datepicker:datepicker-view picker))
-
-             ;; Selected date
-             (format c "~%~A ~A~%"
-                     (tui:bold "New:")
-                     (if selected
-                         (multiple-value-bind (sec min hour day month year)
-                             (decode-universal-time selected)
-                           (declare (ignore sec min hour))
-                           (tui:colored (format nil "~A ~D, ~D"
-                                                (aref #("Jan" "Feb" "Mar" "Apr" "May" "Jun"
-                                                       "Jul" "Aug" "Sep" "Oct" "Nov" "Dec")
-                                                      (1- month))
-                                                day year)
-                                       :fg (theme-fg :green)))
-                         (tui:colored "None" :fg (theme-fg :bright-black))))
-
-             ;; Navigation help
-             (format c "~%~A"
-                     (tui:colored "hjkl/←↑↓→:nav  []:month  {}:year  Home:today  RET:save  DEL:clear  ESC:cancel"
-                                 :fg (theme-fg :bright-black)))))
-         (modal (render-box-with-title title content :min-width modal-width)))
-    (tui:composite-with-shadow modal background
-                               :x-position tui:+center+
-                               :y-position tui:+middle+)))
-
-(defun render-help-column (title entries &optional (key-width 10))
+(defun render-help-column (title entries)
   "Render a help column with TITLE and list of (key . description) ENTRIES."
   (with-output-to-string (s)
     (format s "~A~%" (tui:bold (tui:colored title :fg (theme-fg :cyan))))
@@ -975,17 +867,12 @@
                 (format s "~A~%" (tui:colored desc :fg (theme-fg :bright-black))))
             ;; Normal key-description pair
             (format s "~A  ~A~%"
-                    (tui:colored (format nil "~vA" key-width key) :fg (theme-fg :yellow))
+                    (tui:colored (format nil "~10A" key) :fg (theme-fg :yellow))
                     desc))))))
 
 (defun valid-preset-p (p)
   "Check if preset P is a valid non-empty list of string tags."
-  (and p
-       (listp p)
-       (not (eq p 'null))
-       (not (eql p :null))
-       (> (length p) 0)
-       (stringp (first p))))
+  (and (consp p) (stringp (first p))))
 
 (defun format-preset-tags (preset)
   "Format preset tags for display, or return placeholder if empty."
@@ -1548,12 +1435,10 @@
      (:delete-confirm (render-delete-confirm-view model))
      (:delete-done-confirm (render-delete-done-confirm-view model))
      (:delete-tag-confirm (render-delete-tag-confirm-view model))
-     (:edit-date (render-date-edit-view model))
-     (:list-set-date (render-list-date-modal model))
+     ((:edit-date :list-set-date) (render-list-date-modal model))
      ((:add-scheduled-date :add-due-date) (render-form-date-edit-view model))
      (:help (render-help-view model))
      (:inline-tags (render-inline-tag-editor model))
-     (:context-info (render-context-info-view model))
      (:lists-overview (render-lists-overview model))
      (:list-detail (render-list-detail-view model))
      ((:list-create :list-edit) (render-list-form-view model))

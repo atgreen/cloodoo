@@ -67,10 +67,6 @@
    :initform :list
    :accessor model-view-state
     :documentation "Current view: :list, :detail, :add, :edit, :help, :search, :delete-confirm, :delete-done-confirm, :import, :edit-date, :add-scheduled-date, :add-due-date.") ; lint:suppress max-line-length
-   (detail-urls
-    :initform nil
-    :accessor model-detail-urls
-    :documentation "List of (start-line end-line url) for clickable URLs in detail view.")
    (filter-status
     :initarg :filter-status
     :initform nil
@@ -317,8 +313,6 @@
     (setf (model-tag-presets model) (load-presets))
     model))
 
-;;── Collapse State Management ─────────────────────────────────────────────────
-
 ;;── Tag Collection ────────────────────────────────────────────────────────────
 
 (defun collect-all-tags (todos)
@@ -346,8 +340,6 @@
          (some (lambda (tag) (gethash tag selected-tags))
                (todo-tags todo)))
        todos)))
-
-;;── Child Task Helpers ────────────────────────────────────────────────────────
 
 ;;── Tag Autocomplete Helpers ──────────────────────────────────────────────────
 
@@ -422,14 +414,6 @@
                                  (search query (string-downcase (todo-description todo))))))
                       result))))
     result))
-
-(defun priority-order (priority)
-  "Return numeric order for priority (higher = more important)."
-  (case priority
-    (:high 3)
-    (:medium 2)
-    (:low 1)
-    (otherwise 0)))
 
 (defun sort-todos (todos sort-by descending)
   "Sort todos by the given field."
@@ -1790,7 +1774,7 @@
                (llog:info "Starting org-mode import" :filename filename)
                (setf (model-view-state model) :list)
                ;; Return command to perform async import
-               (values model (list (make-import-cmd model filename)
+               (values model (list (make-import-cmd filename)
                                    (make-spinner-start-cmd
                                     (model-enrichment-spinner model)))))
       (t
@@ -2173,15 +2157,6 @@
   (setf (model-view-state model) :list)
   (values model nil))
 
-;;── Context Info View Key Handling ────────────────────────────────────────────
-
-(defun handle-context-info-keys (model msg)
-  "Handle keyboard input in context info view."
-  (declare (ignore msg))
-  ;; Any key returns to list view
-  (setf (model-view-state model) :list)
-  (values model nil))
-
 ;;── Lists Overview Key Handling ────────────────────────────────────────────────
 
 (defun reload-lists-data (model)
@@ -2511,7 +2486,6 @@
     (:list-set-date (handle-list-date-keys model msg))
     ((:add-scheduled-date :add-due-date) (handle-form-date-edit-keys model msg))
     (:help (handle-help-keys model msg))
-    (:context-info (handle-context-info-keys model msg))
     (:lists-overview (handle-lists-overview-keys model msg))
     (:list-detail (handle-list-detail-keys model msg))
     ((:list-create :list-edit) (handle-list-form-keys model msg))
@@ -2534,7 +2508,7 @@
   (setf (model-todos model) (load-todos))
   (drop-all-redo-entries model)
   (clear-stuck-enriching-todos model)
-  (setf (model-visible-todos-dirty model) t)
+  (invalidate-visible-todos-cache model)
   (reload-lists-data model)
   (values model nil))
 
@@ -2903,9 +2877,8 @@
       (llog:info "Imported todos saved" :count (length todos-data)))
     (values model nil)))
 
-(defun make-import-cmd (model filename)
+(defun make-import-cmd (filename)
   "Create a command that performs async org-mode import and returns completion message."
-  (declare (ignore model))
   (lambda ()
     (llog:info "Starting async org-mode import" :filename filename)
     (let ((result (handler-case
