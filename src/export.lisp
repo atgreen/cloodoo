@@ -186,13 +186,18 @@
           (dolist (group groups)
             (let ((date-str (car group))
                   (group-todos (cdr group)))
-              ;; Date header
+              ;; Date header.  The key is a bare local-time calendar date;
+              ;; parse-timestring reads it as midnight UTC, so decode it back
+              ;; in UTC too — decoding in local time rendered the previous
+              ;; day anywhere behind UTC (cloodoo-d3m)
               (when date-str
                 (let* ((date (lt:parse-timestring date-str))
-                       (weekday (lt:format-timestring nil date :format '(:short-weekday)))
-                       (day (lt:timestamp-day date))
-                       (month (lt:format-timestring nil date :format '(:long-month)))
-                       (year (lt:timestamp-year date)))
+                       (weekday (lt:format-timestring nil date :format '(:short-weekday)
+                                                          :timezone lt:+utc-zone+))
+                       (day (lt:timestamp-day date :timezone lt:+utc-zone+))
+                       (month (lt:format-timestring nil date :format '(:long-month)
+                                                        :timezone lt:+utc-zone+))
+                       (year (lt:timestamp-year date :timezone lt:+utc-zone+)))
                   (format stream "~%~A  ~D ~A ~D~%"
                           weekday day month year)))
 

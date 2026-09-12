@@ -41,7 +41,9 @@
   (let ((config-file (config-file-path)))
     (cond ((probe-file config-file) (handler-case
             (with-open-file (in config-file :direction :input)
-              (let* ((eof (list nil))
+              ;; No #. evaluation while reading config (cloodoo-oun)
+              (let* ((*read-eval* nil)
+                     (eof (list nil))
                      (config (read in nil eof)))
                 (cond ((eq config eof)
                        (llog:warn "Config file is empty, using defaults")

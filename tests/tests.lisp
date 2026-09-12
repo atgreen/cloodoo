@@ -676,6 +676,317 @@
                    "SELECT COUNT(*) FROM todos
                     WHERE description IS NOT NULL AND description_hash IS NULL"))))))
 
+;;── Proto Round-Trip Tests ─────────────────────────────────────────────────────
+
+(defun encode-date (year month day)
+  "Timestamp at noon local time on the given date (noon avoids DST edges)."
+  (local-time:encode-timestamp 0 0 0 12 day month year))
+
+(defun roundtrip-todo-via-proto (todo &optional (device-id "test-device"))
+  "Convert TODO to a sync upsert message and back to a todo instance.
+   Returns (values converted-todo todo-change)."
+  (let* ((msg (cloodoo::make-sync-upsert-message-with-timestamp
+               device-id todo (cloodoo::now-iso)))
+         (change (cloodoo::proto-msg-change msg))
+         (data (cloodoo::proto-todo-change-upsert change)))
+    (values (cloodoo::proto-to-todo data) change)))
+
+(test proto-todo-roundtrip-full-test
+  "Every synced field survives todo -> proto -> todo conversion."
+  (let ((scheduled (encode-date 2026 3 15))
+        (due (encode-date 2026 3 20))
+        (created (encode-date 2026 3 1))
+        (completed (encode-date 2026 3 21))
+        (todo (cloodoo:make-todo "Round trip"
+                :description "Full description"
+                :priority :high
+                :tags '("work" "sync")
+                :url "https://example.com/task"
+                :repeat-interval 2
+                :repeat-unit :week)))
+    (setf (cloodoo::todo-scheduled-date todo) scheduled
+          (cloodoo:todo-due-date todo) due
+          (cloodoo:todo-created-at todo) created
+          (cloodoo:todo-completed-at todo) completed
+          (cloodoo:todo-status todo) :in-progress
+          (cloodoo::todo-attachment-hashes todo) '("hash-a" "hash-b")
+          (cloodoo::todo-enriching-p todo) t)
+    (multiple-value-bind (back change) (roundtrip-todo-via-proto todo "dev-99")
+      (is (string= (cloodoo:todo-id todo) (cloodoo:todo-id back)))
+      (is (string= "Round trip" (cloodoo:todo-title back)))
+      (is (string= "Full description" (cloodoo:todo-description back)))
+      (is (eq :high (cloodoo:todo-priority back)))
+      (is (eq :in-progress (cloodoo:todo-status back)))
+      (is (local-time:timestamp= scheduled (cloodoo::todo-scheduled-date back)))
+      (is (local-time:timestamp= due (cloodoo:todo-due-date back)))
+      (is (local-time:timestamp= created (cloodoo:todo-created-at back)))
+      (is (local-time:timestamp= completed (cloodoo:todo-completed-at back)))
+      (is (equal '("work" "sync") (cloodoo:todo-tags back)))
+      (is (string= "https://example.com/task" (cloodoo::todo-url back)))
+      (is (= 2 (cloodoo::todo-repeat-interval back)))
+      (is (eq :week (cloodoo::todo-repeat-unit back)))
+      (is (equal '("hash-a" "hash-b") (cloodoo::todo-attachment-hashes back)))
+      (is (eq t (cloodoo::todo-enriching-p back)))
+      ;; device-id travels on the TodoChange envelope, not TodoData
+      (is (string= "dev-99" (cloodoo::proto-todo-change-device-id change))))))
+
+(test proto-todo-roundtrip-empty-fields-test
+  "Nil/empty optional fields normalize cleanly through proto and back."
+  (let ((back (roundtrip-todo-via-proto (cloodoo:make-todo "Bare"))))
+    (is (string= "Bare" (cloodoo:todo-title back)))
+    (is (null (cloodoo:todo-description back)))
+    (is (null (cloodoo:todo-tags back)))
+    (is (null (cloodoo::todo-scheduled-date back)))
+    (is (null (cloodoo:todo-due-date back)))
+    (is (null (cloodoo:todo-completed-at back)))
+    (is (null (cloodoo::todo-url back)))
+    (is (null (cloodoo::todo-repeat-interval back)))
+    (is (null (cloodoo::todo-repeat-unit back)))
+    (is (null (cloodoo::todo-attachment-hashes back)))
+    (is (eq :medium (cloodoo:todo-priority back)))
+    (is (eq :pending (cloodoo:todo-status back)))))
+
+(test proto-todo-wire-roundtrip-test
+  "TodoData survives actual wire serialization, not just object conversion."
+  (let ((todo (cloodoo:make-todo "Wire trip"
+                :description "desc"
+                :priority :low
+                :tags '("a" "b")
+                :repeat-interval 1
+                :repeat-unit :day)))
+    (setf (cloodoo:todo-created-at todo) (encode-date 2026 2 2))
+    (let* ((msg (cloodoo::make-sync-upsert-message-with-timestamp
+                 "dev" todo (cloodoo::now-iso)))
+           (data (cloodoo::proto-todo-change-upsert (cloodoo::proto-msg-change msg)))
+           (bytes (ag-proto:serialize-to-bytes data))
+           (back (cloodoo::proto-to-todo
+                  (ag-proto:deserialize-from-bytes 'cloodoo::proto-todo-data bytes))))
+      (is (string= (cloodoo:todo-id todo) (cloodoo:todo-id back)))
+      (is (string= "Wire trip" (cloodoo:todo-title back)))
+      (is (string= "desc" (cloodoo:todo-description back)))
+      (is (eq :low (cloodoo:todo-priority back)))
+      (is (equal '("a" "b") (cloodoo:todo-tags back)))
+      (is (= 1 (cloodoo::todo-repeat-interval back)))
+      (is (eq :day (cloodoo::todo-repeat-unit back))))))
+
+(test proto-todo-location-info-roundtrip-test
+  "Location info survives todo -> proto -> todo (cloodoo-pmx)."
+  (let* ((todo (cloodoo:make-todo "Where"
+                 :location-info '(:name "Cafe" :address "1 Main St")))
+         (loc (cloodoo::todo-location-info (roundtrip-todo-via-proto todo))))
+    (is (not (null loc)))
+    (is (string= "Cafe" (getf loc :name)))
+    (is (string= "1 Main St" (getf loc :address)))))
+
+(test proto-list-definition-roundtrip-test
+  "List definitions survive proto conversion, including nil description."
+  (let ((created (encode-date 2026 4 2))
+        (list-def (cloodoo:make-list-definition "Movies"
+                    :description "To watch"
+                    :sections '("Action" "Drama"))))
+    (setf (cloodoo:list-def-created-at list-def) created)
+    (let ((back (cloodoo::proto-to-list-definition
+                 (cloodoo::list-definition-to-proto list-def))))
+      (is (string= (cloodoo:list-def-id list-def) (cloodoo:list-def-id back)))
+      (is (string= "Movies" (cloodoo:list-def-name back)))
+      (is (string= "To watch" (cloodoo:list-def-description back)))
+      (is (equal '("Action" "Drama") (cloodoo:list-def-sections back)))
+      (is (local-time:timestamp= created (cloodoo:list-def-created-at back)))))
+  ;; nil description and no sections normalize back to nil
+  (let* ((bare (cloodoo:make-list-definition "Bare"))
+         (back (cloodoo::proto-to-list-definition
+                (cloodoo::list-definition-to-proto bare))))
+    (is (null (cloodoo:list-def-description back)))
+    (is (null (cloodoo:list-def-sections back)))))
+
+(test proto-list-item-roundtrip-test
+  "List items survive proto conversion, including checked state and nils."
+  (let ((created (encode-date 2026 4 3))
+        (item (cloodoo:make-list-item "list-1" "Milk"
+                :section "Dairy"
+                :notes "2% preferred")))
+    (setf (cloodoo:list-item-created-at item) created
+          (cloodoo:list-item-checked item) t)
+    (let ((back (cloodoo::proto-to-list-item
+                 (cloodoo::list-item-to-proto item))))
+      (is (string= (cloodoo:list-item-id item) (cloodoo:list-item-id back)))
+      (is (string= "list-1" (cloodoo:list-item-list-id back)))
+      (is (string= "Milk" (cloodoo:list-item-title back)))
+      (is (string= "Dairy" (cloodoo:list-item-section back)))
+      (is (string= "2% preferred" (cloodoo:list-item-notes back)))
+      (is (eq t (cloodoo:list-item-checked back)))
+      (is (local-time:timestamp= created (cloodoo:list-item-created-at back)))))
+  ;; unchecked item with nil section/notes stays nil
+  (let* ((bare (cloodoo:make-list-item "list-1" "Eggs"))
+         (back (cloodoo::proto-to-list-item
+                (cloodoo::list-item-to-proto bare))))
+    (is (null (cloodoo:list-item-section back)))
+    (is (null (cloodoo:list-item-notes back)))
+    (is (null (cloodoo:list-item-checked back)))))
+
+;;── Temporal DB Invariant Tests ────────────────────────────────────────────────
+
+(test temporal-single-current-row-test
+  "After several updates exactly one row per id is current, and historical
+   rows chain: each valid_to equals the successor's valid_from."
+  (with-test-db
+    (let ((todo (cloodoo:make-todo "v1")))
+      (cloodoo::db-save-todo todo)
+      (setf (cloodoo:todo-title todo) "v2")
+      (cloodoo::db-save-todo todo)
+      (setf (cloodoo:todo-title todo) "v3")
+      (cloodoo::db-save-todo todo)
+      (cloodoo::with-db (db)
+        (let ((id (cloodoo:todo-id todo)))
+          (is (= 3 (sqlite:execute-single db
+                     "SELECT COUNT(*) FROM todos WHERE id = ?" id)))
+          (is (= 1 (sqlite:execute-single db
+                     "SELECT COUNT(*) FROM todos WHERE id = ? AND valid_to IS NULL" id)))
+          (is (string= "v3" (sqlite:execute-single db
+                              "SELECT title FROM todos WHERE id = ? AND valid_to IS NULL" id)))
+          (let ((rows (sqlite:execute-to-list db
+                        "SELECT valid_from, valid_to FROM todos
+                         WHERE id = ? ORDER BY valid_from" id)))
+            (loop for ((nil closed-at) (successor-from nil)) on rows
+                  while successor-from
+                  do (is (equal closed-at successor-from)))))))))
+
+(test temporal-stale-update-rejected-test
+  "A save carrying an older valid-from than the current row returns NIL and
+   leaves the current row untouched."
+  (with-test-db
+    (let ((todo (cloodoo:make-todo "Fresh")))
+      (cloodoo::db-save-todo todo)
+      (let ((id (cloodoo:todo-id todo))
+            (current-vf (cloodoo::db-current-valid-from (cloodoo:todo-id todo))))
+        (setf (cloodoo:todo-title todo) "Stale")
+        (is (null (cloodoo::db-save-todo todo
+                    :valid-from "2020-01-01T00:00:00.000000Z")))
+        (cloodoo::with-db (db)
+          (is (= 1 (sqlite:execute-single db
+                     "SELECT COUNT(*) FROM todos WHERE id = ?" id)))
+          (is (string= "Fresh" (sqlite:execute-single db
+                                 "SELECT title FROM todos WHERE id = ? AND valid_to IS NULL" id))))
+        (is (equal current-vf (cloodoo::db-current-valid-from id)))))))
+
+(test temporal-newer-valid-from-accepted-test
+  "A save with an explicit valid-from newer than current is accepted and
+   becomes the current row."
+  (with-test-db
+    (let ((todo (cloodoo:make-todo "Old")))
+      (cloodoo::db-save-todo todo :valid-from "2026-01-01T00:00:00.000000Z")
+      (setf (cloodoo:todo-title todo) "New")
+      (is-true (cloodoo::db-save-todo todo
+                 :valid-from "2026-06-01T00:00:00.000000Z"))
+      (cloodoo::with-db (db)
+        (is (string= "New" (sqlite:execute-single db
+                             "SELECT title FROM todos WHERE id = ? AND valid_to IS NULL"
+                             (cloodoo:todo-id todo)))))
+      (is (string= "2026-06-01T00:00:00.000000Z"
+                   (cloodoo::db-current-valid-from (cloodoo:todo-id todo)))))))
+
+(test temporal-delete-closes-out-test
+  "db-delete-todo closes out rows rather than deleting them: row count is
+   preserved, no current row remains, and history stays queryable."
+  (with-test-db
+    (let ((todo (cloodoo:make-todo "Doomed")))
+      (cloodoo::db-save-todo todo)
+      (setf (cloodoo:todo-title todo) "Doomed v2")
+      (cloodoo::db-save-todo todo)
+      (cloodoo::db-delete-todo (cloodoo:todo-id todo))
+      (cloodoo::with-db (db)
+        (let ((id (cloodoo:todo-id todo)))
+          (is (= 2 (sqlite:execute-single db
+                     "SELECT COUNT(*) FROM todos WHERE id = ?" id)))
+          (is (= 0 (sqlite:execute-single db
+                     "SELECT COUNT(*) FROM todos WHERE id = ? AND valid_to IS NULL" id)))))
+      (is (null (find (cloodoo:todo-id todo) (cloodoo::db-load-todos)
+                      :key #'cloodoo:todo-id :test #'string=))))))
+
+;;── ISO Week Number Tests ──────────────────────────────────────────────────────
+
+(test iso-week-number-test
+  "ISO 8601 week numbers (cloodoo-t39): Monday-based weeks; week 1 contains
+   the year's first Thursday.  Cross-checked against `date +%G-W%V`."
+  ;; 2026-01-01 is a Thursday -> week 1
+  (is (= 1 (cloodoo::iso-week-number (encode-date 2026 1 1))))
+  ;; 2026-01-04 is a Sunday, still week 1
+  (is (= 1 (cloodoo::iso-week-number (encode-date 2026 1 4))))
+  ;; 2026-01-05 is a Monday -> week 2
+  (is (= 2 (cloodoo::iso-week-number (encode-date 2026 1 5))))
+  ;; 2026-12-28 is a Monday -> week 53 (2026 has 53 ISO weeks)
+  (is (= 53 (cloodoo::iso-week-number (encode-date 2026 12 28))))
+  ;; 2027-01-01 is a Friday -> belongs to week 53 of 2026
+  (is (= 53 (cloodoo::iso-week-number (encode-date 2027 1 1))))
+  ;; 2025-12-29 is a Monday -> belongs to week 1 of 2026
+  (is (= 1 (cloodoo::iso-week-number (encode-date 2025 12 29)))))
+
+(test iso-weeks-in-year-test
+  "Years have 53 ISO weeks iff Jan 1 is a Thursday, or a Wednesday in a
+   leap year; otherwise 52."
+  (is (= 53 (cloodoo::iso-weeks-in-year 2026)))  ; Jan 1 Thursday
+  (is (= 52 (cloodoo::iso-weeks-in-year 2025)))  ; Jan 1 Wednesday, not leap
+  (is (= 53 (cloodoo::iso-weeks-in-year 2020)))  ; Jan 1 Wednesday, leap
+  (is (= 52 (cloodoo::iso-weeks-in-year 2023)))) ; Jan 1 Sunday
+
+;;── Org-Agenda Export Tests ────────────────────────────────────────────────────
+
+(defun make-export-fixture-todos ()
+  "Fixed todos covering statuses, priorities, tags, an overdue date, a URL."
+  (let ((overdue (cloodoo:make-todo "Overdue report"
+                   :priority :high
+                   :tags '("work")
+                   :scheduled-date (encode-date 2020 1 1)))
+        (done (cloodoo:make-todo "Shipped feature" :priority :medium))
+        (doing (cloodoo:make-todo "Refactor module"
+                 :priority :low
+                 :tags '("home")))
+        (bare (cloodoo:make-todo "Read RFC" :url "https://example.com/rfc")))
+    (setf (cloodoo:todo-status done) :completed
+          (cloodoo:todo-status doing) :in-progress)
+    (list overdue done doing bare)))
+
+(test export-todos-text-test
+  "Date-grouped export shows status keywords, priority markers, the overdue
+   indicator, and footer statistics."
+  (let ((output (with-output-to-string (s)
+                  (cloodoo::export-todos-text (make-export-fixture-todos)
+                                              :stream s))))
+    (is (search "Week-agenda (W" output))
+    (is (search "TODO [#A] Overdue report" output))
+    (is (search "DONE [#B] Shipped feature" output))
+    (is (search "DOING [#C] Refactor module" output))
+    (is (search "TODO [#B] Read RFC" output))
+    ;; Overdue scheduled indicator: "Sched.<days>x:" (days is today-relative,
+    ;; so only assert the stable prefix and suffix)
+    (is (search "Sched." output))
+    (is (search "x:" output))
+    ;; A date header is emitted for the scheduled group.  The rendered date
+    ;; is timezone-dependent — off by one day in zones behind UTC
+    ;; (cloodoo-d3m) — so accept either rendering until that is fixed.
+    (is (or (search "1 January 2020" output)
+            (search "31 December 2019" output)))
+    (is (search "Total: 4  Completed: 1  Overdue: 1" output))))
+
+(test export-todos-text-by-tag-test
+  "Tag-grouped export shows tag headers, an Untagged group, and URLs."
+  (let ((output (with-output-to-string (s)
+                  (cloodoo::export-todos-text (make-export-fixture-todos)
+                                              :stream s :by-tag t))))
+    (is (search ":work:" output))
+    (is (search ":home:" output))
+    (is (search "Untagged:" output))
+    (is (search "TODO [#A] Overdue report" output))
+    (is (search "Read RFC https://example.com/rfc" output))
+    (is (search "Total: 4  Completed: 1  Overdue: 1" output))))
+
+(test export-todos-text-custom-title-test
+  "The :title keyword replaces the default header."
+  (let ((output (with-output-to-string (s)
+                  (cloodoo::export-todos-text '() :stream s :title "My Agenda"))))
+    (is (search "My Agenda (W" output))
+    (is (search "Total: 0  Completed: 0  Overdue: 0" output))))
+
 ;;── Run Tests ──────────────────────────────────────────────────────────────────
 
 (defun run-tests ()

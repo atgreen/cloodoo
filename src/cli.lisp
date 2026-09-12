@@ -8,6 +8,19 @@
 
 ;;── Date Parsing ──────────────────────────────────────────────────────────────
 
+(defun parse-priority-option (string)
+  "Parse a CLI priority string, erroring clearly on anything else: silently
+   interning e.g. :URGENT would sort below :low forever (cloodoo-oun)."
+  (or (find string '(:high :medium :low) :test #'string-equal)
+      (error "Invalid priority ~S — expected high, medium, or low" string)))
+
+(defun parse-status-option (string)
+  "Parse a CLI status string, erroring clearly on anything else (cloodoo-oun)."
+  (or (find string '(:pending :in-progress :completed :waiting :cancelled)
+            :test #'string-equal)
+      (error "Invalid status ~S — expected pending, in-progress, completed, ~
+              waiting, or cancelled" string)))
+
 (defun parse-due-date (date-string)
   "Parse a due date string. Supports:
    - 'today' or 'tod'
@@ -164,12 +177,22 @@
                       (let* ((title (format nil "~{~A~^ ~}" args))
                              (due-date (when due (parse-due-date due)))
                              (scheduled-date (when schedule (parse-due-date schedule)))
-                             (todo (make-todo title
-                                             :priority (intern (string-upcase priority) :keyword)
+                             (todo (progn
+                                     ;; Warn on dates that silently parsed to
+                                     ;; nothing instead of saving without them
+                                     ;; (cloodoo-oun)
+                                     (when (and due (null due-date))
+                                       (format t "~A Could not parse due date ~S — saving without it~%"
+                                               (tui:colored "⚠" :fg (theme-fg :yellow)) due))
+                                     (when (and schedule (null scheduled-date))
+                                       (format t "~A Could not parse schedule date ~S — saving without it~%"
+                                               (tui:colored "⚠" :fg (theme-fg :yellow)) schedule))
+                                     (make-todo title
+                                             :priority (parse-priority-option priority)
                                              :due-date due-date
                                              :scheduled-date scheduled-date
                                              :description note
-                                             :tags (parse-tags tags))))
+                                             :tags (parse-tags tags)))))
                         ;; Handle attachment if provided
                         (when (and attachment-path (probe-file attachment-path))
                           (with-db (db)
@@ -222,25 +245,31 @@
                   :short-name #\a
                   :long-name "all"
                   :key :all
-                  :description "Show all TODOs including completed")))
+                  :description "Show all TODOs including completed"))
+        (json-opt (clingon:make-option
+                   :flag
+                   :long-name "json"
+                   :key :json
+                   :description "Output a stable JSON array for scripting")))
     (clingon:make-command
      :name "list"
      :description "List TODOs"
-     :options (list status-opt priority-opt all-opt)
+     :options (list status-opt priority-opt all-opt json-opt)
      :handler (lambda (cmd)
                 (let* ((status-filter (clingon:getopt cmd :status))
                        (priority-filter (clingon:getopt cmd :priority))
                        (show-all (clingon:getopt cmd :all))
+                       (json-output (clingon:getopt cmd :json))
                        (todos (load-todos))
                        (filtered todos))
                   ;; Apply filters
                   (when status-filter
-                    (let ((status-key (intern (string-upcase status-filter) :keyword)))
+                    (let ((status-key (parse-status-option status-filter)))
                       (setf filtered (remove-if-not
                                      (lambda (item) (eq (todo-status item) status-key))
                                      filtered))))
                   (when priority-filter
-                    (let ((priority-key (intern (string-upcase priority-filter) :keyword)))
+                    (let ((priority-key (parse-priority-option priority-filter)))
                       (setf filtered (remove-if-not
                                      (lambda (item) (eq (todo-priority item) priority-key))
                                      filtered))))
@@ -254,8 +283,14 @@
                                       (lambda (a b)
                                         (> (priority-order (todo-priority a))
                                            (priority-order (todo-priority b))))))
-                  ;; Display
-                  (cond (filtered
+                  ;; Stable JSON output for scripting/waybar (cloodoo-6jt):
+                  ;; an array of objects in the same shape the native
+                  ;; messaging host emits, no ANSI, no count footer
+                  (cond (json-output
+                         (jzon:stringify (map 'vector #'todo-to-hash-table filtered)
+                                         :stream *standard-output* :pretty t)
+                         (terpri))
+                        (filtered
                         (format t "~%")
                         (dolist (todo filtered)
                           (format t "~A ~A ~A"
@@ -1860,12 +1895,12 @@ URL format: http[s]://HOST[:PORT]/pair/TOKEN"
 
                   ;; Apply filters
                   (when status-filter
-                    (let ((status-key (intern (string-upcase status-filter) :keyword)))
+                    (let ((status-key (parse-status-option status-filter)))
                       (setf filtered (remove-if-not
                                      (lambda (item) (eq (todo-status item) status-key))
                                      filtered))))
                   (when priority-filter
-                    (let ((priority-key (intern (string-upcase priority-filter) :keyword)))
+                    (let ((priority-key (parse-priority-option priority-filter)))
                       (setf filtered (remove-if-not
                                      (lambda (item) (eq (todo-priority item) priority-key))
                                      filtered))))

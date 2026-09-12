@@ -67,6 +67,17 @@
                                 :device-id device-id
                                 :timestamp timestamp))
          (msg (make-instance 'proto-sync-message)))
+    ;; Location info was silently dropped from every Lisp-side upsert
+    ;; (cloodoo-pmx)
+    (let ((loc (todo-location-info todo)))
+      (when loc
+        (setf (slot-value todo-data 'location-info)
+              (make-instance 'proto-location-info
+                             :name (or (getf loc :name) "")
+                             :address (or (getf loc :address) "")
+                             :phone (or (getf loc :phone) "")
+                             :map-url (or (getf loc :map-url) "")
+                             :website (or (getf loc :website) "")))))
     (setf (slot-value change 'upsert) todo-data)
     (setf (slot-value change 'change-case) :upsert)
     (setf (slot-value msg 'change) change)

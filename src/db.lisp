@@ -445,11 +445,8 @@
   "True when timestamp string A is strictly later than B (see TIMESTAMP-STRING<)."
   (timestamp-string< b a))
 
-(defun parse-timestamp (str)
-  "Parse an ISO 8601 timestamp string, returning NIL if invalid."
-  (when (and str (stringp str) (> (length str) 0))
-    (handler-case (lt:parse-timestring str)
-      (error () nil))))
+;;; parse-timestamp lives in proto-helpers.lisp (cloodoo-y5r deduped the
+;;; identical copy that used to be redefined here).
 
 ;;── Content-Addressed Blob Storage ────────────────────────────────────────────
 
@@ -807,6 +804,31 @@
         (when (todo-attachment-hashes todo)
           (jzon:stringify (coerce (todo-attachment-hashes todo) 'vector)))))
 
+(defun insert-todo-row (db values desc-hash loc-hash valid-from &key valid-to user-id)
+  "Insert one row into todos from TODO-TO-DB-VALUES output plus the
+   description/location_info blob hashes.  The single spelling of what used
+   to be four hand-copied 21-column INSERTs (cloodoo-y5r)."
+  (apply #'sqlite:execute-non-query db
+         (if user-id
+             "INSERT INTO todos (id, title, description_hash, priority, status,
+                                scheduled_date, due_date, tags,
+                                location_info_hash, url, created_at,
+                                completed_at, valid_from, valid_to, device_id,
+                                repeat_interval, repeat_unit, enriching_p, attachment_hashes, user_id)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+             "INSERT INTO todos (id, title, description_hash, priority, status,
+                                scheduled_date, due_date, tags,
+                                location_info_hash, url, created_at,
+                                completed_at, valid_from, valid_to, device_id,
+                                repeat_interval, repeat_unit, enriching_p, attachment_hashes)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+         (append (list (first values) (second values) desc-hash (fourth values)
+                       (fifth values) (sixth values) (seventh values) (eighth values)
+                       loc-hash (nth 9 values) (nth 10 values)
+                       (nth 11 values) valid-from valid-to (nth 12 values)
+                       (nth 13 values) (nth 14 values) (nth 15 values) (nth 16 values))
+                 (when user-id (list user-id)))))
+
 (defun db-save-todo (todo &key valid-from user-id)
   "Save a TODO to the database using append-only semantics.
    If the TODO already exists (by ID), the old version is marked as superseded.
@@ -887,26 +909,7 @@
                      WHERE id = ? AND valid_to IS NULL"
                      now (todo-id todo)))
                ;; Insert the new version (description/location_info as hashes)
-               (apply #'sqlite:execute-non-query db
-                 (if user-id
-                     "INSERT INTO todos (id, title, description_hash, priority, status,
-                                        scheduled_date, due_date, tags,
-                                        location_info_hash, url, created_at,
-                                        completed_at, valid_from, valid_to, device_id,
-                                        repeat_interval, repeat_unit, enriching_p, attachment_hashes, user_id)
-                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?)"
-                     "INSERT INTO todos (id, title, description_hash, priority, status,
-                                        scheduled_date, due_date, tags,
-                                        location_info_hash, url, created_at,
-                                        completed_at, valid_from, valid_to, device_id,
-                                        repeat_interval, repeat_unit, enriching_p, attachment_hashes)
-                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?)")
-                 (append (list (first values) (second values) desc-hash (fourth values)
-                               (fifth values) (sixth values) (seventh values) (eighth values)
-                               loc-hash (nth 9 values) (nth 10 values)
-                               (nth 11 values) now (nth 12 values)
-                               (nth 13 values) (nth 14 values) (nth 15 values) (nth 16 values))
-                         (when user-id (list user-id))))
+               (insert-todo-row db values desc-hash loc-hash now :user-id user-id)
                (sqlite:execute-non-query db "COMMIT")
                (setf committed t)
                t)  ; Return T on success
@@ -942,18 +945,7 @@
                (let* ((values (todo-to-db-values todo))
                       (desc-hash (store-blob db (third values)))
                       (loc-hash (store-blob db (ninth values))))
-                 (sqlite:execute-non-query db "
-                   INSERT INTO todos (id, title, description_hash, priority, status,
-                                      scheduled_date, due_date, tags,
-                                      location_info_hash, url, created_at,
-                                      completed_at, valid_from, valid_to, device_id,
-                                      repeat_interval, repeat_unit, enriching_p, attachment_hashes)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?)"
-                   (first values) (second values) desc-hash (fourth values)
-                   (fifth values) (sixth values) (seventh values) (eighth values)
-                   loc-hash (nth 9 values) (nth 10 values)
-                   (nth 11 values) now (nth 12 values)
-                   (nth 13 values) (nth 14 values) (nth 15 values) (nth 16 values))))
+                 (insert-todo-row db values desc-hash loc-hash now)))
              (sqlite:execute-non-query db "COMMIT")
              (setf committed t))
         (unless committed
@@ -1035,18 +1027,7 @@
                      (let* ((values (todo-to-db-values todo))
                             (desc-hash (store-blob db (third values)))
                             (loc-hash (store-blob db (ninth values))))
-                       (sqlite:execute-non-query db "
-                         INSERT INTO todos (id, title, description_hash, priority, status,
-                                            scheduled_date, due_date, tags,
-                                            location_info_hash, url, created_at,
-                                            completed_at, valid_from, valid_to, device_id,
-                                            repeat_interval, repeat_unit, enriching_p, attachment_hashes)
-                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?)"
-                         (first values) (second values) desc-hash (fourth values)
-                         (fifth values) (sixth values) (seventh values) (eighth values)
-                         loc-hash (nth 9 values) (nth 10 values)
-                         (nth 11 values) now (nth 12 values)
-                         (nth 13 values) (nth 14 values) (nth 15 values) (nth 16 values))))
+                       (insert-todo-row db values desc-hash loc-hash now)))
                    (sqlite:execute-non-query db "COMMIT")
                    (setf committed t))
               (unless committed
