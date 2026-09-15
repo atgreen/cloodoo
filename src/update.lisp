@@ -1064,6 +1064,7 @@
     (return-from handle-list-keys (handle-sidebar-keys model msg)))
 
   (let ((key (tui:key-event-code msg))
+        (shift (tui:mod-contains (tui:key-event-mod msg) tui:+mod-shift+))
         (ctrl (tui:mod-contains (tui:key-event-mod msg) tui:+mod-ctrl+))
         (todos (get-visible-todos model)))
     (llog:debug "List view key received"
@@ -1105,6 +1106,34 @@
            (setf (model-cursor model) 0)))
        (values model nil))
 
+      ;; Increase priority (Shift+Up).  Tuition represents modified arrows as
+      ;; the base key code plus a modifier bit; retain :shift-up for older
+      ;; input backends.
+      ((or (eql key :shift-up)
+           (and shift (eql key :up)))
+       (let ((todo (cursor-todo model todos)))
+         (when todo
+           (setf (todo-priority todo)
+                 (case (todo-priority todo)
+                   (:low :medium)
+                   (:medium :high)
+                   (:high :high)))  ; Already at max
+           (commit-todo-edit model todo)))
+       (values model nil))
+
+      ;; Decrease priority (Shift+Down)
+      ((or (eql key :shift-down)
+           (and shift (eql key :down)))
+       (let ((todo (cursor-todo model todos)))
+         (when todo
+           (setf (todo-priority todo)
+                 (case (todo-priority todo)
+                   (:high :medium)
+                   (:medium :low)
+                   (:low :low)))  ; Already at min
+           (commit-todo-edit model todo)))
+       (values model nil))
+
       ;; Move up (p/k/up - org uses p for previous)
       ((or (eql key :up)
            (and (characterp key) (or (char= key #\k) (char= key #\p))))
@@ -1134,30 +1163,6 @@
               (max-pos (max 0 (1- (length todos))))
               (new-pos (min max-pos (+ (model-cursor model) page-size))))
          (setf (model-cursor model) new-pos))
-       (values model nil))
-
-      ;; Increase priority (Shift+Up)
-      ((eql key :shift-up)
-       (let ((todo (cursor-todo model todos)))
-         (when todo
-           (setf (todo-priority todo)
-                 (case (todo-priority todo)
-                   (:low :medium)
-                   (:medium :high)
-                   (:high :high)))  ; Already at max
-           (commit-todo-edit model todo)))
-       (values model nil))
-
-      ;; Decrease priority (Shift+Down)
-      ((eql key :shift-down)
-       (let ((todo (cursor-todo model todos)))
-         (when todo
-           (setf (todo-priority todo)
-                 (case (todo-priority todo)
-                   (:high :medium)
-                   (:medium :low)
-                   (:low :low)))  ; Already at min
-           (commit-todo-edit model todo)))
        (values model nil))
 
       ;; Go to top

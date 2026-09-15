@@ -1063,6 +1063,24 @@
             (tuition:update-message model click)
             (is (= 1 (cloodoo::model-cursor model)))))))))
 
+(test shifted-arrows-change-selected-todo-priority-test
+  "Shift+Up and Shift+Down adjust the selected todo's priority using the
+   modifier-bearing arrow events emitted by Tuition (cloodoo-5u3)."
+  (with-test-db
+    (let ((model (make-instance 'cloodoo::app-model))
+          (todo (cloodoo:make-todo "Prioritize me" :priority :low)))
+      (cloodoo::save-todo todo)
+      (push todo (cloodoo::model-todos model))
+      (cloodoo::invalidate-visible-todos-cache model)
+      (tuition:update-message
+       model
+       (tuition:make-key-press-msg :code :up :mod tuition:+mod-shift+))
+      (is (eq :medium (cloodoo:todo-priority todo)))
+      (tuition:update-message
+       model
+       (tuition:make-key-press-msg :code :down :mod tuition:+mod-shift+))
+      (is (eq :low (cloodoo:todo-priority todo))))))
+
 ;;── Trash & Batch Marks ────────────────────────────────────────────────────────
 
 (test trash-restore-test
